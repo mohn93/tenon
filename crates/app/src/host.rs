@@ -376,6 +376,13 @@ impl Host for AppHost<'_> {
                 // `api::call` prints (it needs the renderer and reports the pages) and never
                 // sends this here.
                 EditorCommand::ExportPdf { .. } => unreachable!("api::call runs export_pdf"),
+                EditorCommand::Play {
+                    joint,
+                    from,
+                    to,
+                    seconds,
+                    looping,
+                } => editor.play_joint(joint, from, to, seconds, looping.unwrap_or(false))?,
             }
             Ok(())
         })
@@ -668,6 +675,42 @@ mod tests {
         let r = call(&mut e, &mut quit, "query", json!({"type": "editor"}));
         assert_eq!(r["result"]["import_units"], "inches");
         assert!(!quit);
+    }
+
+    #[test]
+    fn play_starts_a_joint_play_that_changes_nothing() {
+        let (mut e, mut quit) = (editor(), false);
+        let r = call(
+            &mut e,
+            &mut quit,
+            "execute",
+            json!({"type": "add_box", "corner": [0, 0, 0], "size": [1, 1, 1]}),
+        );
+        let part = r["result"]["placed"][0].clone();
+        let r = call(
+            &mut e,
+            &mut quit,
+            "execute",
+            json!({"type": "add_joint", "kind": "revolute", "b": part, "point": [3, 0, 0], "axis": [0, 0, 1]}),
+        );
+        let joint = r["result"]["changes"]["joints"][0].clone();
+        let revision = e.doc().revision();
+        let r = call(
+            &mut e,
+            &mut quit,
+            "execute",
+            json!({"type": "play", "joint": joint, "from": 0, "to": 90, "seconds": 2, "loop": true}),
+        );
+        assert!(r.get("error").is_none(), "{r}");
+        assert!(e.transitioning());
+        assert_eq!(e.doc().revision(), revision);
+        let r = call(
+            &mut e,
+            &mut quit,
+            "execute",
+            json!({"type": "play", "joint": joint, "from": 0, "to": 90, "seconds": 0}),
+        );
+        assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
     }
 
     /// `call` with an offscreen renderer that found no GPU.

@@ -101,7 +101,8 @@ impl Host for Editing {
             | EditorCommand::PasteClipboard { .. }
             | EditorCommand::PasteInPlace {}
             | EditorCommand::PlaceLibraryItem { .. }
-            | EditorCommand::ExportPdf { .. } => {}
+            | EditorCommand::ExportPdf { .. }
+            | EditorCommand::Play { .. } => {}
         }
         Ok(())
     }

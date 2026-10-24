@@ -179,6 +179,20 @@ pub struct PageData {
     /// The instances of the root whose positions the page stores (absent: none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub positions: Option<Vec<PagePosition>>,
+    /// The joints whose values the page stores (absent: none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub joints: Option<Vec<PageJoint>>,
+}
+
+/// A joint's stored value in a page: radians or meters, and the slide (meters) of a
+/// cylindrical joint.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PageJoint {
+    pub id: u64,
+    pub value: f64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub slide: f64,
 }
 
 /// An instance's stored position in a page.
@@ -591,6 +605,15 @@ impl Scene {
                             })
                             .collect()
                     }),
+                    joints: p.joints.as_ref().map(|m| {
+                        m.iter()
+                            .map(|(j, (value, slide))| PageJoint {
+                                id: j.0,
+                                value: *value,
+                                slide: *slide,
+                            })
+                            .collect()
+                    }),
                 })
                 .collect(),
             styles: self
@@ -755,6 +778,11 @@ impl Scene {
                 positions: p.positions.as_ref().map(|m| {
                     m.iter()
                         .map(|q| (InstanceId(q.id), DAffine3::from_cols_array(&q.transform)))
+                        .collect()
+                }),
+                joints: p.joints.as_ref().map(|m| {
+                    m.iter()
+                        .map(|q| (crate::JointId(q.id), (q.value, q.slide)))
                         .collect()
                 }),
             };

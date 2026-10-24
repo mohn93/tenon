@@ -38,6 +38,7 @@ fn page(name: &str, view: Option<PageView>, hidden: Option<&[TagId]>) -> Page {
         view,
         tags: hidden.map(|t| t.iter().copied().collect()),
         positions: None,
+        joints: None,
     }
 }
 

@@ -176,6 +176,35 @@ impl Document {
             .map_err(|e| joint_error(e, Some(id)))
     }
 
+    /// `scene` with each joint of `values` driven in turn to its value (degrees or meters) and
+    /// the parts connected to it moved, couplings and cam followers solved: the frame a render
+    /// at those joint values draws. The document is not changed. `not_found` for a joint that
+    /// is not there; `invalid_input` for a value that cannot be met (outside the joint's
+    /// limits, or the joints cannot all hold there), a joint with no value, or one that
+    /// follows a cam.
+    pub fn scene_with_joints(
+        &self,
+        mut scene: kernel::Scene,
+        values: &[(JointId, f64)],
+    ) -> Result<kernel::Scene, CommandError> {
+        for (id, value) in values {
+            let joint = self.joint_ref(*id)?;
+            if !joint.kind.has_value() {
+                return Err(invalid(format!(
+                    "joint {id} is fixed or ball: it has no value to set"
+                )));
+            }
+            if !value.is_finite() {
+                return Err(invalid("joint values must be finite numbers"));
+            }
+            let value = value * unit(joint.kind);
+            scene
+                .drive_joint(*id, value, None)
+                .map_err(|e| joint_error(e, Some(*id)))?;
+        }
+        Ok(scene)
+    }
+
     /// Couples `driven` to `driver`: `ratio` and `offset` in the joints' API units (degrees or
     /// meters); no offset takes the one that holds now.
     pub(super) fn add_coupling_changes(

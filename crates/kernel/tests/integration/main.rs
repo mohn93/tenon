@@ -27,6 +27,7 @@ mod location;
 mod materials;
 mod mesh;
 mod orient;
+mod page_joints;
 mod pages;
 mod perf;
 mod push_pull;

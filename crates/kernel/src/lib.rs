@@ -64,8 +64,9 @@ pub use curves::{Curve, CurveCircle, CurveKind};
 pub use data::{
     AnchorData, AxesData, CamFollowerData, CircleData, CouplingData, DefinitionData, DimensionData,
     EdgeData, FaceData, GuideData, InstanceData, JointData, JointFrameData, LocationData, MAX_ID,
-    MIN_DETERMINANT, MaterialData, MeshData, NoteData, PageData, PagePosition, RadialAnchorData,
-    SceneData, SectionData, StyleData, TagData, TextureData, TransitionData, VertexData,
+    MIN_DETERMINANT, MaterialData, MeshData, NoteData, PageData, PageJoint, PagePosition,
+    RadialAnchorData, SceneData, SectionData, StyleData, TagData, TextureData, TransitionData,
+    VertexData,
 };
 pub use edit::KernelError;
 pub use ids::{

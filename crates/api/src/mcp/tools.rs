@@ -183,7 +183,13 @@ fn input_schema(tool: &str) -> Value {
                     },
                     "scene": {"description": "Render a frame of going to this scene (its camera and stored instance positions) instead of the document camera; not with camera.", "allOf": [scene.clone()]},
                     "t": {"type": "number", "minimum": 0, "maximum": 1, "description": "With scene: how far along, 0 (the current view, or from) to 1 (the scene; default), linear."},
-                    "from": {"description": "With scene: the scene to start from (default the current view and positions).", "allOf": [scene]}
+                    "from": {"description": "With scene: the scene to start from (default the current view and positions).", "allOf": [scene]},
+                    "joints": {
+                        "type": "object",
+                        "propertyNames": {"pattern": "^j(0|[1-9][0-9]*)$"},
+                        "additionalProperties": {"type": "number"},
+                        "description": "Joint values to render at, a joint id to degrees (angles) or meters (distances), e.g. {\"j3\": 120}: solved on a copy of the model (couplings and cam followers too; after the scene frame when scene is given), the document unchanged. invalid_input when they cannot be met (limits, or the joints cannot all hold)."
+                    }
                 },
                 "additionalProperties": false,
                 "$defs": defs

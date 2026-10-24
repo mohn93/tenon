@@ -1,7 +1,7 @@
 //! Method dispatch: maps JSON-RPC methods onto session commands, queries and rendering.
 
 use base64::Engine;
-use kernel::{ChangeSummary, PageId, Scene, StyleId, StyleSettings};
+use kernel::{ChangeSummary, JointId, PageId, Scene, StyleId, StyleSettings};
 use render::print::Printed;
 use schemars::{JsonSchema, schema_for};
 use serde::de::DeserializeOwned;
@@ -85,6 +85,10 @@ struct RenderParams {
     t: Option<f64>,
     /// The scene to start from; only with `scene`.
     from: Option<PageId>,
+    /// Joint values (a joint id to degrees for an angle, meters for a distance) to render at:
+    /// solved on a copy of the model (couplings and cam followers too), after the scene frame
+    /// when `scene` is given, without changing the document. Refused when they cannot be met.
+    joints: Option<std::collections::BTreeMap<String, f64>>,
     /// A style to draw with for this image (default: the document's chosen style).
     #[schemars(with = "Option<String>")]
     style: Option<StyleId>,
@@ -584,6 +588,26 @@ fn render_view(host: &mut dyn Host, params: Value) -> Result<Value, RpcError> {
         (None, None) => (doc.camera.clone(), None),
     };
     let invalid = |why: String| command_failed(CommandError::new(ErrorKind::InvalidInput, why));
+    let frame = match p.joints.as_ref().filter(|j| !j.is_empty()) {
+        Some(joints) => {
+            let mut values = Vec::with_capacity(joints.len());
+            for (key, value) in joints {
+                let id: JointId = key.parse().map_err(|_| {
+                    RpcError::new(
+                        codes::INVALID_PARAMS,
+                        format!("joints: {key:?} is not a joint id"),
+                    )
+                })?;
+                values.push((id, *value));
+            }
+            let base = frame.unwrap_or_else(|| doc.scene().clone());
+            Some(
+                doc.scene_with_joints(base, &values)
+                    .map_err(command_failed)?,
+            )
+        }
+        None => frame,
+    };
     if let Some(projection) = p.projection {
         camera.projection = projection;
     }
@@ -672,7 +696,7 @@ pub fn describe() -> Value {
             "batch": {
                 "params": "{commands: [Command], atomic?: bool}",
                 "result": "{outcomes: [Outcome], changes: ChangeSummary, revision}: changes is the net effect of the whole batch",
-                "notes": "atomic: one undo step, all-or-nothing; undo/redo not allowed; an id may be a BatchRef to ids an earlier command of the batch made (\"$0:f0\", \"$0:d0\" for a definition make_unique, make_group, make_component or a primitive (as group or component) made, \"$0:y0\" for a style add_style made, \"$0:j0\" for a joint add_joint made, \"$0:k0\" for a coupling add_coupling made, \"$0:w0\" for a cam follower add_cam_follower made; a bad one is -32602 before anything runs, one past what was made fails its command with invalid_input)",
+                "notes": "atomic: one undo step, all-or-nothing; undo/redo not allowed; an id may be a BatchRef to ids an earlier command of the batch made (\"$0:f0\", \"$0:d0\" for a definition make_unique, make_group, make_component or a primitive (as group or component) made, \"$0:y0\" for a style add_style made, \"$0:j0\" for a joint add_joint made (also inside the `joints` list of add_scene, update_scene and change_scene), \"$0:k0\" for a coupling add_coupling made, \"$0:w0\" for a cam follower add_cam_follower made; a bad one is -32602 before anything runs, one past what was made fails its command with invalid_input)",
                 "params_schema": batch_params_schema(),
                 "result_schema": schema::<BatchResult>(),
             },
@@ -683,9 +707,9 @@ pub fn describe() -> Value {
                 "result_schema": query_result_schema(),
             },
             "render_view": {
-                "params": "{width, height, camera?: {eye, target, fov_y_deg?, up?, projection?}, lighting?: \"day\" | \"night\" | \"studio\", style?: StyleId, projection?: \"perspective\" | \"parallel\", section?: {planes?, cuts?, fill?, fill_color?: \"dark\" | \"material\"}, shadows?: bool, supersample?: 1..4 (width and height times it at most 8192), background?: \"style\" | \"transparent\", scene?: PageId, t?: 0 to 1 (default 1), from?: PageId}",
+                "params": "{width, height, camera?: {eye, target, fov_y_deg?, up?, projection?}, lighting?: \"day\" | \"night\" | \"studio\", style?: StyleId, projection?: \"perspective\" | \"parallel\", section?: {planes?, cuts?, fill?, fill_color?: \"dark\" | \"material\"}, shadows?: bool, supersample?: 1..4 (width and height times it at most 8192), background?: \"style\" | \"transparent\", scene?: PageId, t?: 0 to 1 (default 1), from?: PageId, joints?: {JointId: degrees or meters}}",
                 "result": "{width, height, png_base64}",
-                "notes": "does not move the document camera or change its lighting; with scene it renders the frame t of the way (linear) from `from` (default the current view and positions) to the scene's camera and stored positions, without changing the document (not with camera; t and from need scene); the document's tags, lighting and style are kept unless lighting or style override them, and projection overrides the frame camera's projection",
+                "notes": "does not move the document camera or change its lighting; with scene it renders the frame t of the way (linear) from `from` (default the current view and positions) to the scene's camera and stored positions, without changing the document (not with camera; t and from need scene); joints renders with those joint values solved on a copy of the model (couplings and cam followers too; after the scene frame when scene is given), without changing the document, and is refused with invalid_input when they cannot be met; the document's tags, lighting and style are kept unless lighting or style override them, and projection overrides the frame camera's projection",
                 "params_schema": schema::<RenderParams>(),
                 "result_schema": {
                     "type": "object",

@@ -772,9 +772,39 @@ impl Scene {
         Ok(change)
     }
 
-    /// The assembly of joint `id`: the parts connected to it through joints (not through the
-    /// ground) and couplings, every joint and coupling between them, and which parts move.
-    fn assembly(&self, id: JointId, driven: &Joint) -> System {
+    /// Drives each joint of `values` (id, value, slide: radians or meters) in turn, as
+    /// [`Scene::drive_joint`] does; the joints that follow a cam, and those that no longer
+    /// exist or have no value, are skipped. The steps, applied. A joint that cannot be driven
+    /// refuses the whole call and changes nothing.
+    pub fn drive_joints(
+        &mut self,
+        values: &[(JointId, f64, f64)],
+    ) -> Result<SceneChange, KernelError> {
+        let mut changes: Vec<SceneChange> = Vec::new();
+        for (id, value, slide) in values {
+            let Some(joint) = self.joint(*id) else {
+                continue;
+            };
+            if !joint.kind.has_value() || self.follower_of(*id).is_some() {
+                continue;
+            }
+            let slide = (joint.kind == JointKind::Cylindrical).then_some(*slide);
+            match self.drive_joint(*id, *value, slide) {
+                Ok(change) => changes.push(change),
+                Err(e) => {
+                    let done = SceneChange::join(changes);
+                    self.apply(&done.inverse());
+                    return Err(e);
+                }
+            }
+        }
+        Ok(SceneChange::join(changes))
+    }
+
+    /// The parts connected to `driven` through joints (not through the ground) and couplings,
+    /// and the cam followers' parts a cam brings in; the joints between them, and the parts
+    /// that move (all but the part `a` of the driven joint when nothing is grounded).
+    fn assembly_parts(&self, driven: &Joint) -> (Vec<(JointId, &Joint)>, Vec<InstanceId>) {
         let mut neighbours: BTreeMap<InstanceId, Vec<InstanceId>> = BTreeMap::new();
         let mut join = |x: InstanceId, y: InstanceId| {
             neighbours.entry(x).or_default().push(y);
@@ -818,6 +848,21 @@ impl Scene {
             .copied()
             .filter(|i| Some(*i) != held)
             .collect();
+        (joints, parts)
+    }
+
+    /// The parts that move when any joint of `ids` is driven.
+    pub fn joint_parts(&self, ids: impl IntoIterator<Item = JointId>) -> BTreeSet<InstanceId> {
+        ids.into_iter()
+            .filter_map(|id| self.joint(id))
+            .flat_map(|j| self.assembly_parts(j).1)
+            .collect()
+    }
+
+    /// The assembly of joint `id`: the parts connected to it through joints (not through the
+    /// ground) and couplings, every joint and coupling between them, and which parts move.
+    fn assembly(&self, id: JointId, driven: &Joint) -> System {
+        let (joints, parts) = self.assembly_parts(driven);
         let index: BTreeMap<InstanceId, usize> =
             parts.iter().enumerate().map(|(k, i)| (*i, k)).collect();
         let transform = |i: InstanceId| self.root().instance(i).expect("a part").transform;

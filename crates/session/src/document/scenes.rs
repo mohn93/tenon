@@ -3,19 +3,22 @@
 use std::collections::BTreeMap;
 
 use kernel::{
-    EntityId, InstanceId, KernelError, MeshId, Page, PageId, PageView, SceneChange,
-    SceneTransition, TagEdit,
+    EntityId, InstanceId, JointId, JointKind, KernelError, MeshId, Page, PageId, PageView,
+    SceneChange, SceneTransition, TagEdit,
 };
 
 use glam::DAffine3;
+
+/// What a scene stores of joints: each joint's (value, slide), radians or meters.
+type JointValues = BTreeMap<JointId, (f64, f64)>;
 
 use glam::DVec3;
 
 use super::{Document, MAX_COORDINATE, unit_vector};
 use crate::camera::{Camera, Lighting, Projection};
-use crate::command::{CommandError, ErrorKind, ScenePositions};
-use crate::motion::Motion;
-use crate::query::{QueryResult, SceneInfo, SceneView};
+use crate::command::{CommandError, ErrorKind, SceneJoints, ScenePositions};
+use crate::motion::{JointPose, Motion};
+use crate::query::{QueryResult, SceneInfo, SceneJointValue, SceneView};
 
 impl Document {
     /// The scene last added or gone to, while it exists.
@@ -117,6 +120,58 @@ impl Document {
         }
     }
 
+    /// The joint values a scene stores: the current values of the joints `ids` names, or of
+    /// every joint that has a value and is not a cam follower. `None` when there are none.
+    fn current_joints(&self, ids: Option<&[JointId]>) -> Result<Option<JointValues>, CommandError> {
+        let invalid = |why: String| CommandError::new(ErrorKind::InvalidInput, why);
+        let map: JointValues = match ids {
+            None => self
+                .scene
+                .joints()
+                .filter(|(id, j)| j.kind.has_value() && self.scene.follower_of(*id).is_none())
+                .map(|(id, j)| (id, (j.value, j.slide)))
+                .collect(),
+            Some([]) => {
+                return Err(invalid(
+                    "joints must list at least one joint (or be true or false)".into(),
+                ));
+            }
+            Some(ids) => {
+                let mut map = BTreeMap::new();
+                for id in ids {
+                    let joint = self.scene.joint(*id).ok_or_else(|| {
+                        CommandError::new(ErrorKind::NotFound, format!("no joint {id}"))
+                    })?;
+                    self.scene
+                        .page_joint_problem(*id, joint.value, joint.slide)
+                        .map_err(invalid)?;
+                    map.insert(*id, (joint.value, joint.slide));
+                }
+                map
+            }
+        };
+        Ok((!map.is_empty()).then_some(map))
+    }
+
+    /// The joint values a scene stores after `arg`, given what it stored (`stored`), as
+    /// `positions_after` does for positions.
+    fn joints_after(
+        &self,
+        arg: Option<&SceneJoints>,
+        stored: Option<&JointValues>,
+        keep_absent: bool,
+    ) -> Result<Option<JointValues>, CommandError> {
+        match arg {
+            None if keep_absent => Ok(stored.cloned()),
+            Some(SceneJoints::Flag(false)) => Ok(None),
+            None | Some(SceneJoints::Flag(true)) => {
+                let same: Option<Vec<JointId>> = stored.map(|m| m.keys().copied().collect());
+                self.current_joints(same.as_deref())
+            }
+            Some(SceneJoints::Ids(ids)) => self.current_joints(Some(ids)),
+        }
+    }
+
     /// Adds a scene after the last one, storing the current view (`camera`) and hidden tags
     /// (`tags`); without `name` it is "Scene 1" (or the lowest free number). It becomes the
     /// selected scene.
@@ -126,6 +181,7 @@ impl Document {
         camera: bool,
         tags: bool,
         positions: Option<&ScenePositions>,
+        joints: Option<&SceneJoints>,
     ) -> Result<SceneChange, CommandError> {
         let page = Page {
             name: name.map_or_else(|| self.scene.free_page_name(), str::to_string),
@@ -134,6 +190,10 @@ impl Document {
             positions: match positions {
                 None => None,
                 p => self.positions_after(p, None, false)?,
+            },
+            joints: match joints {
+                None => None,
+                j => self.joints_after(j, None, false)?,
             },
         };
         let (id, change) = self
@@ -152,6 +212,7 @@ impl Document {
         camera: Option<bool>,
         tags: Option<bool>,
         positions: Option<&ScenePositions>,
+        joints: Option<&SceneJoints>,
     ) -> Result<SceneChange, CommandError> {
         let page = self.page(id)?;
         let camera = camera.unwrap_or(page.view.is_some());
@@ -162,11 +223,17 @@ impl Document {
             None if stored.is_none() => None,
             p => self.positions_after(p, stored, false)?,
         };
+        let stored_joints = page.joints.as_ref();
+        let joints = match joints {
+            None if stored_joints.is_none() => None,
+            j => self.joints_after(j, stored_joints, false)?,
+        };
         let page = Page {
             name: page.name.clone(),
             view: camera.then(|| self.view_to_store()).transpose()?,
             tags: tags.then(|| self.scene.hidden_tags()),
             positions,
+            joints,
         };
         self.scene
             .change_page(id, page)
@@ -183,11 +250,17 @@ impl Document {
         camera: Option<bool>,
         tags: Option<bool>,
         positions: Option<&ScenePositions>,
+        joints: Option<&SceneJoints>,
     ) -> Result<SceneChange, CommandError> {
-        if name.is_none() && camera.is_none() && tags.is_none() && positions.is_none() {
+        if name.is_none()
+            && camera.is_none()
+            && tags.is_none()
+            && positions.is_none()
+            && joints.is_none()
+        {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "change_scene needs a name, camera, tags or positions",
+                "change_scene needs a name, camera, tags, positions or joints",
             ));
         }
         let page = self.page(id)?;
@@ -209,11 +282,13 @@ impl Document {
             None => page.tags.clone(),
         };
         let positions = self.positions_after(positions, page.positions.as_ref(), true)?;
+        let joints = self.joints_after(joints, page.joints.as_ref(), true)?;
         let page = Page {
             name: name.map_or_else(|| page.name.clone(), str::to_string),
             view,
             tags: hidden,
             positions,
+            joints,
         };
         self.scene
             .change_page(id, page)
@@ -318,6 +393,22 @@ impl Document {
             // The joints' values follow the stored pose (measured, not solved).
             changes.push(self.scene.update_joint_values());
         }
+        if let Some(stored) = &page.joints {
+            // The stored joint values are then solved for, on the parts as the positions left
+            // them. A pose that cannot be met refuses the whole go-to: nothing changes.
+            let values: Vec<(JointId, f64, f64)> =
+                stored.iter().map(|(j, (v, s))| (*j, *v, *s)).collect();
+            match self.scene.drive_joints(&values) {
+                Ok(change) => changes.push(change),
+                Err(e) => {
+                    self.scene.apply(&SceneChange::join(changes).inverse());
+                    return Err(CommandError::new(
+                        ErrorKind::InvalidInput,
+                        format!("scene {id} cannot be gone to: {e}"),
+                    ));
+                }
+            }
+        }
         if let Some((camera, v)) = view {
             let v = &v;
             self.camera = camera;
@@ -350,6 +441,7 @@ impl Document {
                     .iter()
                     .flat_map(|m| m.keys().copied().map(EntityId::Instance))
                     .collect(),
+                joints: p.joints.iter().flat_map(|m| m.keys().copied()).collect(),
                 selected: selected == Some(id),
             })
             .collect()
@@ -383,6 +475,19 @@ impl Document {
                 .positions
                 .as_ref()
                 .map(|m| m.keys().copied().map(EntityId::Instance).collect()),
+            joints: page.joints.as_ref().map(|m| {
+                m.iter()
+                    .map(|(joint, (value, slide))| {
+                        let kind = self.scene.joint(*joint).map(|j| j.kind);
+                        let angular = kind.is_some_and(JointKind::is_angular);
+                        SceneJointValue {
+                            joint: *joint,
+                            value: if angular { value.to_degrees() } else { *value },
+                            slide: (kind == Some(JointKind::Cylindrical)).then_some(*slide),
+                        }
+                    })
+                    .collect()
+            }),
             revision: self.revision,
         })
     }
@@ -467,6 +572,32 @@ impl Document {
                 }
             }
         }
+        // The joints either scene stores, from where each starts to where it ends (a joint a
+        // scene does not store stays at its current value there), and the parts they move.
+        let mut joint_ids: Vec<JointId> = Vec::new();
+        for page in start.into_iter().chain([end]) {
+            for j in page.joints.iter().flat_map(|p| p.keys()) {
+                if !joint_ids.contains(j) {
+                    joint_ids.push(*j);
+                }
+            }
+        }
+        let joints: Vec<(JointId, JointPose, JointPose)> = joint_ids
+            .into_iter()
+            .filter_map(|j| {
+                let now = self.scene.joint(j)?;
+                let now = (now.value, now.slide);
+                let at = |page: Option<&Page>| {
+                    page.and_then(|p| p.joints.as_ref())
+                        .and_then(|p| p.get(&j))
+                        .copied()
+                        .unwrap_or(now)
+                };
+                Some((j, at(start), at(Some(end))))
+            })
+            .collect();
+        let driven = self.scene.joint_parts(joints.iter().map(|(j, _, _)| *j));
+        ids.retain(|i| !driven.contains(i));
         let moves = ids
             .into_iter()
             .filter_map(|i| {
@@ -484,6 +615,7 @@ impl Document {
             from_camera,
             to_camera,
             moves,
+            joints,
         })
     }
 }

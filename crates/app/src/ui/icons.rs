@@ -28,6 +28,8 @@ pub const EYE_SLASH: &str = ph::EYE_SLASH;
 /// Adds and deletes a tag.
 pub const PLUS: &str = ph::PLUS;
 pub const MINUS: &str = ph::MINUS;
+/// Plays a joint in the Joints tab.
+pub const PLAY: &str = ph::PLAY;
 /// Updates the selected scene and moves it up or down the Scenes list.
 pub const ARROWS_CLOCKWISE: &str = ph::ARROWS_CLOCKWISE;
 pub const ARROW_UP: &str = ph::ARROW_UP;

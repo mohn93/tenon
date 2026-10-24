@@ -46,8 +46,8 @@ pub use clip::ClipOutline;
 pub use command::{
     AmbientOcclusionPatch, AnchorInput, BatchError, Command, CommandError, EdgesPatch, ErrorKind,
     ExistingMaterial, ExpectedStep, FlipAxis, FlipFrame, IntersectReport, IntersectScope,
-    OrientOutcome, Origin, Outcome, PrimitiveAs, ScenePositions, SelectMode, StylePatch,
-    TextureSource, Transform,
+    OrientOutcome, Origin, Outcome, PrimitiveAs, SceneJoints, ScenePositions, SelectMode,
+    StylePatch, TextureSource, Transform,
 };
 pub use document::{
     DEFAULT_EYE_HEIGHT, Document, ExportedBytes, ImportOptions, MAX_COORDINATE, MAX_COPIES,

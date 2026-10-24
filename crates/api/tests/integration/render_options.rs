@@ -394,3 +394,83 @@ fn the_ground_shadow_has_partial_alpha_on_a_transparent_background() {
         partial(&off)
     );
 }
+
+/// A joint turning the cube about a vertical axis through (3, 0): returns its id.
+fn hinge(h: &mut HeadlessHost) -> Value {
+    let (id, _) = h.doc.scene().root().instances().next().unwrap();
+    let cube = json!(kernel::EntityId::Instance(id).to_string());
+    let r = call(
+        h,
+        "execute",
+        json!({"type": "add_joint", "kind": "revolute", "b": cube, "point": [3, 0, 0], "axis": [0, 0, 1]}),
+    );
+    assert!(r.get("error").is_none(), "{r}");
+    r["result"]["changes"]["joints"][0].clone()
+}
+
+#[test]
+fn joints_render_the_solved_pose_without_changing_the_document() {
+    let mut h = HeadlessHost::new();
+    cube(&mut h);
+    let joint = hinge(&mut h);
+    let before = settings(&h);
+    let transforms = format!("{:?}", h.doc.scene().root().instances().collect::<Vec<_>>());
+    let Some(plain) = render(&mut h, json!({})) else {
+        return;
+    };
+    let turned = render(&mut h, json!({"joints": {joint.as_str().unwrap(): 90}})).unwrap();
+    assert!(
+        plain.diff(&turned) > 100,
+        "the cube moved: {}",
+        plain.diff(&turned)
+    );
+    assert_eq!(settings(&h), before, "no revision, no view change");
+    assert_eq!(
+        format!("{:?}", h.doc.scene().root().instances().collect::<Vec<_>>()),
+        transforms
+    );
+    // The value the joint already has renders the document; an empty map does too.
+    let same = render(&mut h, json!({"joints": {joint.as_str().unwrap(): 0}})).unwrap();
+    assert_eq!(same.diff(&plain), 0);
+    let empty = render(&mut h, json!({"joints": {}})).unwrap();
+    assert_eq!(empty.diff(&plain), 0);
+}
+
+#[test]
+fn joints_that_cannot_be_met_or_are_not_joints_are_refused() {
+    let mut h = HeadlessHost::new();
+    cube(&mut h);
+    let joint = hinge(&mut h);
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "change_joint", "joint": joint, "limits": [-10, 50]}),
+    );
+    assert!(r.get("error").is_none(), "{r}");
+    let before = settings(&h);
+    // Refused before any rendering, so with or without a GPU.
+    let r = refused(&mut h, json!({"joints": {joint.as_str().unwrap(): 80}}));
+    assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
+    assert!(
+        r["error"]["message"].as_str().unwrap().contains("limits"),
+        "{r}"
+    );
+    let r = refused(&mut h, json!({"joints": {"j999": 1}}));
+    assert_eq!(r["error"]["data"]["kind"], "not_found", "{r}");
+    let r = refused(&mut h, json!({"joints": {"x": 1}}));
+    assert_eq!(r["error"]["code"], codes::INVALID_PARAMS, "{r}");
+    assert_eq!(settings(&h), before);
+}
+
+#[test]
+fn play_needs_a_window() {
+    let mut h = HeadlessHost::new();
+    cube(&mut h);
+    let joint = hinge(&mut h);
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "play", "joint": joint, "from": 0, "to": 90, "seconds": 2, "loop": true}),
+    );
+    assert_eq!(r["error"]["message"], "this program has no editor", "{r}");
+}

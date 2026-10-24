@@ -914,6 +914,16 @@ impl Scene {
                     ));
                 }
             }
+            for (j, (value, slide)) in p.joints.iter().flatten() {
+                if self.joint(*j).is_none() {
+                    return Err(format!("scene {id} stores a missing joint {j}"));
+                }
+                if !value.is_finite() || !slide.is_finite() {
+                    return Err(format!(
+                        "scene {id} stores a joint value that is not finite"
+                    ));
+                }
+            }
         }
         let mut joint_names = BTreeSet::new();
         for (id, j) in &self.joints {

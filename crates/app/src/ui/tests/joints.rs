@@ -97,6 +97,13 @@ fn delete_removes_the_joint() {
 }
 
 #[test]
+fn play_plays_the_joint() {
+    let mut h = tall(joints_tab());
+    assert_eq!(click(&mut h, "Play Rail"), [UiAction::PlayJoint(SLIDER)]);
+    assert_eq!(click(&mut h, "Play Hinge"), [UiAction::PlayJoint(HINGE)]);
+}
+
+#[test]
 fn a_drag_drives_live_and_reports_its_end_once() {
     let mut h = tall(joints_tab());
     let slider = rect_of(&h, "Hinge angle");

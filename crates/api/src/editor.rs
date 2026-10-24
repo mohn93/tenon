@@ -2,7 +2,7 @@
 //! the material the Paint tool paints with, the units imports are read in, fly mode, the
 //! status bar and the measurements box.
 
-use kernel::{EntityId, MaterialId};
+use kernel::{EntityId, JointId, MaterialId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use session::ImportUnits;
@@ -270,6 +270,24 @@ pub enum EditorCommand {
         #[serde(default)]
         overwrite: Option<bool>,
     },
+    /// Plays a joint in the window: for `seconds` the joint's value runs linearly from `from`
+    /// to `to` (degrees for an angle, meters for a distance), the model drawn at each frame's
+    /// value with everything connected to it solved (couplings and cam followers too). Nothing
+    /// in the document changes (no undo step, no revision): any input in the window, another
+    /// command or the end of the time (without `loop`) stops it, and the window shows the
+    /// document as it was. With `loop` it starts again from `from` each time it reaches `to`.
+    /// Window only: a program without a window answers `invalid_input`. `from` and `to` must be
+    /// within the joint's limits, and both must be reachable (checked before it starts;
+    /// `invalid_input` otherwise), as must be `seconds` (above 0, at most 600). A fixed or
+    /// ball joint, and one that follows a cam, cannot be played.
+    Play {
+        joint: JointId,
+        from: f64,
+        to: f64,
+        seconds: f64,
+        #[serde(default, rename = "loop")]
+        looping: Option<bool>,
+    },
 }
 
 /// What `export_pdf` reports.
@@ -282,7 +300,7 @@ pub struct PdfReport {
 }
 
 /// The `type` of each editor command.
-pub const EDITOR_COMMANDS: [&str; 14] = [
+pub const EDITOR_COMMANDS: [&str; 15] = [
     "set_tool",
     "set_paint_material",
     "set_import_units",
@@ -297,6 +315,7 @@ pub const EDITOR_COMMANDS: [&str; 14] = [
     "paste_in_place",
     "place_library_item",
     "export_pdf",
+    "play",
 ];
 
 #[cfg(test)]

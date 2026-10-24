@@ -286,6 +286,7 @@ impl Scene {
         let step = Step::RemoveJoint(id, joint);
         self.apply_step(&step);
         steps.push(step);
+        steps.extend(self.drop_stale_page_joints().steps);
         Ok(SceneChange { steps })
     }
 
@@ -416,6 +417,7 @@ impl Scene {
             self.apply_step(&step);
             steps.push(step);
         }
+        steps.extend(self.drop_stale_page_joints().steps);
         SceneChange { steps }
     }
 

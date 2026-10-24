@@ -51,7 +51,7 @@ fn joint_row(ui: &mut Ui, row: &JointRow, units: Units, actions: &mut Vec<UiActi
     let info = &row.info;
     let angular = info.kind.is_angular();
     ui.horizontal(|ui| {
-        let delete = ui.available_width() - 28.0;
+        let delete = ui.available_width() - 28.0 - if info.kind.has_value() { 28.0 } else { 0.0 };
         let name = ui.add(
             egui::Button::selectable(row.selected, &info.name)
                 .truncate()
@@ -73,6 +73,19 @@ fn joint_row(ui: &mut Ui, row: &JointRow, units: Units, actions: &mut Vec<UiActi
             kind_name(info.kind).to_string()
         };
         ui.label(RichText::new(shown).weak());
+        if info.kind.has_value()
+            && widgets::icon_button(
+                ui,
+                icons::PLAY,
+                &format!("Play {}", info.name),
+                "Play the joint over its limits (a whole turn when it has none) without changing the model; any click stops it",
+                None,
+                true,
+            )
+            .clicked()
+        {
+            actions.push(UiAction::PlayJoint(info.id));
+        }
         if widgets::icon_button(
             ui,
             icons::MINUS,

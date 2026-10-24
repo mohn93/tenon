@@ -487,7 +487,9 @@ impl Document {
         match command {
             Command::InsertLibraryItem { .. } => "insert".to_string(),
             Command::GoToScene { scene } => match self.scene.page(*scene) {
-                Some(p) if p.positions.is_some() => format!("Go to scene {}", p.name),
+                Some(p) if p.positions.is_some() || p.joints.is_some() => {
+                    format!("Go to scene {}", p.name)
+                }
                 _ => command.name(),
             },
             _ => command.name(),
@@ -1277,25 +1279,41 @@ impl Document {
                 camera,
                 tags,
                 positions,
-            } => self.add_scene_changes(name.as_deref(), *camera, *tags, positions.as_ref()),
+                joints,
+            } => self.add_scene_changes(
+                name.as_deref(),
+                *camera,
+                *tags,
+                positions.as_ref(),
+                joints.as_ref(),
+            ),
             Command::UpdateScene {
                 scene,
                 camera,
                 tags,
                 positions,
-            } => self.update_scene_changes(*scene, *camera, *tags, positions.as_ref()),
+                joints,
+            } => self.update_scene_changes(
+                *scene,
+                *camera,
+                *tags,
+                positions.as_ref(),
+                joints.as_ref(),
+            ),
             Command::ChangeScene {
                 scene,
                 name,
                 camera,
                 tags,
                 positions,
+                joints,
             } => self.change_scene_changes(
                 *scene,
                 name.as_deref(),
                 *camera,
                 *tags,
                 positions.as_ref(),
+                joints.as_ref(),
             ),
             Command::MoveScene { scene, index } => self.move_scene_changes(*scene, *index),
             Command::DeleteScene { scene } => self.delete_scene_changes(*scene),

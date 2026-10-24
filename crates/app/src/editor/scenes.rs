@@ -1,18 +1,43 @@
 //! The scene tabs and the Scenes tab: each change is the command an agent would send.
 
-use kernel::PageId;
+use kernel::{JointId, PageId};
 use session::motion::{Motion, smoothstep};
-use session::{Camera, Command, ScenePositions};
+use session::{Camera, Command, CommandError, ErrorKind, SceneJoints, ScenePositions};
 use web_time::Instant;
 
 use super::{Editor, Message};
 
-/// A scene transition in progress: drawing only, the document is already at the end.
+/// An animation in progress, drawing only: a scene transition (the document is already at the
+/// end) or a joint being played (the document stays as it is).
 pub(super) struct Transition {
-    motion: Motion,
+    kind: Kind,
     started: Instant,
     seconds: f64,
 }
+
+enum Kind {
+    Motion(Box<Motion>),
+    Play(Play),
+}
+
+/// A joint played from one value to another (radians or meters).
+struct Play {
+    joint: JointId,
+    from: f64,
+    to: f64,
+    looping: bool,
+    /// The frame drawn last, a copy of the model with the joint at its value then: each frame
+    /// solves on from it, a small step, rather than from the document's pose.
+    frame: Option<Box<kernel::Scene>>,
+}
+
+/// The longest a play may take, in seconds.
+const MAX_PLAY_SECONDS: f64 = 600.0;
+
+/// How a play started from the Joints tab runs: seconds for a pass.
+const PLAY_SECONDS: f64 = 4.0;
+/// How far (meters) a play of a prismatic joint without limits slides.
+const PLAY_REACH: f64 = 0.5;
 
 /// What the window draws while a transition runs: the camera and, when instances move, the
 /// scene with them where the transition has them (None: the document's scene, unchanged).
@@ -47,25 +72,120 @@ impl Editor {
         self.transition.take().is_some()
     }
 
-    /// The camera and scene to draw at `now`, or None when no transition runs (one that has
-    /// run its time ends here). The easing is smoothstep; the camera keeps the window's
-    /// viewport.
+    /// The camera and scene to draw at `now`, or None when nothing animates (a transition or
+    /// a play that has run its time ends here; a looping play never does). A transition
+    /// eases by smoothstep and its camera keeps the window's viewport; a play runs the joint
+    /// linearly and draws the document's camera.
     pub fn transition_frame(&mut self, now: Instant) -> Option<TransitionFrame> {
-        let t = self.transition.as_ref()?;
+        let t = self.transition.as_mut()?;
         let x = now.saturating_duration_since(t.started).as_secs_f64() / t.seconds;
-        if x >= 1.0 {
+        let looping = matches!(&t.kind, Kind::Play(p) if p.looping);
+        if x >= 1.0 && !looping {
             self.transition = None;
             return None;
         }
-        let eased = smoothstep(x);
-        let mut camera = t.motion.camera_at(eased);
-        camera.viewport = self.doc.camera.viewport;
-        // A camera-only transition draws the document's scene: no copy, no model rebuild.
-        let moves = t.motion.moves.iter().any(|(_, a, b)| a != b);
-        Some(TransitionFrame {
-            camera,
-            scene: moves.then(|| t.motion.scene_at(self.doc.scene(), eased)),
-        })
+        match &mut t.kind {
+            Kind::Motion(motion) => {
+                let eased = smoothstep(x);
+                let mut camera = motion.camera_at(eased);
+                camera.viewport = self.doc.camera.viewport;
+                // A camera-only transition draws the document's scene: no copy, no model
+                // rebuild.
+                Some(TransitionFrame {
+                    camera,
+                    scene: motion
+                        .moves_parts()
+                        .then(|| motion.scene_at(self.doc.scene(), eased)),
+                })
+            }
+            Kind::Play(play) => {
+                let along = if looping { x.fract() } else { x };
+                let value = play.from + (play.to - play.from) * along;
+                let frame = play
+                    .frame
+                    .get_or_insert_with(|| Box::new(self.doc.scene().clone()));
+                // A value that cannot be met leaves the frame as the last one drew it.
+                let _ = frame.drive_joint(play.joint, value, None);
+                Some(TransitionFrame {
+                    camera: self.doc.camera.clone(),
+                    scene: Some((**frame).clone()),
+                })
+            }
+        }
+    }
+
+    /// Plays a joint: for `seconds` its value runs from `from` to `to` (degrees or meters),
+    /// the window drawing the model solved at each value, the document unchanged. Any input
+    /// or command stops it. `invalid_input` for a joint that cannot be driven, values outside
+    /// its limits or that cannot be met (both ends are solved first), or a time that is not
+    /// above 0 and at most 600 seconds.
+    pub fn play_joint(
+        &mut self,
+        joint: JointId,
+        from: f64,
+        to: f64,
+        seconds: f64,
+        looping: bool,
+    ) -> Result<(), CommandError> {
+        self.play_joint_at(joint, from, to, seconds, looping, Instant::now())
+    }
+
+    pub(super) fn play_joint_at(
+        &mut self,
+        joint: JointId,
+        from: f64,
+        to: f64,
+        seconds: f64,
+        looping: bool,
+        now: Instant,
+    ) -> Result<(), CommandError> {
+        let invalid = |why: &str| CommandError::new(ErrorKind::InvalidInput, why);
+        if !from.is_finite() || !to.is_finite() {
+            return Err(invalid("from and to must be finite numbers"));
+        }
+        if !seconds.is_finite() || seconds <= 0.0 || seconds > MAX_PLAY_SECONDS {
+            return Err(invalid("seconds must be above 0 and at most 600"));
+        }
+        // Both ends are solved on a copy first: the play then only meets what it was told.
+        self.doc
+            .scene_with_joints(self.doc.scene().clone(), &[(joint, from), (joint, to)])?;
+        let angular = self
+            .doc
+            .scene()
+            .joint(joint)
+            .is_some_and(|j| j.kind.is_angular());
+        let unit = if angular { 1f64.to_radians() } else { 1.0 };
+        self.message = None;
+        self.transition = Some(Transition {
+            kind: Kind::Play(Play {
+                joint,
+                from: from * unit,
+                to: to * unit,
+                looping,
+                frame: None,
+            }),
+            started: now,
+            seconds,
+        });
+        Ok(())
+    }
+
+    /// The Joints tab's Play button: plays the joint over its limits (looping a joint that
+    /// turns without limits through a whole turn from where it is). A refusal says why in the
+    /// status.
+    pub fn play_joint_range(&mut self, joint: JointId) -> bool {
+        let Some(info) = self.joint_infos().into_iter().find(|j| j.id == joint) else {
+            return false;
+        };
+        let (from, to, looping) = match info.limits {
+            Some([lo, hi]) => (lo, hi, false),
+            None if info.kind.is_angular() => (info.value, info.value + 360.0, true),
+            None => (info.value, info.value + PLAY_REACH, false),
+        };
+        if let Err(e) = self.play_joint(joint, from, to, PLAY_SECONDS, looping) {
+            self.message = Some(Message::error(e.message));
+        }
+        true
     }
 
     /// Adds a scene after the last one, storing the current view and hidden tags ("Scene 1",
@@ -77,6 +197,7 @@ impl Editor {
             camera: true,
             tags: true,
             positions: None,
+            joints: None,
         });
         true
     }
@@ -108,6 +229,7 @@ impl Editor {
             camera,
             tags,
             positions: None,
+            joints: None,
         });
         true
     }
@@ -121,6 +243,7 @@ impl Editor {
             camera: None,
             tags: None,
             positions: None,
+            joints: None,
         });
         true
     }
@@ -140,6 +263,7 @@ impl Editor {
             camera,
             tags,
             positions: None,
+            joints: None,
         });
         true
     }
@@ -170,6 +294,22 @@ impl Editor {
             camera: None,
             tags: None,
             positions: Some(positions),
+            joints: None,
+        });
+        true
+    }
+
+    /// Starts (true) or stops storing joint values in a scene. Started, it stores the current
+    /// value of every joint that has one.
+    pub fn set_scene_joints(&mut self, scene: PageId, on: bool) -> bool {
+        self.message = None;
+        self.run(Command::ChangeScene {
+            scene,
+            name: None,
+            camera: None,
+            tags: None,
+            positions: None,
+            joints: Some(SceneJoints::Flag(on)),
         });
         true
     }
@@ -206,7 +346,7 @@ impl Editor {
             && !motion.is_still()
         {
             self.transition = Some(Transition {
-                motion,
+                kind: Kind::Motion(Box::new(motion)),
                 started: now,
                 seconds: setting.seconds,
             });
@@ -242,7 +382,7 @@ impl Editor {
 mod tests {
     use glam::DVec2;
     use kernel::PageId;
-    use session::{Command, StandardView};
+    use session::{Command, ErrorKind, StandardView};
 
     use crate::editor::Editor;
 
@@ -624,5 +764,198 @@ mod tests {
         // The document's view puts it elsewhere.
         let end = e.hud(false).labels;
         assert!((end[0].at - want).length() > 1.0);
+    }
+
+    /// A unit box hinged to the ground about the vertical line through (3, 0): its instance
+    /// and joint.
+    fn hinged_box(e: &mut Editor) -> (kernel::InstanceId, kernel::JointId) {
+        let cmd = |v: serde_json::Value| serde_json::from_value::<Command>(v).unwrap();
+        e.execute(cmd(serde_json::json!({
+            "type": "add_box", "corner": [0, 0, 0], "size": [1, 1, 1]
+        })))
+        .unwrap();
+        let part = e.doc().scene().root().instances().next().unwrap().0;
+        let out = e
+            .execute(cmd(serde_json::json!({
+                "type": "add_joint", "kind": "revolute", "b": kernel::EntityId::Instance(part).to_string(),
+                "point": [3, 0, 0], "axis": [0, 0, 1]
+            })))
+            .unwrap();
+        (part, out.changes.joints[0])
+    }
+
+    /// The turn (degrees about Z) of an instance of `scene`.
+    fn turn_of(scene: &kernel::Scene, id: kernel::InstanceId) -> f64 {
+        let x = scene.root().instance(id).unwrap().transform.matrix3 * glam::DVec3::X;
+        x.y.atan2(x.x).to_degrees()
+    }
+
+    #[test]
+    fn play_draws_the_joint_at_interpolated_values_and_changes_nothing() {
+        use std::time::Duration;
+        let mut e = editor();
+        let (part, joint) = hinged_box(&mut e);
+        let revision = e.doc().revision();
+        let undo = e.doc().undo_label().map(str::to_string);
+        let t0 = web_time::Instant::now();
+        e.play_joint_at(joint, 0.0, 90.0, 2.0, false, t0).unwrap();
+        assert!(e.transitioning());
+        let at = |ms| t0 + Duration::from_millis(ms);
+        // Linear: a quarter of the time is a quarter of the turn, and the camera is the
+        // document's.
+        let frame = e.transition_frame(at(500)).expect("a frame");
+        assert!((turn_of(frame.scene.as_ref().unwrap(), part) - 22.5).abs() < 1e-6);
+        assert_eq!(frame.camera, e.doc().camera);
+        let frame = e.transition_frame(at(1500)).expect("a frame");
+        assert!((turn_of(frame.scene.as_ref().unwrap(), part) - 67.5).abs() < 1e-6);
+        // The document never moved and made no step.
+        assert!(turn_of(e.doc().scene(), part).abs() < 1e-9);
+        assert_eq!(e.doc().revision(), revision);
+        assert_eq!(e.doc().undo_label().map(str::to_string), undo);
+        // The time is up: the window draws the document again.
+        assert!(e.transition_frame(at(2000)).is_none());
+        assert!(!e.transitioning());
+    }
+
+    #[test]
+    fn a_looping_play_starts_again_and_input_stops_it_leaving_the_document() {
+        use std::time::Duration;
+        let mut e = editor();
+        let (part, joint) = hinged_box(&mut e);
+        let revision = e.doc().revision();
+        let t0 = web_time::Instant::now();
+        e.play_joint_at(joint, 0.0, 90.0, 2.0, true, t0).unwrap();
+        let at = |ms| t0 + Duration::from_millis(ms);
+        // Past the time it is on its second pass: 3 s in is 1 s into the pass.
+        let frame = e.transition_frame(at(3000)).expect("still playing");
+        assert!((turn_of(frame.scene.as_ref().unwrap(), part) - 45.0).abs() < 1e-6);
+        assert!(e.transitioning());
+        // Input stops it (the window calls this on a press): the document is as it was.
+        assert!(e.finish_transition());
+        assert!(e.transition_frame(at(3100)).is_none());
+        assert!(turn_of(e.doc().scene(), part).abs() < 1e-9);
+        assert_eq!(e.doc().revision(), revision);
+        // A command stops it too.
+        e.play_joint_at(joint, 0.0, 90.0, 2.0, true, t0).unwrap();
+        e.execute(Command::SetLighting {
+            mode: session::Lighting::Night,
+        })
+        .unwrap();
+        assert!(!e.transitioning());
+    }
+
+    #[test]
+    fn a_play_that_cannot_run_is_refused_before_it_starts() {
+        let mut e = editor();
+        let (_, joint) = hinged_box(&mut e);
+        let cmd = |v: serde_json::Value| serde_json::from_value::<Command>(v).unwrap();
+        e.execute(cmd(serde_json::json!({
+            "type": "change_joint", "joint": joint.to_string(), "limits": [-10, 50]
+        })))
+        .unwrap();
+        let t0 = web_time::Instant::now();
+        let err = e
+            .play_joint_at(joint, 0.0, 80.0, 2.0, false, t0)
+            .unwrap_err();
+        assert!(err.message.contains("limits"), "{}", err.message);
+        for (from, to, seconds) in [
+            (0.0, 10.0, 0.0),
+            (0.0, 10.0, 601.0),
+            (0.0, 10.0, f64::NAN),
+            (f64::NAN, 10.0, 1.0),
+        ] {
+            assert!(
+                e.play_joint_at(joint, from, to, seconds, false, t0)
+                    .is_err()
+            );
+        }
+        assert!(!e.transitioning());
+        let missing = kernel::JointId(9999);
+        let err = e
+            .play_joint_at(missing, 0.0, 1.0, 1.0, false, t0)
+            .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::NotFound);
+        // Within the limits it plays.
+        e.play_joint_at(joint, -10.0, 50.0, 1.0, false, t0).unwrap();
+        assert!(e.transitioning());
+    }
+
+    #[test]
+    fn the_play_button_plays_over_the_limits_or_a_turn_and_says_why_when_it_cannot() {
+        let mut e = editor();
+        let (_, joint) = hinged_box(&mut e);
+        assert!(e.play_joint_range(joint));
+        assert!(e.transitioning(), "a whole turn");
+        e.finish_transition();
+        let cmd = |v: serde_json::Value| serde_json::from_value::<Command>(v).unwrap();
+        e.execute(cmd(serde_json::json!({
+            "type": "change_joint", "joint": joint.to_string(), "limits": [-10, 50]
+        })))
+        .unwrap();
+        assert!(e.play_joint_range(joint));
+        assert!(e.transitioning(), "over the limits");
+        e.finish_transition();
+        // A joint that cannot be played says why in the status.
+        e.execute(cmd(serde_json::json!({
+            "type": "add_joint", "kind": "fixed",
+            "b": kernel::EntityId::Instance(e.doc().scene().root().instances().next().unwrap().0).to_string(),
+            "point": [0, 0, 0], "axis": [0, 0, 1]
+        })))
+        .unwrap();
+        let fixed = e.joint_infos().last().unwrap().id;
+        assert!(e.play_joint_range(fixed));
+        assert!(!e.transitioning());
+        assert!(e.status_parts().message.is_some());
+    }
+
+    #[test]
+    fn a_transition_interpolates_joint_values_and_solves_each_frame() {
+        use std::time::Duration;
+        let mut e = editor();
+        let (part, joint) = hinged_box(&mut e);
+        let cmd = |v: serde_json::Value| serde_json::from_value::<Command>(v).unwrap();
+        e.execute(cmd(serde_json::json!({
+            "type": "drive", "joint": joint.to_string(), "value": 60
+        })))
+        .unwrap();
+        e.execute(cmd(serde_json::json!({
+            "type": "add_scene", "joints": true
+        })))
+        .unwrap();
+        let scene = ids(&e)[0];
+        e.execute(cmd(serde_json::json!({
+            "type": "drive", "joint": joint.to_string(), "value": 0
+        })))
+        .unwrap();
+        let t0 = web_time::Instant::now();
+        assert!(e.go_to_scene_at(scene, t0));
+        assert!(e.transitioning());
+        // The document is at the scene at once, in one undo step.
+        assert!((turn_of(e.doc().scene(), part) - 60.0).abs() < 1e-6);
+        assert_eq!(e.doc().undo_label(), Some("Go to scene Scene 1"));
+        let at = |ms| t0 + Duration::from_millis(ms);
+        let f0 = e.transition_frame(at(0)).expect("a frame");
+        assert!(turn_of(f0.scene.as_ref().unwrap(), part).abs() < 1e-6);
+        let f1 = e.transition_frame(at(500)).expect("a frame");
+        assert!((turn_of(f1.scene.as_ref().unwrap(), part) - 30.0).abs() < 1e-6);
+        assert!((turn_of(e.doc().scene(), part) - 60.0).abs() < 1e-6);
+        assert!(e.transition_frame(at(1000)).is_none());
+    }
+
+    #[test]
+    fn the_joint_values_checkbox_stores_every_joint_value_or_none() {
+        let mut e = editor();
+        let (_, joint) = hinged_box(&mut e);
+        assert!(e.add_scene());
+        let scene = ids(&e)[0];
+        assert!(e.set_scene_joints(scene, true));
+        let stored = |e: &Editor| e.doc().scene().page(scene).unwrap().joints.clone();
+        assert_eq!(
+            stored(&e).unwrap().keys().copied().collect::<Vec<_>>(),
+            [joint]
+        );
+        assert_eq!(e.doc().undo_label(), Some("change_scene"));
+        assert!(e.set_scene_joints(scene, false));
+        assert!(stored(&e).is_none());
     }
 }

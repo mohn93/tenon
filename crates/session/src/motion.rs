@@ -3,7 +3,7 @@
 //! here changes a document.
 
 use glam::{DAffine3, DMat3, DQuat, DVec3};
-use kernel::{InstanceId, MeshId, Scene};
+use kernel::{InstanceId, JointId, MeshId, Scene};
 
 use crate::camera::Camera;
 
@@ -132,20 +132,33 @@ pub fn lerp_transform(a: &DAffine3, b: &DAffine3, t: f64) -> DAffine3 {
     }
 }
 
-/// A move from one view to another: the cameras and the transforms of the instances of the
-/// root that change.
+/// A joint's (value, slide) in radians or meters.
+pub type JointPose = (f64, f64);
+
+/// A move from one view to another: the cameras, the transforms of the instances of the root
+/// that change and the values of the joints that change.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Motion {
     pub from_camera: Camera,
     pub to_camera: Camera,
     /// Each instance of the root with its transform at the start and at the end.
     pub moves: Vec<(InstanceId, DAffine3, DAffine3)>,
+    /// Each joint with its (value, slide) at the start and at the end (radians or meters). The
+    /// parts these joints move are not in `moves`: each frame solves the joints instead.
+    pub joints: Vec<(JointId, JointPose, JointPose)>,
 }
 
 impl Motion {
     /// True when nothing differs between the ends.
     pub fn is_still(&self) -> bool {
-        self.from_camera == self.to_camera && self.moves.iter().all(|(_, a, b)| a == b)
+        self.from_camera == self.to_camera
+            && self.moves.iter().all(|(_, a, b)| a == b)
+            && self.joints.iter().all(|(_, a, b)| a == b)
+    }
+
+    /// True when some instance moves or some joint turns or slides.
+    pub fn moves_parts(&self) -> bool {
+        self.moves.iter().any(|(_, a, b)| a != b) || self.joints.iter().any(|(_, a, b)| a != b)
     }
 
     /// The camera at `t` (0 to 1, not eased).
@@ -154,12 +167,26 @@ impl Motion {
     }
 
     /// A copy of `scene` with the instances moved to where they are at `t` (0 to 1, not
-    /// eased); an instance `scene` lacks is skipped.
+    /// eased) and then the joints driven to their values at `t` (parts they move go along,
+    /// couplings and cam followers solved); an instance `scene` lacks is skipped, and joints
+    /// that cannot be met at `t` stay where they were.
     pub fn scene_at(&self, scene: &Scene, t: f64) -> Scene {
         let mut out = scene.clone();
         for (i, a, b) in &self.moves {
             // A missing instance or a non-finite result leaves that instance where it is.
             let _ = out.set_instance_transform(MeshId::Root, *i, lerp_transform(a, b, t));
+        }
+        if self.joints.iter().any(|(_, a, b)| a != b) {
+            let t = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) };
+            let values: Vec<(JointId, f64, f64)> = self
+                .joints
+                .iter()
+                .map(|(j, a, b)| {
+                    let at = |x: f64, y: f64| if t >= 1.0 { y } else { x + (y - x) * t };
+                    (*j, at(a.0, b.0), at(a.1, b.1))
+                })
+                .collect();
+            let _ = out.drive_joints(&values);
         }
         out
     }

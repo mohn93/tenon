@@ -2231,6 +2231,9 @@ impl State {
             UiAction::StoreScenePositions(scene, on) => {
                 self.editor.set_scene_positions(scene, on);
             }
+            UiAction::StoreSceneJoints(scene, on) => {
+                self.editor.set_scene_joints(scene, on);
+            }
             UiAction::StoreSceneCamera(scene, on) => {
                 self.editor.set_scene_stores(scene, Some(on), None);
             }
@@ -2251,6 +2254,9 @@ impl State {
             }
             UiAction::DeleteJoint(joint) => {
                 self.editor.delete_joint(joint);
+            }
+            UiAction::PlayJoint(joint) => {
+                self.editor.play_joint_range(joint);
             }
             UiAction::DriveJoint {
                 joint,
@@ -3337,6 +3343,7 @@ fn scene_rows(doc: &session::Document) -> Vec<SceneRow> {
             camera: p.view.is_some(),
             tags: p.tags.is_some(),
             positions: p.positions.is_some(),
+            joints: p.joints.is_some(),
             selected: selected == Some(id),
         })
         .collect()
@@ -4478,6 +4485,7 @@ mod tests {
                     camera: false,
                     tags: false,
                     positions: None,
+                    joints: None,
                 },
             );
             e.doc().selected_scene().unwrap()

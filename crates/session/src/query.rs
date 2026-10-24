@@ -863,8 +863,21 @@ pub struct SceneInfo {
     /// The instances of the root whose positions it stores (empty: none).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub positions: Vec<EntityId>,
+    /// The joints whose values it stores (empty: none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub joints: Vec<JointId>,
     /// Whether it is the selected scene (the one last added or gone to).
     pub selected: bool,
+}
+
+/// A joint value a scene stores: degrees for an angle, meters for a distance (and `slide`, for
+/// a cylindrical joint).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SceneJointValue {
+    pub joint: JointId,
+    pub value: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slide: Option<f64>,
 }
 
 /// The view a scene stores, in the `camera` query's terms.
@@ -1122,6 +1135,8 @@ pub enum QueryResult {
         hidden_tags: Option<Vec<TagId>>,
         /// The instances of the root whose positions it stores, null when it stores none.
         positions: Option<Vec<EntityId>>,
+        /// The joint values it stores, null when it stores none.
+        joints: Option<Vec<SceneJointValue>>,
         revision: u64,
     },
     /// `path` lists the open instances from the root; empty when the root is open.

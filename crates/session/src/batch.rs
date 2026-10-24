@@ -17,7 +17,9 @@ use kernel::{
 };
 use serde_json::Value;
 
-use crate::command::{AnchorInput, Command, CommandError, ErrorKind, Outcome, ScenePositions};
+use crate::command::{
+    AnchorInput, Command, CommandError, ErrorKind, Outcome, SceneJoints, ScenePositions,
+};
 use crate::library::LibraryRef;
 
 /// What a batch needs to know about the open context to resolve references.
@@ -366,6 +368,10 @@ fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
                 | ("joint", Some("change_joint" | "delete_joint" | "drive"))
                 | ("driver" | "driven", Some("add_coupling"))
                 | ("coupling", Some("delete_coupling"))
+                | (
+                    "joints",
+                    Some("add_scene" | "update_scene" | "change_scene")
+                )
                 | ("cam", Some("add_cam_follower"))
                 | ("follower", Some("add_cam_follower"))
                 | ("cam_follower", Some("delete_cam_follower"))
@@ -407,7 +413,11 @@ impl BatchCommand {
                     Want::Definition
                 } else if key == "style" || key == "from" {
                     Want::Style
-                } else if key == "joint" || key == "driver" || key == "driven" || key == "follower"
+                } else if key == "joint"
+                    || key == "joints"
+                    || key == "driver"
+                    || key == "driven"
+                    || key == "follower"
                 {
                     Want::Joint
                 } else if key == "coupling" {
@@ -470,6 +480,7 @@ impl BatchCommand {
                 Slot::Definition(d) => usize::from(d.0 >= STAND_IN_BASE),
                 Slot::Style(s) => usize::from(s.0 >= STAND_IN_BASE),
                 Slot::Joint(j) => usize::from(j.0 >= STAND_IN_BASE),
+                Slot::JointList(js) => js.iter().filter(|j| j.0 >= STAND_IN_BASE).count(),
                 Slot::Coupling(k) => usize::from(k.0 >= STAND_IN_BASE),
                 Slot::CamFollower(w) => usize::from(w.0 >= STAND_IN_BASE),
                 Slot::Item(r) => usize::from(is_stand_in_ref(r)),
@@ -522,6 +533,7 @@ impl BatchCommand {
                 Slot::Definition(d) => self.resolve_definition(d, done),
                 Slot::Style(s) => self.resolve_style(s, done),
                 Slot::Joint(j) => self.resolve_joint(j, done),
+                Slot::JointList(js) => js.iter_mut().try_for_each(|j| self.resolve_joint(j, done)),
                 Slot::Coupling(k) => self.resolve_coupling(k, done),
                 Slot::CamFollower(w) => self.resolve_cam_follower(w, done),
                 Slot::Item(r) => self.resolve_item(r, done, context),
@@ -787,6 +799,7 @@ enum Slot<'a> {
     Definition(&'a mut DefinitionId),
     Style(&'a mut StyleId),
     Joint(&'a mut JointId),
+    JointList(&'a mut Vec<JointId>),
     Coupling(&'a mut CouplingId),
     CamFollower(&'a mut CamFollowerId),
     /// An instance or a material (`save_to_library`'s `item`).
@@ -835,11 +848,20 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
             }
         }
         Command::OpenPath { path } => f(Slot::Path(path)),
-        Command::AddScene { positions, .. }
-        | Command::UpdateScene { positions, .. }
-        | Command::ChangeScene { positions, .. } => {
+        Command::AddScene {
+            positions, joints, ..
+        }
+        | Command::UpdateScene {
+            positions, joints, ..
+        }
+        | Command::ChangeScene {
+            positions, joints, ..
+        } => {
             if let Some(ScenePositions::Ids(ids)) = positions {
                 f(Slot::List(ids));
+            }
+            if let Some(SceneJoints::Ids(ids)) = joints {
+                f(Slot::JointList(ids));
             }
         }
         Command::SaveToLibrary { item, .. } => {

@@ -202,7 +202,7 @@ fn scene_row(ui: &mut Ui, row: &SceneRow, actions: &mut Vec<UiAction>) {
     }
 }
 
-/// What the selected scene stores: the Camera, Tag visibility and Positions checkboxes (off and disabled
+/// What the selected scene stores: the Camera, Tag visibility, Positions and Joint values checkboxes (off and disabled
 /// with no scene selected). Ticking one stores that part from now; unticking drops it.
 fn stores(ui: &mut Ui, chosen: Option<&SceneRow>, actions: &mut Vec<UiAction>) {
     ui.label(RichText::new("The selected scene stores").weak());
@@ -235,5 +235,14 @@ fn stores(ui: &mut Ui, chosen: Option<&SceneRow>, actions: &mut Vec<UiAction>) {
         && let Some(row) = chosen
     {
         actions.push(UiAction::StoreScenePositions(row.id, positions));
+    }
+    let mut joints = chosen.is_some_and(|r| r.joints);
+    let response = ui
+        .add_enabled(enabled, egui::Checkbox::new(&mut joints, "Joint values"))
+        .on_hover_text("The value of every joint: going to the scene drives them");
+    if response.changed()
+        && let Some(row) = chosen
+    {
+        actions.push(UiAction::StoreSceneJoints(row.id, joints));
     }
 }

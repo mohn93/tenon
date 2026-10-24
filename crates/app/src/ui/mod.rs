@@ -251,6 +251,9 @@ pub enum UiAction {
     /// Start (true: the selected instances of the root, or all of them when none is
     /// selected) or stop storing instance positions in a scene.
     StoreScenePositions(PageId, bool),
+    /// The Scenes tab's Joint values checkbox: start (from the current values of every joint
+    /// that has one) or stop storing joint values in a scene.
+    StoreSceneJoints(PageId, bool),
     RenameScene(PageId, String),
     /// Move a scene to this place in the order (0: first).
     MoveScene(PageId, usize),
@@ -260,6 +263,8 @@ pub enum UiAction {
     SelectJoint(JointId),
     /// The Joints tab: delete a joint, at once (it is undoable).
     DeleteJoint(JointId),
+    /// The Joints tab's Play button: play the joint over its limits (drawing only).
+    PlayJoint(JointId),
     /// The Joints tab's sliders: drive a joint to `value` (degrees or meters) and, for a
     /// cylindrical joint's slide slider, `slide` (meters). While a slider is dragged each new
     /// value comes with `done` false (the pose follows without an undo step); the drag's end,
@@ -524,6 +529,8 @@ pub struct SceneRow {
     pub tags: bool,
     /// Whether it stores instance positions.
     pub positions: bool,
+    /// Whether it stores joint values.
+    pub joints: bool,
     /// Whether it is the scene last added or gone to.
     pub selected: bool,
 }

@@ -8,7 +8,7 @@ use glam::DAffine3;
 use serde::{Deserialize, Serialize};
 
 use crate::edit::KernelError;
-use crate::ids::{InstanceId, PageId, StyleId, TagId};
+use crate::ids::{InstanceId, JointId, PageId, StyleId, TagId};
 use crate::scene::{Scene, SceneChange, Step};
 
 /// The longest page name, in characters.
@@ -138,13 +138,16 @@ impl Shadows {
 /// A saved scene. `view: None` leaves the camera and view settings alone when the page is gone
 /// to; `tags: None` leaves tag visibility alone. `tags` holds the tags hidden on the page
 /// (every other tag is shown). `positions: None` leaves instances where they are; otherwise it
-/// holds the transform of each stored instance of the root.
+/// holds the transform of each stored instance of the root. `joints: None` leaves joint values
+/// alone; otherwise it holds the (value, slide) of each stored joint (radians or meters; the
+/// slide of a cylindrical joint, 0 for every other kind), driven to when the page is gone to.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Page {
     pub name: String,
     pub view: Option<PageView>,
     pub tags: Option<BTreeSet<TagId>>,
     pub positions: Option<BTreeMap<InstanceId, DAffine3>>,
+    pub joints: Option<BTreeMap<JointId, (f64, f64)>>,
 }
 
 /// Fails, saying why, when a page name is blank or longer than [`MAX_PAGE_NAME`] characters.
@@ -327,6 +330,10 @@ impl Scene {
                 return Err(KernelError::NotFinite);
             }
         }
+        for (id, (value, slide)) in page.joints.iter().flatten() {
+            self.page_joint_problem(*id, *value, *slide)
+                .map_err(KernelError::Page)?;
+        }
         if page
             .view
             .and_then(|v| v.style)
@@ -335,5 +342,54 @@ impl Scene {
             return Err(KernelError::StyleNotFound);
         }
         Ok(())
+    }
+
+    /// Why a page cannot store joint `id` at `value` and `slide`, if it cannot: the joint does
+    /// not exist, has no value (fixed, ball), follows a cam (its value comes from the cam), or
+    /// a number is not finite.
+    pub fn page_joint_problem(&self, id: JointId, value: f64, slide: f64) -> Result<(), String> {
+        let joint = self
+            .joint(id)
+            .ok_or_else(|| format!("{id} is not a joint: a scene stores values of joints only"))?;
+        if !joint.kind.has_value() {
+            return Err(format!("{id} is fixed or ball: it has no value to store"));
+        }
+        if self.follower_of(id).is_some() {
+            return Err(format!(
+                "{id} follows a cam: its value comes from the cam, so a scene does not store it"
+            ));
+        }
+        if !value.is_finite() || !slide.is_finite() {
+            return Err("a scene's joint value must be a finite number".into());
+        }
+        Ok(())
+    }
+
+    /// The steps that drop from every page the stored values of joints that no longer exist,
+    /// applied. A page left with none stores no joint values.
+    pub(crate) fn drop_stale_page_joints(&mut self) -> SceneChange {
+        let stale: Vec<(PageId, Page)> = self
+            .pages()
+            .filter(|(_, p)| {
+                p.joints
+                    .as_ref()
+                    .is_some_and(|m| m.keys().any(|j| self.joint(*j).is_none()))
+            })
+            .map(|(id, p)| (id, p.clone()))
+            .collect();
+        let mut steps = Vec::new();
+        for (id, from) in stale {
+            let mut to = from.clone();
+            if let Some(m) = &mut to.joints {
+                m.retain(|j, _| self.joint(*j).is_some());
+                if m.is_empty() {
+                    to.joints = None;
+                }
+            }
+            let step = Step::ChangePage(id, from, to);
+            self.apply_step(&step);
+            steps.push(step);
+        }
+        SceneChange { steps }
     }
 }

@@ -450,6 +450,7 @@ fn render_view_takes_the_render_options() {
         "shadows",
         "supersample",
         "background",
+        "joints",
     ] {
         assert!(schema["properties"][field].is_object(), "{field}");
     }
