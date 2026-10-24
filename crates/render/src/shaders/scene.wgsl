@@ -733,20 +733,45 @@ fn sun_highlight(p: vec3<f32>, n: vec3<f32>, v: vec3<f32>, shininess: f32) -> f3
     return highlight(n, v, lighting.sun.xyz, shininess, lighting.sun_levels.x * lit);
 }
 
-// The ambient occlusion at the pixel `frag` (a fragment position): 1 where nothing shades it,
-// less in creases; 1 without ambient occlusion.
-fn ao_factor(frag: vec4<f32>) -> f32 {
+// The ambient occlusion at the pixel `frag` (a fragment position) of the surface at `world`: 1
+// where nothing shades it, less in creases; 1 without ambient occlusion. The map is half the
+// size, so the four texels around the pixel are weighed by how near they lie and how well the
+// depth of the surface they were worked out for (green) matches this one's, which keeps the
+// occlusion of a nearer or farther surface from spreading over a silhouette.
+fn ao_factor(frag: vec4<f32>, world: vec3<f32>) -> f32 {
     if lighting.ao.x < 0.5 {
         return 1.0;
     }
-    let last = textureDimensions(ao_map) - vec2<u32>(1u);
-    let at = min(vec2<u32>(frag.xy * 0.5), last);
-    return textureLoad(ao_map, at, 0).r;
+    let size = vec2<i32>(textureDimensions(ao_map));
+    let at = frag.xy * 0.5 - vec2<f32>(0.5);
+    let base = vec2<i32>(floor(at));
+    let t = at - floor(at);
+    let depth = dot(world - lighting.cam_pos.xyz, lighting.cam_forward.xyz);
+    let sigma = 0.04 * abs(depth) + 0.02;
+    var sum = 0.0;
+    var total = 0.0;
+    var nearest = 1.0;
+    var best = 1e30;
+    for (var k = 0; k < 4; k++) {
+        let step = vec2<i32>(k & 1, k >> 1);
+        let texel = textureLoad(ao_map, clamp(base + step, vec2<i32>(0), size - vec2<i32>(1)), 0);
+        let near = select(1.0 - t, t, step == vec2<i32>(1));
+        let miss = abs(texel.g - depth);
+        let w = near.x * near.y * exp(-(miss * miss) / (sigma * sigma));
+        sum += w * texel.r;
+        total += w;
+        if miss < best {
+            best = miss;
+            nearest = texel.r;
+        }
+    }
+    return select(nearest, sum / total, total > 1e-3);
 }
 
 // The color of a surface that is not matte: `shown` its base color, `shade` the matte shading
 // at the point, `finish` its metalness (x) and roughness (y). The diffuse part is scaled by
-// 1 - metalness, and by `ao` (the ambient occlusion, 1 for none) with the ambient light. The headlight (the sun when it shades) adds a highlight of strength
+// 1 - metalness, and by `ao` (the ambient occlusion, 1 for none) with the ambient light.
+// The headlight (the sun when it shades) adds a highlight of strength
 // (1 - roughness)^2 tinted by the base color as far as the surface is metallic, and the
 // environment, seen in the reflected view direction, is added weighted by 1 - roughness and
 // the Fresnel reflectance (0.04 for a non-metal, the base color for a metal, 1 at grazing
@@ -842,14 +867,14 @@ fn face_fog(in: FaceOut, color: vec3<f32>) -> vec3<f32> {
 // Opaque faces.
 @fragment
 fn fs_face(in: FaceOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    return vec4<f32>(face_fog(in, face_color(in, front, ao_factor(in.pos))), 1.0);
+    return vec4<f32>(face_fog(in, face_color(in, front, ao_factor(in.pos, in.world))), 1.0);
 }
 
 // The opaque side of a face whose other side is see-through: drawn with the opaque faces, the
 // see-through side left to `fs_glass`.
 @fragment
 fn fs_face_solid_side(in: FaceOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    let color = face_color(in, front, ao_factor(in.pos));
+    let color = face_color(in, front, ao_factor(in.pos, in.world));
     if select(in.alpha.y, in.alpha.x, front) < 1.0 {
         discard;
     }

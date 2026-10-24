@@ -310,3 +310,65 @@ fn a_renderer_told_it_has_none_draws_without_it() {
     assert_ne!(with, plain);
     assert_eq!(without, plain);
 }
+
+#[test]
+fn a_size_change_between_frames_keeps_it_working_and_off_leaves_nothing_behind() {
+    let Some(mut snap) = gpu() else { return };
+    let d = room();
+    let on = style(true, 0.5, 1.0);
+    let off = style(false, 0.5, 1.0);
+    let sized = |snap: &mut Snapshotter, style: &StyleSettings, (w, h): (u32, u32)| {
+        snap.set_model_style(Some(style));
+        let pixels = snap
+            .capture(
+                d.scene(),
+                d.context(),
+                &BTreeSet::new(),
+                &d.camera,
+                Lighting::Day,
+                w,
+                h,
+            )
+            .expect("capture");
+        let mut camera = d.camera.clone();
+        camera.viewport = DVec2::new(f64::from(w), f64::from(h));
+        let at = |p: DVec3| {
+            let s = camera.project(p).unwrap();
+            let i = ((s.y as u32 * w + s.x as u32) * 4) as usize;
+            (0..3).map(|k| f64::from(pixels[i + k])).sum::<f64>() / 3.0
+        };
+        let (crease, open) = (at(FLOOR_CREASE), at(OPEN_FLOOR[0]));
+        (pixels, crease, open)
+    };
+    let first = sized(&mut snap, &on, (W, H));
+    // Smaller, an odd size, then the first size again: each frame darkens the crease and not the
+    // open floor, and the last is the first again.
+    for size in [(200, 150), (251, 187)] {
+        let plain = sized(&mut snap, &off, size);
+        let (_, crease, open) = sized(&mut snap, &on, size);
+        assert!(crease < plain.1 * 0.9, "{size:?}: {crease} vs {}", plain.1);
+        assert!((open - plain.2).abs() <= 2.0, "{size:?}");
+    }
+    let again = sized(&mut snap, &on, (W, H));
+    assert_eq!(first.0, again.0);
+    // Off after on draws exactly what it drew before the first on.
+    let fresh = sized(&mut gpu().unwrap(), &off, (W, H));
+    let after = sized(&mut snap, &off, (W, H));
+    assert_eq!(fresh.0, after.0);
+}
+
+#[test]
+fn see_through_faces_are_not_darkened() {
+    let Some(mut snap) = gpu() else { return };
+    let d = room();
+    snap.set_glass_view(render::scene::GlassView {
+        x_ray: true,
+        hidden_geometry: false,
+    });
+    let off = shoot(&mut snap, &d, &style(false, 0.5, 1.0), Lighting::Day);
+    let on = shoot(&mut snap, &d, &style(true, 0.5, 1.0), Lighting::Day);
+    snap.set_glass_view(render::scene::GlassView::default());
+    for p in [FLOOR_CREASE, WALL_CREASE, OPEN_WALL] {
+        assert!((on.at(p) - off.at(p)).abs() <= 1.0, "{p}");
+    }
+}

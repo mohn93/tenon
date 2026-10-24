@@ -122,7 +122,8 @@ fn fs_blur(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let size = vec2<i32>(textureDimensions(depth_map));
     let depth = textureLoad(depth_map, px, 0);
     if depth <= 0.0 {
-        return vec4<f32>(1.0);
+        // Nothing here: a depth no surface matches.
+        return vec4<f32>(1.0, 60000.0, 0.0, 1.0);
     }
     let radius = p.settings.x;
     let at = world_at(px, depth);
@@ -147,5 +148,5 @@ fn fs_blur(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
         }
     }
     let open = select(textureLoad(raw_map, px, 0).r, sum / total, total > 1e-4);
-    return vec4<f32>(1.0 - clamp(p.settings.y * (1.0 - open), 0.0, 1.0));
+    return vec4<f32>(1.0 - clamp(p.settings.y * (1.0 - open), 0.0, 1.0), view_depth(at), 0.0, 1.0);
 }

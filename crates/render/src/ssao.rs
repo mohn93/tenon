@@ -12,8 +12,11 @@ use crate::renderer::DEPTH_FORMAT;
 
 /// The format of the world normals (each component as 0 to 1 for -1 to 1).
 pub const NORMAL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-/// The format of the occlusion: 1 is open, 0 shut.
-pub const AO_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
+/// The format of the first pass's occlusion: 1 is open, 0 shut.
+const RAW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
+/// The format of the finished occlusion (red) with the depth along the view of the surface it was
+/// worked out for (green), which lets the face shader pick the texels that belong to its surface.
+pub const AO_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
 
 /// Matches `Params` in ssao.wgsl.
 #[repr(C)]
@@ -52,6 +55,7 @@ pub struct Ssao {
     ssao_pipeline: wgpu::RenderPipeline,
     blur_pipeline: wgpu::RenderPipeline,
     params: wgpu::Buffer,
+    normal_pipeline: wgpu::RenderPipeline,
     targets: Option<AoTargets>,
 }
 
@@ -91,14 +95,18 @@ fn layout(device: &wgpu::Device, label: &str, raw: bool) -> wgpu::BindGroupLayou
 }
 
 impl Ssao {
-    pub fn new(device: &wgpu::Device) -> Self {
+    /// The passes, with the pipeline that draws the opaque faces' normals.
+    pub fn new(device: &wgpu::Device, normal_pipeline: wgpu::RenderPipeline) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ssao"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/ssao.wgsl").into()),
         });
         let ssao_layout = layout(device, "ssao", false);
         let blur_layout = layout(device, "ssao blur", true);
-        let pipeline = |label: &str, bind: &wgpu::BindGroupLayout, fragment: &str| {
+        let pipeline = |label: &str,
+                        bind: &wgpu::BindGroupLayout,
+                        fragment: &str,
+                        format: wgpu::TextureFormat| {
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some(label),
                 bind_group_layouts: &[Some(bind)],
@@ -121,7 +129,7 @@ impl Ssao {
                     entry_point: Some(fragment),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: AO_FORMAT,
+                        format,
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -130,8 +138,8 @@ impl Ssao {
                 cache: None,
             })
         };
-        let ssao_pipeline = pipeline("ssao", &ssao_layout, "fs_ssao");
-        let blur_pipeline = pipeline("ssao blur", &blur_layout, "fs_blur");
+        let ssao_pipeline = pipeline("ssao", &ssao_layout, "fs_ssao", RAW_FORMAT);
+        let blur_pipeline = pipeline("ssao blur", &blur_layout, "fs_blur", AO_FORMAT);
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("ssao params"),
             size: std::mem::size_of::<Params>() as u64,
@@ -145,8 +153,14 @@ impl Ssao {
             ssao_pipeline,
             blur_pipeline,
             params,
+            normal_pipeline,
             targets: None,
         }
+    }
+
+    /// The pipeline that draws the opaque faces' depth and normals.
+    pub fn normal_pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.normal_pipeline
     }
 
     pub fn targets(&self) -> Option<&AoTargets> {
@@ -186,7 +200,7 @@ impl Ssao {
         };
         let depth = texture("ao depth", DEPTH_FORMAT);
         let normals = texture("ao normals", NORMAL_FORMAT);
-        let raw = texture("ao raw", AO_FORMAT);
+        let raw = texture("ao raw", RAW_FORMAT);
         let ao = texture("ao", AO_FORMAT);
         fn entry(binding: u32, view: &wgpu::TextureView) -> wgpu::BindGroupEntry<'_> {
             wgpu::BindGroupEntry {
@@ -292,7 +306,8 @@ pub fn placeholder(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureV
                 view_formats: &[],
             },
             wgpu::util::TextureDataOrder::default(),
-            &[255],
+            // 1.0 and 0.0 as half floats.
+            &[0x00, 0x3C, 0x00, 0x00],
         )
         .create_view(&wgpu::TextureViewDescriptor::default())
 }

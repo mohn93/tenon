@@ -685,8 +685,9 @@ pub struct Renderer {
     overlay_pipeline: wgpu::RenderPipeline,
     /// A tool's translucent preview solid.
     preview_pipeline: wgpu::RenderPipeline,
-    /// The opaque faces' world normals at half resolution, for the ambient occlusion.
-    ao_normal_pipeline: wgpu::RenderPipeline,
+    /// What the ambient occlusion's normal pipeline is made from, when it is needed.
+    scene_shader: wgpu::ShaderModule,
+    scene_layout: wgpu::PipelineLayout,
     /// The ambient occlusion passes, made when a style first asks for it.
     ssao: Option<Ssao>,
     /// Bound as the ambient occlusion while there is none.
@@ -1382,39 +1383,6 @@ impl Renderer {
             shadow_maps.as_ref().map(|m| (&m.cubes, &shadow_sampler)),
             (&sun_placeholder, &sun_sampler, &ao_placeholder),
         );
-        // The opaque faces' normals for the ambient occlusion, at one sample per pixel.
-        let ao_normal_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("ao normals"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_face"),
-                compilation_options: Default::default(),
-                buffers: &flagged_faces,
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Greater),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_ao_normal"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: ssao::NORMAL_FORMAT,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-
         let (flat_ground, vertical_axis, flat_axes) = ground_meshes(
             device,
             &ViewStyle::CLASSIC,
@@ -1446,7 +1414,8 @@ impl Renderer {
             wide_cut_edge_pipeline,
             overlay_pipeline,
             preview_pipeline,
-            ao_normal_pipeline,
+            scene_shader: shader,
+            scene_layout: layout,
             ssao: None,
             ao_placeholder,
             ao_available: true,
@@ -2389,9 +2358,11 @@ impl Renderer {
     /// binds them to the face shader.
     fn prepare_ao(&mut self, on: bool, size: (u32, u32)) {
         let changed = if on {
-            let device = &self.device;
+            let (device, shader, layout) = (&self.device, &self.scene_shader, &self.scene_layout);
             self.ssao
-                .get_or_insert_with(|| Ssao::new(device))
+                .get_or_insert_with(|| {
+                    Ssao::new(device, ao_normal_pipeline(device, shader, layout))
+                })
                 .resize(size)
         } else {
             self.ssao.as_mut().is_some_and(Ssao::release)
@@ -2451,7 +2422,7 @@ impl Renderer {
             pass.set_viewport(x * 0.5, y * 0.5, w * 0.5, h * 0.5, 0.0, 1.0);
             pass.set_bind_group(0, &self.bind_group, &[]);
             if let Some(faces) = &self.faces {
-                pass.set_pipeline(&self.ao_normal_pipeline);
+                pass.set_pipeline(ssao.normal_pipeline());
                 pass.set_vertex_buffer(0, faces.buffer.slice(..));
                 if let Some(flags) = &faces.flags {
                     pass.set_vertex_buffer(1, flags.slice(..));
@@ -2502,6 +2473,60 @@ impl Renderer {
             depth: texture("depth", DEPTH_FORMAT),
         }
     }
+}
+
+/// The opaque faces' normals for the ambient occlusion, at one sample per pixel; made with the
+/// occlusion passes, when a style first asks for them.
+fn ao_normal_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+) -> wgpu::RenderPipeline {
+    let vector = |stride, attributes| wgpu::VertexBufferLayout {
+        array_stride: stride,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes,
+    };
+    let float = std::mem::size_of::<f32>() as u64;
+    let buffers = [
+        Some(vector(
+            std::mem::size_of::<BaseFaceVertex>() as u64,
+            &FACE_ATTRIBS,
+        )),
+        Some(vector(float, &FLAG_ATTRIBS)),
+        Some(vector(float, &FACE_HOVER_ATTRIBS)),
+    ];
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("ao normals"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_face"),
+            compilation_options: Default::default(),
+            buffers: &buffers,
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Greater),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_ao_normal"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: ssao::NORMAL_FORMAT,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 /// The bind group every pipeline uses: the camera uniforms, the material textures and their

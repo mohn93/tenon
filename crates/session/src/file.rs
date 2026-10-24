@@ -32,8 +32,9 @@ pub const FORMAT: &str = "sketchup-alt";
 /// version 14 hidden entities and the x-ray and hidden geometry view flags, version 15 the
 /// model axes, version 16 the location and sun shadow settings, version 17 decimal feet
 /// and the length and angle snapping settings of the display units, and version 18 styles
-/// and the style a view chooses, and version 19 material metalness and roughness, and version 20 studio lighting, and version 21 ambient occlusion in a style, and version 22 the material section fill and instances left whole by section planes; older
-/// files still open
+/// and the style a view chooses, and version 19 material metalness and roughness, and version
+/// 20 studio lighting, and version 21 ambient occlusion in a style, and version 22 the material
+/// section fill and instances left whole by section planes; older files still open
 /// (untagged before version 10, without scenes before version 11, without annotations and in
 /// the default units before version 12, without section planes and with the default section
 /// display before version 13).
