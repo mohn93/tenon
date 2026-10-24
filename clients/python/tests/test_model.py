@@ -9,7 +9,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from sketchup_alt import ApiError, Model, Transform, find_app, launch_headless  # noqa: E402
+from sketchup_alt import ApiError, Joint, Model, Transform, find_app, launch_headless  # noqa: E402
 
 APP = find_app()
 
@@ -196,6 +196,96 @@ class ModelTests(unittest.TestCase):
             self.m.render(os.path.join(self.tmp, "s.png"), 64, 48)
         except ApiError as e:
             self.skipTest("no GPU: %s" % e)
+
+    def test_joint_drive_value_delete(self):
+        base = self.m.box((0, 0, 0), (1, 1, 1))
+        arm = self.m.box((1, 0, 0), (2, 0.2, 0.2))
+        j = self.m.joint("revolute", base, arm, (1, 0, 0), axis=(0, 0, 1), name="Hinge", limits=(-90, 90))
+        self.assertIsInstance(j, Joint)
+        self.assertEqual(j.value, 0)
+        j.drive(45)
+        self.assertAlmostEqual(j.value, 45, places=6)
+        self.assertTrue(close(self.entity(arm)["bounds"]["max"][:2], (1 + 2 * math.cos(math.radians(45)), 2 * math.sin(math.radians(45)) + 0.2 * math.cos(math.radians(45))), 1e-5))
+        with self.assertRaises(ApiError):
+            j.drive(120)
+        j.delete()
+        self.assertEqual(self.client.query("joints")["joints"], [])
+        with self.assertRaises(LookupError):
+            j.value
+        g = self.m.joint("prismatic", None, base, (0, 0, 0), axis=(1, 0, 0))
+        g.drive(0.5)
+        self.assertAlmostEqual(g.value, 0.5, places=6)
+
+    def test_couple_and_cam_follower(self):
+        a = self.m.box((0, 0, 0), (1, 1, 1))
+        b = self.m.box((5, 0, 0), (1, 1, 1))
+        ja = self.m.joint("revolute", None, a, (0.5, 0.5, 0), axis=(0, 0, 1))
+        jb = self.m.joint("revolute", None, b, (5.5, 0.5, 0), axis=(0, 0, 1))
+        k = self.m.couple(ja, jb, 0.5)
+        self.assertTrue(k.startswith("k"))
+        ja.drive(90)
+        self.assertAlmostEqual(jb.value, 45, places=5)
+        self.assertEqual(self.client.query("couplings")["couplings"][0]["ratio"], 0.5)
+        # a cam (a box) with a valve (a prismatic part) above it
+        cam = self.m.box((10, 0, 0), (2, 2, 1))
+        valve = self.m.box((10.8, 0.8, 1.5), (0.4, 0.4, 1))
+        jv = self.m.joint("prismatic", None, valve, (11, 1, 1.5), axis=(0, 0, 1))
+        w = self.m.cam_follower(cam, jv, roller_radius=0, preload_direction=(0, 0, -1))
+        self.assertTrue(w.startswith("w"))
+        self.assertEqual(self.client.query("cam_followers")["cam_followers"][0]["id"], w)
+
+    def test_solid_checks_and_mass(self):
+        steel = self.m.material("Steel", (150, 150, 160), density=7850)
+        self.assertEqual(steel.density, 7850)
+        a = self.m.box((0, 0, 0), (1, 1, 1), material=steel)
+        b = self.m.box((0.5, 0, 0), (1, 1, 1))
+        c = self.m.box((3, 0, 0), (1, 1, 1))
+        i = self.m.interference([a, b])
+        self.assertEqual([(p["a"], p["b"]) for p in i["pairs"]], [(a.id, b.id)])
+        self.assertAlmostEqual(i["pairs"][0]["volume"], 0.5, places=6)
+        self.assertEqual(self.m.interference([a, c])["pairs"], [])
+        d = self.m.clearance(a, c)["pairs"][0]
+        self.assertAlmostEqual(d["distance"], 2.0, places=6)
+        self.assertAlmostEqual(self.m.clearance(ids=[a, c])["pairs"][0]["distance"], 2.0, places=6)
+        mp = self.m.mass_properties([a])
+        self.assertAlmostEqual(mp["total"]["mass"], 7850, places=3)
+        self.assertTrue(close(mp["total"]["centroid"], (0.5, 0.5, 0.5), 1e-6))
+        self.assertAlmostEqual(self.m.mass_properties()["total"]["volume"], 3.0, places=6)
+
+    def test_sweep_check_and_measure(self):
+        base = self.m.box((-1, -1, -1), (2, 2, 0.5))
+        arm = self.m.box((0, -0.1, 0), (1.5, 0.2, 0.2))
+        post = self.m.box((0, 1, 0), (0.3, 0.3, 0.3))
+        j = self.m.joint("revolute", base, arm, (0, 0, 0), axis=(0, 0, 1))
+        r = self.m.sweep_check(j, 0, 360, 37, ids=[arm, post])
+        self.assertEqual(r["steps"], 37)
+        pair = next(p for p in r["pairs"] if {p["a"], p["b"]} == {arm.id, post.id})
+        self.assertGreater(pair["volume"], 0)
+        self.assertEqual(self.client.query("joints")["joints"][0]["value"], 0)
+        dist = self.m.measure(distance=[arm, post])
+        self.assertGreater(dist["distance"], 0)
+        with self.assertRaises(ValueError):
+            self.m.measure()
+        with self.assertRaises(ValueError):
+            self.m.measure(distance=[arm, post], angle=[arm, post])
+
+    def test_render_joints_and_ground(self):
+        base = self.m.box((0, 0, 0), (1, 1, 1))
+        arm = self.m.box((1, 0, 0), (2, 0.2, 0.2))
+        j = self.m.joint("revolute", base, arm, (1, 0, 0), axis=(0, 0, 1))
+        cam = {"eye": [0.1, -0.1, 30], "target": [0, 0, 0], "fov_y_deg": 60}
+        a = os.path.join(self.tmp, "g1.png")
+        b = os.path.join(self.tmp, "g2.png")
+        try:
+            self.m.render(a, 64, 48, camera=cam, lighting="day", joints={j: 90})
+            self.m.render(b, 64, 48, camera=cam, lighting="day", joints={j.id: 90}, ground=False)
+        except ApiError as e:
+            if e.kind != "rendering_unavailable":
+                raise
+            self.skipTest("no GPU: %s" % e)
+        with open(a, "rb") as f, open(b, "rb") as g:
+            self.assertNotEqual(f.read(), g.read())
+        self.assertEqual(j.value, 0)
 
     def test_label(self):
         box = self.m.box((0, 0, 0), (1, 1, 1))

@@ -181,6 +181,10 @@ fn input_schema(tool: &str) -> Value {
                         "enum": ["style", "transparent"],
                         "description": "style (default) or transparent: pixels with nothing drawn (no faces, edges, guides, ground grid or axes) get alpha 0."
                     },
+                    "ground": {
+                        "type": "boolean",
+                        "description": "Default true. false hides the ground grid, the axes and the ground shadows for this image, so a model can sit at z = 0."
+                    },
                     "scene": {"description": "Render a frame of going to this scene (its camera and stored instance positions) instead of the document camera; not with camera.", "allOf": [scene.clone()]},
                     "t": {"type": "number", "minimum": 0, "maximum": 1, "description": "With scene: how far along, 0 (the current view, or from) to 1 (the scene; default), linear."},
                     "from": {"description": "With scene: the scene to start from (default the current view and positions).", "allOf": [scene]},

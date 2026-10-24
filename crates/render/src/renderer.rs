@@ -758,6 +758,8 @@ pub struct Renderer {
     /// Cleared to alpha 0 with no canvas, ground grid or axes: see
     /// `set_transparent_background`.
     transparent: bool,
+    /// No ground grid, axes or ground shadows: see `set_hide_ground`.
+    hide_ground: bool,
     /// The scene's lights, as of the last `set_model`.
     lights: Vec<Light>,
     /// The grid and the axes in the style's colors (see `set_style`) along the drawing axes
@@ -1478,6 +1480,7 @@ impl Renderer {
             model_style: None,
             print: false,
             transparent: false,
+            hide_ground: false,
             lights: Vec::new(),
             flat_ground,
             vertical_axis,
@@ -2008,6 +2011,12 @@ impl Renderer {
         self.transparent = on;
     }
 
+    /// Draws the frames from now on without the ground: no grid, axes or sun shadows on the
+    /// ground, and no canvas gradient unless the style has a sky. The background stays.
+    pub fn set_hide_ground(&mut self, on: bool) {
+        self.hide_ground = on;
+    }
+
     /// Draws the frames from now on in `style`: the window sets its theme's; render_view and
     /// headless keep `ViewStyle::CLASSIC`. Recolors selected guides without a rebuild; the grid
     /// and axes are rebuilt only when their colors change.
@@ -2261,6 +2270,8 @@ impl Renderer {
                 pass.set_scissor_rect(x, y, w, h);
                 pass.set_bind_group(0, &self.bind_group, &[]);
                 let canvas = match &canvas_style {
+                    Some(m) if self.hide_ground => m.sky.is_some(),
+                    None if self.hide_ground => false,
                     Some(m) => {
                         m.sky.is_some() || (m.ground.is_some() && self.lighting == Lighting::Day)
                     }
@@ -2292,6 +2303,9 @@ impl Renderer {
                 // The ground's shadow goes over the grid and the flat axes (none are drawn in a
                 // print) so they darken with the ground, and under the vertical axis.
                 let sun_ground = |pass: &mut wgpu::RenderPass| {
+                    if self.hide_ground {
+                        return;
+                    }
                     if let (Some(count), Some((ground, _))) = (ground_shadows, &self.sun_ground) {
                         let pipeline = if self.transparent {
                             &self.sun_ground_clear_pipeline
@@ -2302,7 +2316,7 @@ impl Renderer {
                         pass.draw(0..count, 0..1);
                     }
                 };
-                if self.print || self.transparent {
+                if self.print || self.transparent || self.hide_ground {
                     sun_ground(&mut pass);
                 } else {
                     draw(

@@ -1,5 +1,6 @@
 """Higher-level helpers over ``Client``: materials, primitives, solids, sweeps, instances,
-section cuts, labels, scenes, view settings and renders."""
+section cuts, labels, scenes, view settings, renders, joints, couplings, cam followers and solid
+checks (interference, clearance, sweeps, mass, measure)."""
 import math
 
 from .transform import Transform, _cross, _norm, _sub, _vec3
@@ -31,12 +32,53 @@ def _color(c):
 
 
 class Material:
-    def __init__(self, id, name):
+    def __init__(self, id, name, density=None):
         self.id = id
         self.name = name
+        self.density = density
 
     def __repr__(self):
         return "Material(%r, %r)" % (self.id, self.name)
+
+
+class Joint:
+    """A joint between two parts (or a part and the ground)."""
+
+    def __init__(self, model, id, kind=None, name=None):
+        self.model = model
+        self.id = id
+        self.kind = kind
+        self.name = name
+
+    def __repr__(self):
+        return "Joint(%r)" % (self.id,)
+
+    def drive(self, value, slide=None):
+        """Set the joint's value (degrees for revolute and cylindrical joints, meters for
+        prismatic ones; ``slide`` in meters for a cylindrical one) and move the connected parts."""
+        cmd = {"type": "drive", "joint": self.id, "value": value}
+        if slide is not None:
+            cmd["slide"] = slide
+        self.model.client.execute(cmd)
+        return self
+
+    @property
+    def value(self):
+        """The joint's current value, in the units ``drive`` takes."""
+        for j in self.model.client.query("joints")["joints"]:
+            if j["id"] == self.id:
+                return j["value"]
+        raise LookupError("no joint %s" % self.id)
+
+    def delete(self):
+        self.model.client.execute({"type": "delete_joint", "joint": self.id})
+
+
+def _entity(e):
+    """An entity for ``measure``: an id, an object with an id, or a path (a list of them)."""
+    if isinstance(e, (list, tuple)):
+        return [_id(x) for x in e]
+    return _id(e)
 
 
 class Instance:
@@ -205,16 +247,20 @@ class Model:
 
     # materials
 
-    def material(self, name, color, metalness=0, roughness=1):
+    def material(self, name, color, metalness=0, roughness=1, density=None):
         """A named material, reused if it exists. ``color``: ``"#rrggbb"`` or (r, g, b) 0-255.
-        ``metalness`` and ``roughness`` are 0 to 1 (the defaults send nothing)."""
+        ``metalness`` and ``roughness`` are 0 to 1 (the defaults send nothing). ``density`` in
+        kg/m3 (1 to 30000) weighs solids painted with it for ``mass_properties``."""
         cmd = {"type": "add_material", "name": name, "color": _color(color), "existing": "reuse"}
         if metalness != 0 or roughness != 1:
             cmd["metalness"] = metalness
             cmd["roughness"] = roughness
             cmd["existing"] = "update"
+        if density is not None:
+            cmd["density"] = density
+            cmd["existing"] = "update"
         r = self.client.execute(cmd)
-        m = Material(r["changes"]["materials"][0], name)
+        m = Material(r["changes"]["materials"][0], name, density)
         self._materials[name] = m
         return m
 
@@ -513,10 +559,17 @@ class Model:
             self.client.execute({"type": "set_style", "style": sid})
         return sid
 
-    def render(self, path, width=1280, height=800, camera=None, lighting="studio", **opts):
+    def render(self, path, width=1280, height=800, camera=None, lighting="studio", joints=None,
+               ground=True, **opts):
         """Render to a PNG file at ``path``; returns ``path``. ``camera`` is ``{"eye": [...],
-        "target": [...]}`` (more as ``set_camera`` takes); ``opts`` pass to ``render_view``
-        (``scene``, ``t``, ``from_`` for ``from``, ``supersample``, ``section``, ``style``...)."""
+        "target": [...]}`` (more as ``set_camera`` takes); ``joints`` is a dict of joint (or
+        ``Joint``) to value to render at, solved on a copy; ``ground=False`` leaves out the
+        ground grid, axes and ground shadows; ``opts`` pass to ``render_view`` (``scene``, ``t``,
+        ``from_`` for ``from``, ``supersample``, ``section``, ``style``...)."""
+        if joints:
+            opts["joints"] = {_id(k): v for k, v in joints.items()}
+        if not ground:
+            opts["ground"] = False
         if "from_" in opts:
             opts["from"] = opts.pop("from_")
         if camera is not None:
@@ -527,3 +580,90 @@ class Model:
         with open(path, "wb") as f:
             f.write(png)
         return path
+
+    # joints, couplings, cam followers
+
+    def joint(self, kind, a, b, point, axis=None, reference=None, name=None, limits=None):
+        """Join parts ``a`` and ``b`` (instances of the root; ``a`` None is the ground) with a
+        ``kind`` joint (``revolute``, ``prismatic``, ``cylindrical``, ``fixed`` or ``ball``) at
+        ``point`` along ``axis``. Returns the ``Joint``."""
+        cmd = {"type": "add_joint", "kind": kind, "a": None if a is None else _id(a), "b": _id(b),
+               "point": list(point)}
+        for k, v in (("axis", axis), ("reference", reference)):
+            if v is not None:
+                cmd[k] = list(v)
+        if name is not None:
+            cmd["name"] = name
+        if limits is not None:
+            cmd["limits"] = list(limits)
+        r = self.client.execute(cmd)
+        return Joint(self, r["changes"]["joints"][0], kind, name)
+
+    def couple(self, driver, driven, ratio, offset=None):
+        """Hold ``driven = ratio * driver + offset`` (joint values in their own units); returns
+        the coupling id."""
+        cmd = {"type": "add_coupling", "driver": _id(driver), "driven": _id(driven), "ratio": ratio}
+        if offset is not None:
+            cmd["offset"] = offset
+        return self.client.execute(cmd)["changes"]["couplings"][0]
+
+    def cam_follower(self, cam, follower_joint, roller_radius=0, preload_direction=None):
+        """Make the prismatic ``follower_joint`` follow ``cam`` (an instance); returns the id."""
+        cmd = {"type": "add_cam_follower", "cam": _id(cam), "follower": _id(follower_joint),
+               "roller_radius": roller_radius}
+        if preload_direction is not None:
+            cmd["preload_direction"] = list(preload_direction)
+        return self.client.execute(cmd)["changes"]["cam_followers"][0]
+
+    # solid checks
+
+    def interference(self, ids=None, touching=False):
+        """Which solid parts overlap (``pairs``), with ``touching`` also those that meet."""
+        q = {}
+        if ids is not None:
+            q["ids"] = _ids(ids)
+        if touching:
+            q["touching"] = True
+        return self.client.query("interference", **q)
+
+    def clearance(self, a=None, b=None, ids=None):
+        """The minimum distance between parts ``a`` and ``b``, or between every pair among
+        ``ids``; returns the reply (``pairs`` with ``distance`` and the nearest points)."""
+        q = {}
+        if a is not None:
+            q["a"] = _id(a)
+        if b is not None:
+            q["b"] = _id(b)
+        if ids is not None:
+            q["ids"] = _ids(ids)
+        return self.client.query("clearance", **q)
+
+    def sweep_check(self, joint, from_, to, steps, ids=None, slide=None, report_within=None):
+        """Turn ``joint`` from ``from_`` to ``to`` in ``steps`` on a copy of the model and report
+        the pairs that hit or come within ``report_within`` meters."""
+        q = {"joint": _id(joint), "from": from_, "to": to, "steps": steps}
+        if ids is not None:
+            q["ids"] = _ids(ids)
+        if slide is not None:
+            q["slide"] = slide
+        if report_within is not None:
+            q["report_within"] = report_within
+        return self.client.query("sweep_check", **q)
+
+    def mass_properties(self, ids=None):
+        """Volume, mass, centre of gravity and inertia of ``ids`` (every instance when None)."""
+        q = {}
+        if ids is not None:
+            q["ids"] = _ids(ids)
+        return self.client.query("mass_properties", **q)
+
+    def measure(self, distance=None, angle=None, round=None):
+        """Exactly one of ``distance`` or ``angle`` (two entities each) or ``round`` (one):
+        returns the measurement dict (``distance``, ``angle`` or ``round`` of the reply). An
+        entity is an id (or an object with one) or a path of instance ids ending in the entity."""
+        given = [(k, v) for k, v in (("distance", distance), ("angle", angle), ("round", round)) if v is not None]
+        if len(given) != 1:
+            raise ValueError("give exactly one of distance, angle or round")
+        k, v = given[0]
+        v = _entity(v) if k == "round" else [_entity(x) for x in v]
+        return self.client.query("measure", **{k: v})[k]

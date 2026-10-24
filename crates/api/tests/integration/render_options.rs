@@ -474,3 +474,36 @@ fn play_needs_a_window() {
     );
     assert_eq!(r["error"]["message"], "this program has no editor", "{r}");
 }
+
+#[test]
+fn ground_false_leaves_out_the_grid_and_axes_and_changes_nothing_else() {
+    let mut h = HeadlessHost::new();
+    cube(&mut h);
+    let before = settings(&h);
+    // Looking down from high up, the top corners of the image are only ground.
+    let camera = json!({"eye": [0.1, -0.1, 40], "target": [0, 0, 0], "fov_y_deg": 60});
+    let Some(with) = render(&mut h, json!({"camera": camera})) else {
+        return;
+    };
+    let without = render(&mut h, json!({"camera": camera, "ground": false})).unwrap();
+    let again = render(&mut h, json!({"camera": camera})).unwrap();
+    assert_eq!(with.diff(&again), 0, "the option does not stay set");
+    assert!(with.diff(&without) > 20, "the grid or axes were drawn");
+    let background = without.px(0, 0);
+    let flat = without.rgba.chunks(4).filter(|p| *p == background).count();
+    let grid = with.rgba.chunks(4).filter(|p| *p == background).count();
+    assert!(
+        flat > grid,
+        "more pixels are plain background without the ground"
+    );
+    // The same with the transparent background: shadows aside, nothing but the model remains.
+    let clear = render(
+        &mut h,
+        json!({"camera": camera, "ground": false, "background": "transparent"}),
+    )
+    .unwrap();
+    assert_eq!(clear.px(0, 0)[3], 0);
+    assert_eq!(settings(&h), before);
+    let bad = refused(&mut h, json!({"ground": "no"}));
+    assert_eq!(bad["error"]["code"], codes::INVALID_PARAMS, "{bad}");
+}

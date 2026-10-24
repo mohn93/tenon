@@ -88,6 +88,7 @@ all commands and results.
 - `shadows`: sun shadows on or off for this image (the sun's date, time and light levels are the document's).
 - `supersample`: 1 to 4 (default 1). The image is drawn at that many times the size (line widths in points scale with it) and averaged down by a box filter to `width` x `height`. `width * supersample` and `height * supersample` must be at most 8192 (twice the largest side of 4096), else `invalid_input`; a value outside 1 to 4 is `invalid_input`.
 - `background`: `style` (default) or `transparent`. With `transparent`, pixels where nothing is drawn (no faces, edges or guides; the canvas gradient, the ground grid and the axes are left out too) have alpha 0, and drawn pixels have alpha 255 (antialiased edges and see-through faces have partial alpha, with straight, not premultiplied, color). The PNG is always RGBA, with alpha 255 everywhere for `style`. The sun's shadow on the ground, when shadows are on, is drawn and so has partial alpha.
+- `ground`: `true` (default) or `false`. With `false` the ground grid, the axes and the sun's shadows on the ground are left out of this image, and so is the style's ground colour when the style has no sky (the background stays); the window is unchanged.
 
 Queries:
 

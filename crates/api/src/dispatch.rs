@@ -106,6 +106,9 @@ struct RenderParams {
     /// `style` (default): the style's background. `transparent`: pixels with nothing drawn on
     /// them (no faces, edges or guides; no ground grid or axes either) are clear, alpha 0.
     background: Option<Background>,
+    /// `false` hides the ground grid, the axes and the ground shadows for this image (default
+    /// true), so a model can sit at z = 0.
+    ground: Option<bool>,
 }
 
 /// The parts of the section display a render overrides; each left out follows the document's.
@@ -146,6 +149,8 @@ pub struct RenderOptions {
     pub shadows: bool,
     /// Clear (alpha 0) where nothing is drawn; the pixels then come premultiplied by alpha.
     pub transparent: bool,
+    /// The ground grid, axes and ground shadows are drawn.
+    pub ground: bool,
 }
 
 impl RenderOptions {
@@ -168,6 +173,7 @@ impl RenderOptions {
             section: doc.section_display,
             shadows: doc.shadows.on,
             transparent: false,
+            ground: true,
         }
     }
 }
@@ -631,6 +637,7 @@ fn render_view(host: &mut dyn Host, params: Value) -> Result<Value, RpcError> {
     }
     options.shadows = p.shadows.unwrap_or(options.shadows);
     options.transparent = p.background == Some(Background::Transparent);
+    options.ground = p.ground.unwrap_or(true);
     let k = p.supersample.unwrap_or(1);
     if !(1..=MAX_SUPERSAMPLE).contains(&k) {
         return Err(invalid(format!(
@@ -707,7 +714,7 @@ pub fn describe() -> Value {
                 "result_schema": query_result_schema(),
             },
             "render_view": {
-                "params": "{width, height, camera?: {eye, target, fov_y_deg?, up?, projection?}, lighting?: \"day\" | \"night\" | \"studio\", style?: StyleId, projection?: \"perspective\" | \"parallel\", section?: {planes?, cuts?, fill?, fill_color?: \"dark\" | \"material\"}, shadows?: bool, supersample?: 1..4 (width and height times it at most 8192), background?: \"style\" | \"transparent\", scene?: PageId, t?: 0 to 1 (default 1), from?: PageId, joints?: {JointId: degrees or meters}}",
+                "params": "{width, height, camera?: {eye, target, fov_y_deg?, up?, projection?}, lighting?: \"day\" | \"night\" | \"studio\", style?: StyleId, projection?: \"perspective\" | \"parallel\", section?: {planes?, cuts?, fill?, fill_color?: \"dark\" | \"material\"}, shadows?: bool, supersample?: 1..4 (width and height times it at most 8192), background?: \"style\" | \"transparent\", ground?: bool (default true), scene?: PageId, t?: 0 to 1 (default 1), from?: PageId, joints?: {JointId: degrees or meters}}",
                 "result": "{width, height, png_base64}",
                 "notes": "does not move the document camera or change its lighting; with scene it renders the frame t of the way (linear) from `from` (default the current view and positions) to the scene's camera and stored positions, without changing the document (not with camera; t and from need scene); joints renders with those joint values solved on a copy of the model (couplings and cam followers too; after the scene frame when scene is given), without changing the document, and is refused with invalid_input when they cannot be met; the document's tags, lighting and style are kept unless lighting or style override them, and projection overrides the frame camera's projection",
                 "params_schema": schema::<RenderParams>(),

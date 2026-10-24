@@ -107,6 +107,11 @@ impl Snapshotter {
         self.renderer.set_transparent_background(on);
     }
 
+    /// Captures from now on without the ground (see `Renderer::set_hide_ground`).
+    pub fn set_hide_ground(&mut self, on: bool) {
+        self.renderer.set_hide_ground(on);
+    }
+
     /// Captures from now on for a display of `scale` physical pixels per point (widths in
     /// points follow); the default is 1.
     pub fn set_pixels_per_point(&mut self, scale: f32) {

@@ -314,6 +314,7 @@ impl Host for AppHost<'_> {
         s.set_sun(render::SunLight::with_shadows(doc, options.shadows));
         s.set_model_style(options.style.as_ref());
         s.set_transparent_background(options.transparent);
+        s.set_hide_ground(!options.ground);
         s.set_pixels_per_point(options.supersample as f32);
         let (width, height) = options.drawn();
         let mut seen = camera.clone();
@@ -333,6 +334,7 @@ impl Host for AppHost<'_> {
         );
         if let Some(s) = self.offscreen.get() {
             s.set_transparent_background(false);
+            s.set_hide_ground(false);
             s.set_pixels_per_point(1.0);
         }
         pixels
