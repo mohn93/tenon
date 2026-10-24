@@ -4,6 +4,7 @@
 mod annotation;
 mod axes;
 pub mod boolean;
+pub mod bvh;
 mod clip;
 mod connected;
 mod curves;
@@ -20,6 +21,7 @@ mod ids;
 mod import;
 mod import_tree;
 mod index;
+pub mod interfere;
 pub mod intersect;
 mod joint;
 mod location;

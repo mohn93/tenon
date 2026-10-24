@@ -42,6 +42,7 @@ mod groups;
 mod hide;
 mod import;
 mod instances;
+mod interference;
 mod intersect;
 mod joints;
 mod library;
@@ -2747,6 +2748,17 @@ impl Document {
                     },
                 }
             }
+            Query::Interference { ids, touching } => self.interference_query(ids, *touching)?,
+            Query::Clearance { a, b, ids } => self.clearance_query(*a, *b, ids)?,
+            Query::SweepCheck {
+                joint,
+                from,
+                to,
+                steps,
+                ids,
+                slide,
+                report_within,
+            } => self.sweep_check_query(*joint, *from, *to, *steps, ids, *slide, *report_within)?,
             Query::Camera {} => QueryResult::Camera {
                 eye: self.camera.eye.to_array(),
                 target: self.camera.target.to_array(),

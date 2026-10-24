@@ -26,6 +26,7 @@ mod helix;
 mod hide;
 mod history_origin;
 mod import;
+mod interference;
 mod intersect;
 mod isolate;
 mod joints;

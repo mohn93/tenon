@@ -38,7 +38,11 @@ mod clip;
 mod input;
 mod intersect;
 pub use input::{DriveError, Driven, Stopped};
+mod interference;
 mod joints;
+pub use interference::InterferenceReport;
+#[cfg(test)]
+pub use interference::InterferenceRow;
 mod labels;
 mod library;
 mod notes;
@@ -304,6 +308,8 @@ pub struct Editor {
     flying: bool,
     /// The Soften Edges window.
     soften: SoftenWindow,
+    /// The Check Interference window: what the last check found, while it is open.
+    interference: Option<InterferenceReport>,
     /// While an agent's `tool_input` runs: every command run, with its result.
     issued: Option<Vec<(Command, Result<Outcome, CommandError>)>>,
     /// The modifier keys the window reports the user holding.
@@ -409,6 +415,7 @@ impl Editor {
             fly: Fly::default(),
             flying: false,
             soften: SoftenWindow::default(),
+            interference: None,
             issued: None,
             user_mods: Mods::default(),
             agent_mods: Mods::default(),
@@ -473,6 +480,7 @@ impl Editor {
         self.documents += 1;
         self.joint_drag = None;
         self.style_before_add.clear();
+        self.interference = None;
     }
 
     /// How many times the document was replaced (new or open, by the window or an agent).
