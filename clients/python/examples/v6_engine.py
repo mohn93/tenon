@@ -61,6 +61,11 @@ ROD = 0.150  # rod length, center to center
 BORE = 0.0465  # bore radius (93 mm)
 PITCH = 0.106  # bore spacing
 STAGGER = 0.030  # bank B sits this far behind bank A along the crank
+CROWN_Z = 0.032  # top of the piston crown, from the pin
+RELIEF_DX = (-0.017, 0.017)  # the four valve reliefs in the crown (piston coordinates)
+RELIEF_DY = (-0.021, 0.021)
+RELIEF_R = 0.0165
+RELIEF_DEPTH = 0.0015
 DECK = 0.226  # deck height along the bore axis
 GASKET = 0.0015
 HEAD_TOP = DECK + GASKET + 0.063
@@ -537,9 +542,9 @@ class V6:
         bosses = [self.cyl_x(0.012, 0.04, 0.0145, segments=self.seg), self.cyl_x(-0.04, -0.012, 0.0145, segments=self.seg)]
         body = m.union([body] + bosses)
         tools = [m.tube((0, 0, z), 0.048, 0.0425, 0.0016, segments=self.seg) for z in (0.0255, 0.0215, 0.0165)]
-        for dx in (-0.017, 0.017):  # valve reliefs in the crown
-            for dy in (-0.021, 0.021):
-                tools.append(m.cylinder((dx, dy, 0.0305), 0.0165, 0.003, segments=self.seg))
+        for dx in RELIEF_DX:  # valve reliefs in the crown
+            for dy in RELIEF_DY:
+                tools.append(m.cylinder((dx, dy, CROWN_Z - RELIEF_DEPTH), RELIEF_R, 2 * RELIEF_DEPTH, segments=self.seg))
         for sx in (-1, 1):  # slipper skirt cut-outs under the pin bosses
             tools.append(m.box((0.036 if sx > 0 else -0.05, -0.05, -0.03), (0.014, 0.1, 0.012)))
         tools.append(self.cyl_x(-0.05, 0.05, 0.0105, segments=self.seg))

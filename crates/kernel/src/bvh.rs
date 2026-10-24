@@ -791,7 +791,19 @@ mod tests {
                 * DAffine3::from_translation(DVec3::new(0.25, 3.3, -2.7))
                 * DAffine3::from_rotation_x(std::f64::consts::FRAC_PI_2);
             assert!(a.crosses(&pa, &b, &crossing, 1e-9));
-            assert!(!a.crosses(&pa, &b, &pb, 1e-9) || brute == 0.0);
+            // clearly apart: the surfaces cannot cross; a stood-up wall that crosses is at distance 0
+            if brute > 1e-6 {
+                assert!(!a.crosses(&pa, &b, &pb, 1e-9), "apart by {brute}");
+            }
+            let mut wall = f64::INFINITY;
+            for t in a.triangles() {
+                for u in b.triangles() {
+                    let ta = t.map(|p| pa.transform_point3(p));
+                    let ub = u.map(|p| (crossing).transform_point3(p));
+                    wall = wall.min(triangle_distance(ta, ub).distance);
+                }
+            }
+            assert!(wall < 1e-9, "crossing meshes are {wall} apart");
         }
     }
 

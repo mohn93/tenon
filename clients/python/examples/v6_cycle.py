@@ -250,10 +250,10 @@ class Cycle:
         ]
         # the reliefs: 1.5 mm deep, 16.5 mm radius, over each valve (piston coordinates)
         t = v.cyl_parts[0][2].transform()
-        for dx in (-0.017, 0.017):
-            for dy in (-0.021, 0.021):
-                base = t.apply((dx, dy, 0.032 - 0.0015))
-                parts.append(m.cylinder(base, 0.0165, 0.0015, axis=axis, segments=96))
+        for dx in v6_engine.RELIEF_DX:
+            for dy in v6_engine.RELIEF_DY:
+                base = t.apply((dx, dy, v6_engine.CROWN_Z - v6_engine.RELIEF_DEPTH))
+                parts.append(m.cylinder(base, v6_engine.RELIEF_R, v6_engine.RELIEF_DEPTH, axis=axis, segments=96))
         vol = m.mass_properties(parts)["total"]["volume"]
         self.c.execute({"type": "erase", "ids": [p.id for p in parts]})
         return vol, roof_t - crown_t
@@ -344,7 +344,10 @@ class Cycle:
              % (sw["steps"], 720.0 / max(1, sw["steps"] - 1), len(self.checked)))
         if sw.get("stopped"):
             add_("  STOPPED at %s: %s" % (sw["stopped"]["value"], sw["stopped"]["reason"]))
-        add_("  moving parts interfering: %d%s" % (len(hits), "" if not hits else ": " + "; ".join(
+        skipped = sw.get("skipped") or []
+        add_("  parts skipped by the sweep (not solid): %d%s" % (len(skipped), "" if not skipped else ": " + "; ".join(
+            "%s: %s" % (self.names.get(s["id"], s["id"]), s["reason"]) for s in skipped[:4])))
+        add_("  moving parts interfering (among the pairs measured): %d%s" % (len(hits), "" if not hits else ": " + "; ".join(
             "%s / %s %g..%g" % (self.names[p["a"]], self.names[p["b"]], p["first"], p["last"]) for p in hits)))
         if failed:
             add_("  moving pairs whose overlap could not be measured: %d (%s)" % (len(failed), "; ".join(

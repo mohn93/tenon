@@ -128,7 +128,9 @@ class ExampleTests(unittest.TestCase):
                       "firing order    1-2 ", "Valve 1 intake front", "Valve 2 exhaust rear",
                       "piston to valve", "piston to head", "valve to cam"):
             self.assertIn(field, report)
-        self.assertIn("moving parts interfering: 0\n", report)
+        self.assertIn("moving parts interfering (among the pairs measured): 0\n", report)
+        self.assertIn("parts skipped by the sweep (not solid): 0\n", report)
+        self.assertNotIn("moving pairs whose overlap could not be measured", report)
         self.assertNotIn("STOPPED", report)
 
     def test_city(self):
