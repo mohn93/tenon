@@ -1560,7 +1560,7 @@ pub struct Outcome {
     /// commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<MaterialId>,
-    /// True when a `solid_subtract`, `solid_intersect`, `solid_trim` or `outer_shell` left nothing (no group was made; the
+    /// True when a `solid_subtract`, `solid_intersect` or `solid_trim` left nothing (no group was made; the
     /// operands were still erased); absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub empty: Option<bool>,

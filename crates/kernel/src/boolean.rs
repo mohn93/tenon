@@ -279,6 +279,9 @@ fn outer_shells(m: &Model) -> Result<Model, BooleanError> {
             keep.push(i);
         }
     }
+    if keep.is_empty() {
+        return Err(BooleanError::NotClosed);
+    }
     if keep.len() == shells.len() {
         return Ok(m.clone());
     }
@@ -1441,6 +1444,67 @@ mod tests {
         let far = cuboid([1.0, 1.0, 1.0], [9.0, 0.0, 0.0]);
         let both = combine(&shell, &far, BooleanOp::Union).unwrap().unwrap();
         assert_eq!(outer_shells(&both).unwrap().faces().count(), 12);
+    }
+
+    #[test]
+    fn the_outer_shell_drops_a_floating_solid_and_nested_voids() {
+        let hollow = |size: f64, at: f64, inner: f64| {
+            let a = cuboid([size; 3], [at; 3]);
+            let b = cuboid([inner; 3], [at + (size - inner) / 2.0; 3]);
+            combine(&a, &b, BooleanOp::Subtract).unwrap().unwrap()
+        };
+        // A cube floating in the void of a hollow box.
+        let cube = cuboid([0.5, 0.5, 0.5], [1.75; 3]);
+        let both = combine(&hollow(4.0, 0.0, 2.0), &cube, BooleanOp::Union)
+            .unwrap()
+            .unwrap();
+        closed(&both);
+        assert_eq!(both.faces().count(), 12 + 6);
+        let shell = outer_shells(&both).unwrap();
+        closed(&shell);
+        assert_eq!(shell.faces().count(), 6);
+        assert!((signed_volume(&shell) - 64.0).abs() < 1e-9);
+        // A void in a solid floating in a void: the outer box only.
+        let nested = combine(
+            &hollow(4.0, 0.0, 3.0),
+            &hollow(1.5, 1.25, 0.5),
+            BooleanOp::Union,
+        )
+        .unwrap()
+        .unwrap();
+        closed(&nested);
+        assert_eq!(nested.faces().count(), 6 + 6 + 6 + 6);
+        let shell = outer_shells(&nested).unwrap();
+        assert_eq!(shell.faces().count(), 6);
+        assert!((signed_volume(&shell) - 64.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_split_piece_of_b_shows_b_outside_and_a_on_the_cut() {
+        let mut a = cuboid([2.0, 2.0, 2.0], [0.0; 3]);
+        for f in face_ids(&a) {
+            a.set_paint(f, [Some(MaterialId(1)), Some(MaterialId(2))]);
+        }
+        a.take_changes();
+        let b = placed_copy(
+            &Solid::cuboid(DVec3::splat(2.0)).unwrap().to_model(),
+            DAffine3::from_translation(DVec3::splat(1.0)),
+            Some(MaterialId(3)),
+        );
+        let [_, _, only_b] = split(&a, &b).unwrap();
+        let only_b = only_b.unwrap();
+        closed(&only_b);
+        let (mut own, mut cut) = (0, 0);
+        for (_, f) in only_b.faces() {
+            match f.paint() {
+                [Some(MaterialId(3)), Some(MaterialId(3))] => own += 1,
+                [Some(MaterialId(1)), Some(MaterialId(2))] => cut += 1,
+                other => panic!("{other:?}"),
+            }
+        }
+        // b's three outer sides (with a notch) and a's three faces turned over.
+        assert_eq!((own, cut), (own, 3));
+        assert!(own >= 3);
     }
 
     #[test]
