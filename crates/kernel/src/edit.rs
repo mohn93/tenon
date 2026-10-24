@@ -70,6 +70,8 @@ pub enum KernelError {
     Joint(String),
     /// A coupling id names no coupling in the scene.
     CouplingNotFound,
+    /// A cam follower id names no cam follower in the scene.
+    CamFollowerNotFound,
     /// A style id names no style in the scene.
     StyleNotFound,
     /// A style name is blank, too long or taken, or its settings are out of range; the text
@@ -126,6 +128,7 @@ impl fmt::Display for KernelError {
             KernelError::StyleNotFound => write!(f, "no such style"),
             KernelError::JointNotFound => write!(f, "no such joint"),
             KernelError::CouplingNotFound => write!(f, "no such coupling"),
+            KernelError::CamFollowerNotFound => write!(f, "no such cam follower"),
             KernelError::MaterialName(why)
             | KernelError::MaterialOpacity(why)
             | KernelError::MaterialTexture(why)

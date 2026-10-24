@@ -263,6 +263,8 @@ fn describe_lists_methods_and_schemas() {
         "drive",
         "add_coupling",
         "delete_coupling",
+        "add_cam_follower",
+        "delete_cam_follower",
         "position_texture",
         "soften_edges",
         "soften_by_angle",
@@ -301,6 +303,7 @@ fn describe_lists_methods_and_schemas() {
         "joints",
         "\"joint\"",
         "couplings",
+        "cam_followers",
         "\"scene\"",
         "outliner",
         "annotations",
@@ -1293,12 +1296,14 @@ fn describe_batch_schema_accepts_references() {
     assert_eq!(definition[1], json!({"$ref": "#/$defs/BatchRef"}));
     assert_eq!(
         defs["BatchRef"]["pattern"],
-        r"^\$(0|[1-9][0-9]*):(([vefigrnsmdyjk])(0|[1-9][0-9]*|\*)|\*)$"
+        r"^\$(0|[1-9][0-9]*):(([vefigrnsmdyjkw])(0|[1-9][0-9]*|\*)|\*)$"
     );
     let style = defs["StyleId"]["anyOf"].as_array().unwrap();
     assert_eq!(style[1], json!({"$ref": "#/$defs/BatchRef"}));
     let coupling = defs["CouplingId"]["anyOf"].as_array().unwrap();
     assert_eq!(coupling[1], json!({"$ref": "#/$defs/BatchRef"}));
+    let follower = defs["CamFollowerId"]["anyOf"].as_array().unwrap();
+    assert_eq!(follower[1], json!({"$ref": "#/$defs/BatchRef"}));
     assert!(
         d["methods"]["execute"]["params_schema"]["$defs"]
             .get("BatchRef")

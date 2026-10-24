@@ -7,10 +7,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::annotation::Note;
 use crate::axes::Axes;
+use crate::cam::CamFollower;
 use crate::edit::KernelError;
 use crate::ids::{
-    CouplingId, CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId,
-    JointId, MaterialId, NoteId, PageId, SectionId, StyleId, TagId,
+    CamFollowerId, CouplingId, CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId,
+    GuideId, InstanceId, JointId, MaterialId, NoteId, PageId, SectionId, StyleId, TagId,
 };
 use crate::joint::{Coupling, Joint};
 use crate::location::Location;
@@ -119,6 +120,10 @@ pub enum Step {
     AddCoupling(CouplingId, Coupling),
     /// A coupling removed.
     RemoveCoupling(CouplingId, Coupling),
+    /// A cam follower added.
+    AddCamFollower(CamFollowerId, CamFollower),
+    /// A cam follower removed.
+    RemoveCamFollower(CamFollowerId, CamFollower),
     /// The model axes changed from the first to the second.
     SetAxes(Axes, Axes),
     /// The model's location changed from the first to the second.
@@ -152,6 +157,8 @@ impl Step {
             Step::ChangeJoint(id, from, to) => Step::ChangeJoint(id, to, from),
             Step::AddCoupling(id, c) => Step::RemoveCoupling(id, c),
             Step::RemoveCoupling(id, c) => Step::AddCoupling(id, c),
+            Step::AddCamFollower(id, c) => Step::RemoveCamFollower(id, c),
+            Step::RemoveCamFollower(id, c) => Step::AddCamFollower(id, c),
             Step::SetAxes(from, to) => Step::SetAxes(to, from),
             Step::SetLocation(from, to) => Step::SetLocation(to, from),
             Step::SetTransition(from, to) => Step::SetTransition(to, from),
@@ -293,6 +300,21 @@ impl SceneChange {
             .filter(|(_, (before, after))| *before || *after)
             .map(|(id, _)| id)
             .collect();
+        // cam follower -> (existed before, exists after)
+        let mut followers: BTreeMap<CamFollowerId, (bool, bool)> = BTreeMap::new();
+        for step in &self.steps {
+            let (id, before, after) = match step {
+                Step::AddCamFollower(id, _) => (*id, false, true),
+                Step::RemoveCamFollower(id, _) => (*id, true, false),
+                _ => continue,
+            };
+            followers.entry(id).or_insert((before, after)).1 = after;
+        }
+        summary.cam_followers = followers
+            .into_iter()
+            .filter(|(_, (before, after))| *before || *after)
+            .map(|(id, _)| id)
+            .collect();
         summary
     }
 }
@@ -320,6 +342,8 @@ pub struct Scene {
     pub(crate) joints: BTreeMap<JointId, Joint>,
     /// The couplings between joints' values, by id.
     pub(crate) couplings: BTreeMap<CouplingId, Coupling>,
+    /// The cam followers, by id.
+    pub(crate) cam_followers: BTreeMap<CamFollowerId, CamFollower>,
     /// The model axes (see [`Axes`]).
     pub(crate) axes: Axes,
     /// Where the model stands (see [`Location`]).
@@ -345,6 +369,7 @@ impl PartialEq for Scene {
             && self.styles == other.styles
             && self.joints == other.joints
             && self.couplings == other.couplings
+            && self.cam_followers == other.cam_followers
             && self.axes == other.axes
             && self.location == other.location
             && self.transition == other.transition
@@ -368,6 +393,7 @@ impl Scene {
             styles: BTreeMap::new(),
             joints: BTreeMap::new(),
             couplings: BTreeMap::new(),
+            cam_followers: BTreeMap::new(),
             axes: Axes::WORLD,
             location: Location::DEFAULT,
             transition: SceneTransition::DEFAULT,
@@ -405,6 +431,7 @@ impl Scene {
             styles,
             joints: BTreeMap::new(),
             couplings: BTreeMap::new(),
+            cam_followers: BTreeMap::new(),
             axes: Axes::WORLD,
             location: Location::DEFAULT,
             transition: SceneTransition::DEFAULT,
@@ -492,6 +519,13 @@ impl Scene {
     /// A coupling id for a new coupling, taken from the entity id counter.
     pub(crate) fn alloc_coupling(&mut self) -> CouplingId {
         let id = CouplingId(self.next_id);
+        self.next_id += 1;
+        id
+    }
+
+    /// A cam follower id for a new cam follower, taken from the entity id counter.
+    pub(crate) fn alloc_cam_follower(&mut self) -> CamFollowerId {
+        let id = CamFollowerId(self.next_id);
         self.next_id += 1;
         id
     }
@@ -794,6 +828,13 @@ impl Scene {
             Step::RemoveCoupling(id, _) => {
                 self.couplings.remove(id);
             }
+            Step::AddCamFollower(id, c) => {
+                self.next_id = self.next_id.max(id.0.saturating_add(1));
+                self.cam_followers.insert(*id, *c);
+            }
+            Step::RemoveCamFollower(id, _) => {
+                self.cam_followers.remove(id);
+            }
             Step::SetAxes(_, to) => self.axes = *to,
             Step::SetLocation(_, to) => self.location = *to,
             Step::SetTransition(_, to) => self.transition = *to,
@@ -886,6 +927,10 @@ impl Scene {
             self.coupling_problem(c, Some(*id))
                 .map_err(|e| format!("coupling {id}: {e}"))?;
         }
+        for (id, c) in &self.cam_followers {
+            self.cam_follower_problem(c, Some(*id))
+                .map_err(|e| format!("cam follower {id}: {e}"))?;
+        }
         let mut style_names = BTreeSet::new();
         for (id, s) in &self.styles {
             crate::style::check_name(&s.name).map_err(|e| format!("style {id}: {e}"))?;
@@ -904,7 +949,7 @@ impl Scene {
         let missing = |m: &Option<MaterialId>| m.is_some_and(|m| !self.materials.contains_key(&m));
         let missing_tag = |t: Option<TagId>| t.is_some_and(|t| !self.tags.contains_key(&t));
         // Each id with the prefix of what holds it ("v", "e", "f", "i", "g", "r", "n", "s", "c",
-        // "d", "m", "t", "p", "y", "j", "k").
+        // "d", "m", "t", "p", "y", "j", "k", "w").
         let mut owner: BTreeMap<u64, char> = BTreeMap::new();
         let mut claim = |id: u64, prefix: char| match owner.insert(id, prefix) {
             None => Ok(()),
@@ -931,6 +976,9 @@ impl Scene {
         }
         for id in self.couplings.keys() {
             claim(id.0, 'k')?;
+        }
+        for id in self.cam_followers.keys() {
+            claim(id.0, 'w')?;
         }
         for (mesh, m) in self.meshes() {
             m.validate().map_err(|e| format!("{mesh:?}: {e}"))?;

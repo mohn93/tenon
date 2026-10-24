@@ -470,7 +470,7 @@ fn joints_save_at_schema_25_and_read_back() {
 
     let newer = scratch("newer.skr");
     std::fs::copy(&path, &newer).unwrap();
-    edit_file(&newer, |doc| doc["schema_version"] = json!(28));
+    edit_file(&newer, |doc| doc["schema_version"] = json!(29));
     let err = run(
         &mut e,
         json!({"type": "open", "path": newer.to_str().unwrap()}),

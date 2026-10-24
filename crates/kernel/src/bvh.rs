@@ -159,6 +159,43 @@ impl Bvh {
         }
     }
 
+    /// The least and greatest `t` at which the line `p + d t` (world coordinates, `d` not
+    /// zero) meets this tree placed by `place`: a triangle's boundary counts, a triangle
+    /// lying along the line does not (its neighbours give the points). None when the line
+    /// misses every triangle or `place` cannot be inverted.
+    pub fn line_hits(&self, place: &DAffine3, p: DVec3, d: DVec3) -> Option<(f64, f64)> {
+        if self.is_empty()
+            || !place.is_finite()
+            || place.matrix3.determinant().abs() < crate::MIN_DETERMINANT
+        {
+            return None;
+        }
+        // The line in the mesh's coordinates keeps its parameter: an affine map takes
+        // p + d t to p' + d' t.
+        let back = place.inverse();
+        let (p, d) = (back.transform_point3(p), back.transform_vector3(d));
+        let mut hits: Option<(f64, f64)> = None;
+        self.line_rec(0, p, d, &mut hits);
+        hits
+    }
+
+    fn line_rec(&self, i: usize, p: DVec3, d: DVec3, hits: &mut Option<(f64, f64)>) {
+        let n = self.nodes[i];
+        if !line_meets_box(n.lo, n.hi, p, d) {
+            return;
+        }
+        if n.count > 0 {
+            for t in &self.tris[n.first as usize..(n.first + n.count) as usize] {
+                if let Some(s) = line_triangle(p, d, *t) {
+                    *hits = Some(hits.map_or((s, s), |(lo, hi)| (lo.min(s), hi.max(s))));
+                }
+            }
+            return;
+        }
+        self.line_rec(i + 1, p, d, hits);
+        self.line_rec(n.first as usize, p, d, hits);
+    }
+
     /// Whether this tree placed by `pa` and `other` placed by `pb` cross: an edge of a
     /// triangle of one passes through a triangle of the other (its boundary included) with
     /// its ends more than `tol` to either side. Surfaces that only touch (faces lying on each
@@ -479,6 +516,41 @@ pub fn segment_segment_ranges(
         }
     }
     Closest::new(p1 + d1 * s, p2 + d2 * t)
+}
+
+/// Whether the line `p + d t` passes through the box `lo..hi` (grown a little, so a line
+/// along a face of it counts).
+fn line_meets_box(lo: DVec3, hi: DVec3, p: DVec3, d: DVec3) -> bool {
+    let pad = 1e-9 * (hi - lo).max_element().max(1e-9);
+    let (lo, hi) = (lo - DVec3::splat(pad), hi + DVec3::splat(pad));
+    let (mut t0, mut t1) = (f64::NEG_INFINITY, f64::INFINITY);
+    for k in 0..3 {
+        if d[k] == 0.0 {
+            if p[k] < lo[k] || p[k] > hi[k] {
+                return false;
+            }
+            continue;
+        }
+        let (a, b) = ((lo[k] - p[k]) / d[k], (hi[k] - p[k]) / d[k]);
+        t0 = t0.max(a.min(b));
+        t1 = t1.min(a.max(b));
+        if t0 > t1 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Where the line `p + d t` passes through triangle `t` (its boundary included): the `t`.
+/// None when it misses, or the triangle is degenerate or lies along the line.
+fn line_triangle(p: DVec3, d: DVec3, t: [DVec3; 3]) -> Option<f64> {
+    let n = (t[1] - t[0]).cross(t[2] - t[0]);
+    let dn = n.dot(d);
+    if dn.abs() <= 1e-14 * n.length() * d.length() {
+        return None;
+    }
+    let s = n.dot(t[0] - p) / dn;
+    in_triangle(t, p + d * s).then_some(s)
 }
 
 /// Whether `x`, in the plane of the triangle, lies inside it (within rounding).

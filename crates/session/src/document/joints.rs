@@ -2,13 +2,13 @@
 
 use glam::{DAffine3, DVec3};
 use kernel::{
-    Coupling, CouplingId, EntityId, InstanceId, Joint, JointFrame, JointId, JointKind, KernelError,
-    SceneChange, perpendicular,
+    CamFollower, CamFollowerId, Coupling, CouplingId, EntityId, InstanceId, Joint, JointFrame,
+    JointId, JointKind, KernelError, SceneChange, perpendicular,
 };
 
 use super::{Document, check_coordinates, unit_vector};
 use crate::command::{CommandError, ErrorKind};
-use crate::query::{CouplingInfo, JointInfo};
+use crate::query::{CamFollowerInfo, CouplingInfo, JointInfo};
 use crate::rectangle::rectangle_axes;
 
 /// The fields of `add_joint`.
@@ -240,6 +240,96 @@ impl Document {
                     driven: c.driven,
                     ratio: c.ratio * (from / to),
                     offset: c.offset / to,
+                }
+            })
+            .collect()
+    }
+
+    /// Makes joint `follower` follow instance `cam`'s surface.
+    pub(super) fn add_cam_follower_changes(
+        &mut self,
+        cam: EntityId,
+        follower: JointId,
+        roller_radius: Option<f64>,
+        preload_direction: Option<[f64; 3]>,
+    ) -> Result<SceneChange, CommandError> {
+        let joint = self.joint_ref(follower)?;
+        let cam = match cam {
+            EntityId::Instance(i) if self.scene.root().instance(i).is_some() => i,
+            _ => {
+                return Err(invalid(format!(
+                    "the cam ({cam}) is not an instance of the root"
+                )));
+            }
+        };
+        let roller_radius = roller_radius.unwrap_or(0.0);
+        if !roller_radius.is_finite() || roller_radius < 0.0 {
+            return Err(invalid("roller_radius must be a finite number, at least 0"));
+        }
+        let preload = match preload_direction {
+            Some(d) => {
+                let d = DVec3::from(d);
+                let axis = self.scene.joint_world_frames(joint).0.axis;
+                if !d.is_finite() || d.length() == 0.0 {
+                    return Err(invalid(
+                        "preload_direction must be a finite, non-zero vector",
+                    ));
+                }
+                let along = d.normalize().dot(axis);
+                if along.abs() < 1e-9 {
+                    return Err(invalid(
+                        "preload_direction must not be square to the follower joint's axis",
+                    ));
+                }
+                along.signum()
+            }
+            None => self.scene.preload_toward(cam, follower).ok_or_else(|| {
+                invalid(
+                    "the cam's center is square to the follower joint's axis: give a \
+                     preload_direction",
+                )
+            })?,
+        };
+        let (_, change) = self
+            .scene
+            .add_cam_follower(CamFollower {
+                cam,
+                follower,
+                roller_radius,
+                preload,
+            })
+            .map_err(|e| joint_error(e, None))?;
+        Ok(change)
+    }
+
+    /// Removes a cam follower.
+    pub(super) fn delete_cam_follower_changes(
+        &mut self,
+        id: CamFollowerId,
+    ) -> Result<SceneChange, CommandError> {
+        self.scene.delete_cam_follower(id).map_err(|e| match e {
+            KernelError::CamFollowerNotFound => {
+                CommandError::new(ErrorKind::NotFound, format!("no cam follower {id}"))
+            }
+            e => joint_error(e, None),
+        })
+    }
+
+    /// Every cam follower, in the order they were made.
+    pub(super) fn cam_follower_infos(&self) -> Vec<CamFollowerInfo> {
+        self.scene
+            .cam_followers()
+            .map(|(id, c)| {
+                let axis = self
+                    .scene
+                    .joint(c.follower)
+                    .map_or(DVec3::Z, |j| self.scene.joint_world_frames(j).0.axis);
+                CamFollowerInfo {
+                    id,
+                    cam: EntityId::Instance(c.cam),
+                    follower: c.follower,
+                    roller_radius: c.roller_radius,
+                    preload_direction: (axis * c.preload).to_array(),
                 }
             })
             .collect()

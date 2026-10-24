@@ -5,6 +5,7 @@ mod annotation;
 mod axes;
 pub mod boolean;
 pub mod bvh;
+mod cam;
 mod clip;
 mod connected;
 mod curves;
@@ -57,18 +58,19 @@ pub use annotation::{
     Anchor, Circle, Dimension, MAX_NOTE_CHARS, MAX_NOTE_LINES, Note, RadialAnchor, check_note_text,
 };
 pub use axes::Axes;
+pub use cam::CamFollower;
 pub use clip::Inserted;
 pub use curves::{Curve, CurveCircle, CurveKind};
 pub use data::{
-    AnchorData, AxesData, CircleData, CouplingData, DefinitionData, DimensionData, EdgeData,
-    FaceData, GuideData, InstanceData, JointData, JointFrameData, LocationData, MAX_ID,
+    AnchorData, AxesData, CamFollowerData, CircleData, CouplingData, DefinitionData, DimensionData,
+    EdgeData, FaceData, GuideData, InstanceData, JointData, JointFrameData, LocationData, MAX_ID,
     MIN_DETERMINANT, MaterialData, MeshData, NoteData, PageData, PagePosition, RadialAnchorData,
     SceneData, SectionData, StyleData, TagData, TextureData, TransitionData, VertexData,
 };
 pub use edit::KernelError;
 pub use ids::{
-    CouplingId, CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId,
-    JointId, MaterialId, NoteId, PageId, SectionId, StyleId, TagId, VertexId,
+    CamFollowerId, CouplingId, CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId,
+    GuideId, InstanceId, JointId, MaterialId, NoteId, PageId, SectionId, StyleId, TagId, VertexId,
 };
 pub use import::{MAX_IMPORT_FACES, MeshPolygon, MeshReport};
 pub use import_tree::{

@@ -2,7 +2,7 @@
 //!
 //! In a batch, an id field may hold a reference instead of an id: `"$N:KI"` is the I-th id of
 //! kind K (`v e f i g r n s` from `changes.created`, `m` from `changes.materials`, `y` from
-//! `changes.styles`, `j` from `changes.joints`, `k` from `changes.couplings`, `d` from the outcome's `definitions`) in command N's outcome, `"$N:K*"` all of that kind and `"$N:*"` every edge, face, instance, guide,
+//! `changes.styles`, `j` from `changes.joints`, `k` from `changes.couplings`, `w` from `changes.cam_followers`, `d` from the outcome's `definitions`) in command N's outcome, `"$N:K*"` all of that kind and `"$N:*"` every edge, face, instance, guide,
 //! dimension, note and section plane command N created (not vertices: `"$N:v*"` names
 //! those). `*` references expand in place in id lists only.
 //!
@@ -12,8 +12,8 @@
 use std::fmt;
 
 use kernel::{
-    CouplingId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, JointId,
-    MaterialId, NoteId, SectionId, StyleId, VertexId,
+    CamFollowerId, CouplingId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId,
+    InstanceId, JointId, MaterialId, NoteId, SectionId, StyleId, VertexId,
 };
 use serde_json::Value;
 
@@ -63,6 +63,7 @@ pub enum RefKind {
     Style,
     Joint,
     Coupling,
+    CamFollower,
 }
 
 impl RefKind {
@@ -81,6 +82,7 @@ impl RefKind {
             'y' => RefKind::Style,
             'j' => RefKind::Joint,
             'k' => RefKind::Coupling,
+            'w' => RefKind::CamFollower,
             _ => return None,
         })
     }
@@ -100,6 +102,7 @@ impl RefKind {
             RefKind::Style => 'y',
             RefKind::Joint => 'j',
             RefKind::Coupling => 'k',
+            RefKind::CamFollower => 'w',
         }
     }
 
@@ -132,6 +135,8 @@ impl RefKind {
             RefKind::Joint => "joints",
             RefKind::Coupling if one => "coupling",
             RefKind::Coupling => "couplings",
+            RefKind::CamFollower if one => "cam follower",
+            RefKind::CamFollower => "cam followers",
         }
     }
 
@@ -174,7 +179,7 @@ impl fmt::Display for BatchRef {
 }
 
 impl BatchRef {
-    /// Reads `^\$(0|[1-9][0-9]*):(([vefigrnsmdyjk])(0|[1-9][0-9]*|\*)|\*)$`.
+    /// Reads `^\$(0|[1-9][0-9]*):(([vefigrnsmdyjkw])(0|[1-9][0-9]*|\*)|\*)$`.
     fn parse(text: &str) -> Option<BatchRef> {
         let (command, rest) = text.strip_prefix('$')?.split_once(':')?;
         let command = canonical_number(command)?;
@@ -304,6 +309,12 @@ impl BatchRef {
         Ok(self.pick(couplings, RefKind::Coupling)?[0])
     }
 
+    /// The cam follower this reference stands for.
+    fn cam_follower(&self, done: &[Outcome]) -> Result<CamFollowerId, CommandError> {
+        let followers = &self.outcome(done)?.changes.cam_followers;
+        Ok(self.pick(followers, RefKind::CamFollower)?[0])
+    }
+
     /// The material this reference stands for.
     fn material(&self, done: &[Outcome]) -> Result<MaterialId, CommandError> {
         let materials = &self.outcome(done)?.changes.materials;
@@ -355,6 +366,9 @@ fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
                 | ("joint", Some("change_joint" | "delete_joint" | "drive"))
                 | ("driver" | "driven", Some("add_coupling"))
                 | ("coupling", Some("delete_coupling"))
+                | ("cam", Some("add_cam_follower"))
+                | ("follower", Some("add_cam_follower"))
+                | ("cam_follower", Some("delete_cam_follower"))
                 | ("edge", Some("add_edge_dimension" | "add_radial_dimension"))
                 | ("anchor", Some("add_note"))
                 | ("target", Some("add_label"))
@@ -393,10 +407,13 @@ impl BatchCommand {
                     Want::Definition
                 } else if key == "style" || key == "from" {
                     Want::Style
-                } else if key == "joint" || key == "driver" || key == "driven" {
+                } else if key == "joint" || key == "driver" || key == "driven" || key == "follower"
+                {
                     Want::Joint
                 } else if key == "coupling" {
                     Want::Coupling
+                } else if key == "cam_follower" {
+                    Want::CamFollower
                 } else if key == "item" {
                     Want::Either
                 } else {
@@ -454,6 +471,7 @@ impl BatchCommand {
                 Slot::Style(s) => usize::from(s.0 >= STAND_IN_BASE),
                 Slot::Joint(j) => usize::from(j.0 >= STAND_IN_BASE),
                 Slot::Coupling(k) => usize::from(k.0 >= STAND_IN_BASE),
+                Slot::CamFollower(w) => usize::from(w.0 >= STAND_IN_BASE),
                 Slot::Item(r) => usize::from(is_stand_in_ref(r)),
             }
         });
@@ -505,6 +523,7 @@ impl BatchCommand {
                 Slot::Style(s) => self.resolve_style(s, done),
                 Slot::Joint(j) => self.resolve_joint(j, done),
                 Slot::Coupling(k) => self.resolve_coupling(k, done),
+                Slot::CamFollower(w) => self.resolve_cam_follower(w, done),
                 Slot::Item(r) => self.resolve_item(r, done, context),
             };
             if let Err(e) = result {
@@ -596,6 +615,17 @@ impl BatchCommand {
         Ok(())
     }
 
+    fn resolve_cam_follower(
+        &self,
+        w: &mut CamFollowerId,
+        done: &[Outcome],
+    ) -> Result<(), CommandError> {
+        if w.0 >= STAND_IN_BASE {
+            *w = self.reference(w.0).cam_follower(done)?;
+        }
+        Ok(())
+    }
+
     fn resolve_material(&self, m: &mut MaterialId, done: &[Outcome]) -> Result<(), CommandError> {
         if m.0 >= STAND_IN_BASE {
             *m = self.reference(m.0).material(done)?;
@@ -613,6 +643,7 @@ enum Want {
     Style,
     Joint,
     Coupling,
+    CamFollower,
     Either,
 }
 
@@ -633,6 +664,7 @@ fn replace(
             Want::Style => text.parse::<StyleId>().map(|s| s.0).ok(),
             Want::Joint => text.parse::<JointId>().map(|j| j.0).ok(),
             Want::Coupling => text.parse::<CouplingId>().map(|k| k.0).ok(),
+            Want::CamFollower => text.parse::<CamFollowerId>().map(|w| w.0).ok(),
             Want::Entity => text.parse::<EntityId>().map(|id| number(&id)).ok(),
             Want::Either => text.parse::<LibraryRef>().ok().map(|r| match r {
                 LibraryRef::Entity(id) => number(&id),
@@ -669,6 +701,15 @@ fn replace(
     if want != Want::Coupling && is_coupling {
         return Err(format!("{text:?} is a coupling, not an id of that kind"));
     }
+    let is_follower = r.kind == Some(RefKind::CamFollower);
+    if want == Want::CamFollower && !is_follower {
+        return Err(format!("{text:?} is not a cam follower"));
+    }
+    if want != Want::CamFollower && is_follower {
+        return Err(format!(
+            "{text:?} is a cam follower, not an id of that kind"
+        ));
+    }
     let is_material = r.kind == Some(RefKind::Material);
     let is_definition = r.kind == Some(RefKind::Definition);
     if want == Want::Material && !is_material {
@@ -683,7 +724,9 @@ fn replace(
     if want != Want::Definition && is_definition {
         return Err(format!("{text:?} is a definition, not an entity"));
     }
-    if r.index.is_none() && (is_material || is_definition || is_style || is_joint || is_coupling) {
+    if r.index.is_none()
+        && (is_material || is_definition || is_style || is_joint || is_coupling || is_follower)
+    {
         return Err(format!(
             "{text:?} must name one {}",
             if is_material {
@@ -694,6 +737,8 @@ fn replace(
                 "joint"
             } else if is_coupling {
                 "coupling"
+            } else if is_follower {
+                "cam follower"
             } else {
                 "definition"
             }
@@ -743,6 +788,7 @@ enum Slot<'a> {
     Style(&'a mut StyleId),
     Joint(&'a mut JointId),
     Coupling(&'a mut CouplingId),
+    CamFollower(&'a mut CamFollowerId),
     /// An instance or a material (`save_to_library`'s `item`).
     Item(&'a mut LibraryRef),
 }
@@ -888,6 +934,11 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
             f(Slot::Joint(driven));
         }
         Command::DeleteCoupling { coupling } => f(Slot::Coupling(coupling)),
+        Command::AddCamFollower { cam, follower, .. } => {
+            f(Slot::One(cam));
+            f(Slot::Joint(follower));
+        }
+        Command::DeleteCamFollower { cam_follower } => f(Slot::CamFollower(cam_follower)),
         Command::AddBox { material, .. }
         | Command::AddCylinder { material, .. }
         | Command::AddTube { material, .. }

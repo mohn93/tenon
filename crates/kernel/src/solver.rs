@@ -15,14 +15,23 @@
 //! the turn nearest their values at the start of the step (so a value counts on past a full
 //! turn: a cam coupled 1:2 to a crank turns once in two). Joints linked only through a coupling
 //! (a crank and a cam on separate shafts) are one assembly.
+//!
+//! A cam follower in the assembly (its joint's part is reached from the cam, or through its
+//! own joints) is met in a second pass of each step: once the other residuals are met with
+//! the parts where they stand, its residual, the follower joint's value less the value where
+//! its axis line touches the cam in the pose the first pass left it in (see [`crate::cam`]),
+//! is added and the step solved again from there; the follower does not pull on the cam. A cam the drive does not move is held where it is. A
+//! follower whose axis line misses the cam once the other joints are met refuses the drive.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use glam::{DAffine3, DQuat, DVec3};
 
 use crate::MeshId;
+use crate::bvh::Bvh;
+use crate::cam::contact;
 use crate::edit::KernelError;
-use crate::ids::{InstanceId, JointId};
+use crate::ids::{CamFollowerId, InstanceId, JointId};
 use crate::joint::{
     Joint, JointFrame, JointKind, VALUE_TOLERANCE, frame_angle, frame_distance, measure_joint,
     wrap_angle,
@@ -83,10 +92,36 @@ struct Bond {
     offset: f64,
 }
 
+/// A cam follower of the assembly: `links[link]`'s value less where its axis line touches
+/// the cam (`tree` placed by `cam`'s pose) is held at 0.
+struct Rider {
+    id: CamFollowerId,
+    link: usize,
+    cam: Body,
+    cam_id: InstanceId,
+    tree: Bvh,
+    preload: f64,
+    roller_radius: f64,
+    /// The cam's pose once the other residuals are met: the second pass touches the cam
+    /// there, so the follower sets its value without pulling on the cam.
+    frozen: Option<DAffine3>,
+}
+
+/// How a step's solve ended.
+enum Outcome {
+    Met,
+    Unmet,
+    /// The rider with this index has no contact once the other residuals are met.
+    NoContact(usize),
+}
+
 /// The assembly being solved: its joints, and the movable parts' current transforms.
 struct System {
     links: Vec<Link>,
     bonds: Vec<Bond>,
+    riders: Vec<Rider>,
+    /// Whether the riders' residuals count (the second pass of a step).
+    riding: bool,
     /// Each link's value and slide at the start of the step: a value is measured as the turn
     /// nearest it.
     near: Vec<(f64, f64)>,
@@ -216,7 +251,74 @@ impl System {
             .iter()
             .map(|b| self.bond_residual(b, &pose).powi(2))
             .sum();
-        joints + bonds
+        let mut riders = 0.0;
+        if self.riding {
+            for r in &self.riders {
+                // A pose where a follower misses its cam is no pose at all.
+                match self.rider_residual(r, &pose) {
+                    Some(x) => riders += x * x,
+                    None => return f64::NAN,
+                }
+            }
+        }
+        joints + bonds + riders
+    }
+
+    /// The residual of a cam follower with the parts at `pose`: zero when it touches; None
+    /// when its axis line misses the cam.
+    fn rider_residual(&self, rider: &Rider, pose: &dyn Fn(Body) -> DAffine3) -> Option<f64> {
+        let link = &self.links[rider.link];
+        let a = link.frame_a.world(&pose(link.a));
+        let b = link.frame_b.world(&pose(link.b));
+        let touch = contact(
+            &rider.tree,
+            &rider.frozen.unwrap_or_else(|| pose(rider.cam)),
+            &a,
+            rider.preload,
+            rider.roller_radius,
+        )?;
+        Some(frame_distance(&a, &b) - touch)
+    }
+
+    /// The first rider whose axis line misses its cam with the parts where they stand.
+    fn lost_contact(&self) -> Option<usize> {
+        let current = |b: Body| self.pose(b);
+        self.riders
+            .iter()
+            .position(|r| self.rider_residual(r, &current).is_none())
+    }
+
+    /// Solves one step: the joints and couplings, then (with any riders) everything again
+    /// with the riders' residuals.
+    fn solve_step(&mut self, target: Target) -> Outcome {
+        let met = |cost: f64| !cost.is_nan() && cost.sqrt() <= DRIVE_TOLERANCE;
+        self.riding = false;
+        if !met(self.solve(target)) {
+            return Outcome::Unmet;
+        }
+        if self.riders.is_empty() {
+            return Outcome::Met;
+        }
+        if let Some(k) = self.lost_contact() {
+            return Outcome::NoContact(k);
+        }
+        for r in &mut self.riders {
+            r.frozen = Some(match r.cam {
+                Body::Held(t) => t,
+                Body::Part(i) => self.poses[i],
+            });
+        }
+        self.riding = true;
+        let cost = self.solve(target);
+        self.riding = false;
+        for r in &mut self.riders {
+            r.frozen = None;
+        }
+        if met(cost) {
+            Outcome::Met
+        } else {
+            Outcome::Unmet
+        }
     }
 
     /// The value of `links[k]` with the parts at `pose`, the turn nearest its value at the
@@ -303,6 +405,50 @@ impl System {
                 jtr[*p] += dp * r0;
                 for (q, dq) in &cols {
                     jtj[p * n + q] += dp * dq;
+                }
+            }
+        }
+        if self.riding {
+            for rider in &self.riders {
+                let current = |b: Body| self.pose(b);
+                let Some(r0) = self.rider_residual(rider, &current) else {
+                    continue;
+                };
+                let link = &self.links[rider.link];
+                let mut parts: Vec<usize> = [link.a, link.b]
+                    .iter()
+                    .filter_map(|b| match b {
+                        Body::Part(i) => Some(*i),
+                        Body::Held(_) => None,
+                    })
+                    .collect();
+                parts.sort_unstable();
+                parts.dedup();
+                let mut cols: Vec<(usize, f64)> = Vec::with_capacity(6 * parts.len());
+                for i in parts {
+                    for k in 0..6 {
+                        let at = |h: f64| {
+                            let (w, t) = unknown(k, h);
+                            let moved = rigid(w, t, self.pivots[i]) * self.poses[i];
+                            let pose = |b: Body| match b {
+                                Body::Part(j) if j == i => moved,
+                                b => self.pose(b),
+                            };
+                            self.rider_residual(rider, &pose)
+                        };
+                        // A nudge off the cam's edge gives no slope that way.
+                        let slope = match (at(NUDGE), at(-NUDGE)) {
+                            (Some(p), Some(m)) => (p - m) / (2.0 * NUDGE),
+                            _ => 0.0,
+                        };
+                        cols.push((6 * i + k, slope));
+                    }
+                }
+                for (p, dp) in &cols {
+                    jtr[*p] += dp * r0;
+                    for (q, dq) in &cols {
+                        jtj[p * n + q] += dp * dq;
+                    }
                 }
             }
         }
@@ -487,6 +633,13 @@ impl Scene {
         if slide.is_some() && driven.kind != JointKind::Cylindrical {
             return Err(refuse("only a cylindrical joint slides".into()));
         }
+        if let Some((w, c)) = self.follower_of(id) {
+            return Err(refuse(format!(
+                "joint {:?} follows cam i{} ({w}): its value comes from the cam, so drive the \
+                 cam's joints instead",
+                driven.name, c.cam.0
+            )));
+        }
         let slide = slide.unwrap_or(driven.slide);
         if let Some((lo, hi)) = driven.limits
             && (value < lo || value > hi)
@@ -536,22 +689,33 @@ impl Scene {
             };
             system.near.clone_from(&values);
             let from = system.poses.clone();
-            let met = |cost: f64| !cost.is_nan() && cost.sqrt() <= DRIVE_TOLERANCE;
-            let mut cost = f64::NAN;
+            let mut outcome = Outcome::Unmet;
             if let Some(before) = &previous {
                 system.poses = from
                     .iter()
                     .zip(before)
                     .map(|(now, was)| (*now * was.inverse()) * *now)
                     .collect();
-                cost = system.solve(target);
+                outcome = system.solve_step(target);
             }
-            if !met(cost) {
+            if !matches!(outcome, Outcome::Met) {
                 system.poses.clone_from(&from);
-                cost = system.solve(target);
+                outcome = system.solve_step(target);
             }
-            if !met(cost) {
-                return Err(unmet());
+            match outcome {
+                Outcome::Met => {}
+                Outcome::Unmet => return Err(unmet()),
+                Outcome::NoContact(k) => {
+                    let rider = &system.riders[k];
+                    let name = &self.joints[&system.links[rider.link].id].name;
+                    return Err(refuse(format!(
+                        "the joints cannot all be met at {}: cam follower {} (joint {name:?}) \
+                         loses contact with cam i{}, its axis line missing the cam",
+                        shown(driven.kind, value),
+                        rider.id,
+                        rider.cam_id.0
+                    )));
+                }
             }
             previous = Some(from);
             system.measure(&mut values, target);
@@ -627,11 +791,20 @@ impl Scene {
             };
             join(x.b, y.b);
         }
+        // A cam brings its followers' parts in; a follower does not bring its cam (a cam the
+        // drive does not reach is held).
+        let mut rides: BTreeMap<InstanceId, Vec<InstanceId>> = BTreeMap::new();
+        for (_, c) in self.cam_followers() {
+            if let Some(j) = self.joint(c.follower) {
+                rides.entry(c.cam).or_default().push(j.b);
+            }
+        }
         let mut members: BTreeSet<InstanceId> = BTreeSet::new();
         let mut queue: VecDeque<InstanceId> = driven.a.into_iter().chain([driven.b]).collect();
         while let Some(i) = queue.pop_front() {
             if members.insert(i) {
                 queue.extend(neighbours.get(&i).into_iter().flatten().copied());
+                queue.extend(rides.get(&i).into_iter().flatten().copied());
             }
         }
         let joints: Vec<(JointId, &Joint)> = self
@@ -680,6 +853,23 @@ impl Scene {
                 })
             })
             .collect();
+        let riders: Vec<Rider> = self
+            .cam_followers()
+            .filter_map(|(w, c)| {
+                let link = *link_index.get(&c.follower)?;
+                let cam = self.root().instance(c.cam)?;
+                Some(Rider {
+                    id: w,
+                    link,
+                    cam: body(Some(c.cam)),
+                    cam_id: c.cam,
+                    tree: self.cam_tree(cam.definition),
+                    preload: c.preload,
+                    roller_radius: c.roller_radius,
+                    frozen: None,
+                })
+            })
+            .collect();
         let near = links
             .iter()
             .map(|l| {
@@ -705,6 +895,8 @@ impl Scene {
         System {
             links,
             bonds,
+            riders,
+            riding: false,
             near,
             parts,
             poses,

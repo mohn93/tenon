@@ -2,8 +2,8 @@ use std::fmt;
 use std::path::PathBuf;
 
 use kernel::{
-    ChangeSummary, CouplingId, DefinitionId, EdgeColorMode, EntityId, Fog, Ground, JointId,
-    JointKind, MaterialId, PageId, Side, Sketchy, SoftenReport, StyleId, TagId,
+    CamFollowerId, ChangeSummary, CouplingId, DefinitionId, EdgeColorMode, EntityId, Fog, Ground,
+    JointId, JointKind, MaterialId, PageId, Side, Sketchy, SoftenReport, StyleId, TagId,
 };
 
 use schemars::JsonSchema;
@@ -1022,6 +1022,27 @@ pub enum Command {
     /// Remove a coupling, as one undo step. Deleting a joint (or erasing its part) removes
     /// its couplings in the same step.
     DeleteCoupling { coupling: CouplingId },
+    /// Make a prismatic joint follow a cam, as one undo step: every drive that moves the cam
+    /// (or the follower's part) then sets the joint's value so that its frame origin on the
+    /// moving part, stood `roller_radius` meters back along the axis (default 0: a flat or
+    /// knife follower), touches the cam's surface along the joint's axis line, on the side
+    /// the follower is pushed from. `cam` is an instance of the root; `preload_direction`
+    /// (a direction, not square to the axis; default: toward the center of the cam's
+    /// bounding box along the axis) is the way the follower is pushed onto the cam. The axis
+    /// line must meet the cam now; a drive where it no longer does is refused naming the
+    /// follower. A follower joint is not driven or coupled itself. The new id ("w<n>") is in
+    /// the outcome's `changes.cam_followers`.
+    AddCamFollower {
+        cam: EntityId,
+        follower: JointId,
+        #[serde(default)]
+        roller_radius: Option<f64>,
+        #[serde(default)]
+        preload_direction: Option<[f64; 3]>,
+    },
+    /// Remove a cam follower, as one undo step: the joint slides free again. Deleting the
+    /// joint or erasing the cam (or the follower's part) removes it in the same step.
+    DeleteCamFollower { cam_follower: CamFollowerId },
     /// Hide edges, faces, instances and guides of the open context, as one undo step (an
     /// entity already hidden is ignored; none to hide is a success with no undo step).
     /// A hidden entity is not drawn, picked or snapped to, and leaves the selection.

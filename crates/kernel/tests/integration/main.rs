@@ -3,6 +3,7 @@
 
 mod annotations;
 mod axes;
+mod cams;
 mod clip;
 mod connected;
 mod couplings;

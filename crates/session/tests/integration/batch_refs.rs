@@ -250,6 +250,7 @@ fn reference_keys_cover_every_id_field() {
                         | ("a" | "b", "add_dimension" | "solid_split" | "add_joint")
                         | ("edge", "add_edge_dimension" | "add_radial_dimension")
                         | ("anchor", "add_note")
+                        | ("cam", "add_cam_follower")
                         | ("target", "add_label")
                         | ("note", "change_note")
                         | ("plane", "flip_section_plane" | "activate_section_plane")

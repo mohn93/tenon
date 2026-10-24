@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::annotation::{Dimension, Note};
 use crate::geom::{LENGTH_TOL, vector_area};
 use crate::ids::{
-    CouplingId, CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId,
-    JointId, MaterialId, NoteId, PageId, SectionId, StyleId, TagId, VertexId,
+    CamFollowerId, CouplingId, CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId,
+    GuideId, InstanceId, JointId, MaterialId, NoteId, PageId, SectionId, StyleId, TagId, VertexId,
 };
 use crate::index::Index;
 use crate::section::SectionPlane;
@@ -418,6 +418,9 @@ pub struct ChangeSummary {
     /// Couplings added or removed (see `SceneChange::summary`). Absent when none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub couplings: Vec<CouplingId>,
+    /// Cam followers added or removed (see `SceneChange::summary`). Absent when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cam_followers: Vec<CamFollowerId>,
 }
 
 impl ChangeSummary {
@@ -433,6 +436,7 @@ impl ChangeSummary {
         let mut styles = BTreeSet::new();
         let mut joints = BTreeSet::new();
         let mut couplings = BTreeSet::new();
+        let mut followers = BTreeSet::new();
         for s in summaries {
             let listed = s
                 .created
@@ -449,6 +453,7 @@ impl ChangeSummary {
             styles.extend(s.styles.iter().copied());
             joints.extend(s.joints.iter().copied());
             couplings.extend(s.couplings.iter().copied());
+            followers.extend(s.cam_followers.iter().copied());
         }
         let mut net = ChangeSummary::default();
         for (id, (before, after)) in state {
@@ -465,6 +470,7 @@ impl ChangeSummary {
         net.styles = styles.into_iter().collect();
         net.joints = joints.into_iter().collect();
         net.couplings = couplings.into_iter().collect();
+        net.cam_followers = followers.into_iter().collect();
         net
     }
 }
@@ -1579,6 +1585,7 @@ mod tests {
             styles: vec![],
             joints: vec![],
             couplings: vec![],
+            cam_followers: vec![],
         };
         let b = ChangeSummary {
             created: vec![v(3)],
@@ -1590,6 +1597,7 @@ mod tests {
             styles: vec![],
             joints: vec![],
             couplings: vec![],
+            cam_followers: vec![],
         };
         let net = ChangeSummary::join([&a, &b]);
         // made then changed is made; made then erased is gone

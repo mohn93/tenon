@@ -7,6 +7,7 @@ mod axes;
 mod batch_refs;
 mod bytes;
 mod camera;
+mod cams;
 mod chamfer;
 mod circle;
 mod clip;

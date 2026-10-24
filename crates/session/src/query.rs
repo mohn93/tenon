@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
 use kernel::{
-    ChangeSummary, CouplingId, CurveKind, DefinitionId, DefinitionKind, EntityId, ImageFormat,
-    JointId, JointKind, MaterialId, PageId, StyleId, StyleSettings, TagId, TexturePlacement,
+    CamFollowerId, ChangeSummary, CouplingId, CurveKind, DefinitionId, DefinitionKind, EntityId,
+    ImageFormat, JointId, JointKind, MaterialId, PageId, StyleId, StyleSettings, TagId,
+    TexturePlacement,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -147,6 +148,8 @@ pub enum Query {
     },
     /// Every coupling between joints, in the order they were made (see `add_coupling`).
     Couplings {},
+    /// Every cam follower, in the order they were made (see `add_cam_follower`).
+    CamFollowers {},
     /// One scene: the view and the hidden tags it stores.
     Scene {
         scene: PageId,
@@ -921,6 +924,19 @@ pub struct CouplingInfo {
     pub offset: f64,
 }
 
+/// A cam follower in the `cam_followers` list: the joint `follower` follows the surface of
+/// instance `cam`, pushed onto it along `preload_direction` (a unit vector along the joint's
+/// axis, in the root's coordinates), with a roller of `roller_radius` meters (0: flat or
+/// knife).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CamFollowerInfo {
+    pub id: CamFollowerId,
+    pub cam: EntityId,
+    pub follower: JointId,
+    pub roller_radius: f64,
+    pub preload_direction: [f64; 3],
+}
+
 /// A material's texture: the size one copy covers on the model, in meters, and the image's.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TextureInfo {
@@ -1086,6 +1102,11 @@ pub enum QueryResult {
     /// The couplings, in the order they were made.
     Couplings {
         couplings: Vec<CouplingInfo>,
+        revision: u64,
+    },
+    /// The cam followers, in the order they were made.
+    CamFollowers {
+        cam_followers: Vec<CamFollowerInfo>,
         revision: u64,
     },
     Scenes {

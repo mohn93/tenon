@@ -436,6 +436,58 @@ impl TryFrom<String> for CouplingId {
     }
 }
 
+/// A cam follower: a prismatic joint whose value comes from a cam's surface (see
+/// `CamFollower`). Serialized as "w<n>". Cam follower ids come from the same counter as entity
+/// ids, so they never repeat one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct CamFollowerId(pub u64);
+
+impl fmt::Display for CamFollowerId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "w{}", self.0)
+    }
+}
+
+impl FromStr for CamFollowerId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match parse_prefixed(s) {
+            Some(('w', n)) => Ok(CamFollowerId(n)),
+            _ => Err(format!("invalid cam follower id {s:?}")),
+        }
+    }
+}
+
+impl schemars::JsonSchema for CamFollowerId {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "CamFollowerId".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "pattern": "^w(0|[1-9][0-9]*)$",
+            "description": "Cam follower id: w<n>"
+        })
+    }
+}
+
+impl From<CamFollowerId> for String {
+    fn from(id: CamFollowerId) -> String {
+        id.to_string()
+    }
+}
+
+impl TryFrom<String> for CamFollowerId {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
 /// A style: named edge, background and fog settings a view may choose. Serialized as
 /// "y<n>". Style ids come from the same counter as entity ids, so they never repeat one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -540,6 +592,11 @@ mod tests {
         assert_eq!(CouplingId(5).to_string(), "k5");
         for s in ["", "k", "c5", "k05", "k+5"] {
             assert!(s.parse::<CouplingId>().is_err(), "{s:?} parsed");
+        }
+        assert_eq!("w5".parse::<CamFollowerId>(), Ok(CamFollowerId(5)));
+        assert_eq!(CamFollowerId(5).to_string(), "w5");
+        for s in ["", "w", "k5", "w05", "w+5"] {
+            assert!(s.parse::<CamFollowerId>().is_err(), "{s:?} parsed");
         }
         assert_eq!("y5".parse::<StyleId>(), Ok(StyleId(5)));
         assert_eq!(StyleId(5).to_string(), "y5");

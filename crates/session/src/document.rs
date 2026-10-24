@@ -857,6 +857,8 @@ impl Document {
             | Command::Drive { .. }
             | Command::AddCoupling { .. }
             | Command::DeleteCoupling { .. }
+            | Command::AddCamFollower { .. }
+            | Command::DeleteCamFollower { .. }
             | Command::Hide { .. }
             | Command::Unhide { .. }
             | Command::UnhideLast {}
@@ -1343,6 +1345,15 @@ impl Document {
                 offset,
             } => self.add_coupling_changes(*driver, *driven, *ratio, *offset),
             Command::DeleteCoupling { coupling } => self.delete_coupling_changes(*coupling),
+            Command::AddCamFollower {
+                cam,
+                follower,
+                roller_radius,
+                preload_direction,
+            } => self.add_cam_follower_changes(*cam, *follower, *roller_radius, *preload_direction),
+            Command::DeleteCamFollower { cam_follower } => {
+                self.delete_cam_follower_changes(*cam_follower)
+            }
             Command::Hide { ids } => self.hide_changes(ids),
             Command::SetSectionCut { ids, cut } => self.set_section_cut_changes(ids, *cut),
             Command::Unhide { ids } => self.unhide_changes(ids),
@@ -2965,6 +2976,10 @@ impl Document {
             Query::Joint { id } => QueryResult::Joint(self.joint_info_of(*id)?),
             Query::Couplings {} => QueryResult::Couplings {
                 couplings: self.coupling_infos(),
+                revision: self.revision,
+            },
+            Query::CamFollowers {} => QueryResult::CamFollowers {
+                cam_followers: self.cam_follower_infos(),
                 revision: self.revision,
             },
             Query::Styles {} => QueryResult::Styles {

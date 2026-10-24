@@ -277,10 +277,12 @@ impl Scene {
         Ok(step.into())
     }
 
-    /// Removes a joint and its couplings; undo puts them back.
+    /// Removes a joint, its couplings and its cam follower; undo puts them back.
     pub fn delete_joint(&mut self, id: JointId) -> Result<SceneChange, KernelError> {
         let joint = self.joint(id).ok_or(KernelError::JointNotFound)?.clone();
-        let mut steps = self.drop_couplings_of(&BTreeSet::from([id])).steps;
+        let ids = BTreeSet::from([id]);
+        let mut steps = self.drop_couplings_of(&ids).steps;
+        steps.extend(self.drop_cam_followers_of(&ids).steps);
         let step = Step::RemoveJoint(id, joint);
         self.apply_step(&step);
         steps.push(step);
@@ -320,7 +322,8 @@ impl Scene {
 
     /// Why `coupling` is not valid, if it is not: a ratio that is not finite or is zero, an
     /// offset that is not finite, a joint that does not exist or has no value (fixed, ball),
-    /// the same joint twice, or two joints another coupling (but `except`) already couples.
+    /// the same joint twice, a joint that follows a cam, or two joints another coupling (but
+    /// `except`) already couples.
     pub(crate) fn coupling_problem(
         &self,
         coupling: &Coupling,
@@ -342,6 +345,13 @@ impl Scene {
             if !joint.kind.has_value() {
                 return Err(format!(
                     "the {label} joint {id} is fixed or ball: it has no value to couple"
+                ));
+            }
+        }
+        for id in [coupling.driver, coupling.driven] {
+            if let Some((w, _)) = self.follower_of(id) {
+                return Err(format!(
+                    "joint {id} follows a cam ({w}): its value comes from the cam"
                 ));
             }
         }
@@ -387,7 +397,8 @@ impl Scene {
     }
 
     /// The steps that remove every joint naming an instance that is no longer an instance of
-    /// the root (erased, grouped or exploded), and those joints' couplings, applied.
+    /// the root (erased, grouped or exploded), those joints' couplings and every cam follower
+    /// of such a joint or of a cam that is gone, applied.
     pub(crate) fn drop_stale_joints(&mut self) -> SceneChange {
         let stale: Vec<(JointId, Joint)> = self
             .joints()
@@ -399,6 +410,7 @@ impl Scene {
             .collect();
         let ids: BTreeSet<JointId> = stale.iter().map(|(id, _)| *id).collect();
         let mut steps = self.drop_couplings_of(&ids).steps;
+        steps.extend(self.drop_cam_followers_of(&ids).steps);
         for (id, joint) in stale {
             let step = Step::RemoveJoint(id, joint);
             self.apply_step(&step);

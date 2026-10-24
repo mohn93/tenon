@@ -61,6 +61,10 @@ pub struct SceneData {
     /// existed (and when there are none).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub couplings: Vec<CouplingData>,
+    /// The cam followers. Absent in files written before cam followers existed (and when
+    /// there are none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cam_followers: Vec<CamFollowerData>,
     /// The model axes. Absent in files written before axes existed (and when they are the
     /// world axes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -109,6 +113,19 @@ pub struct CouplingData {
     pub driven: u64,
     pub ratio: f64,
     pub offset: f64,
+}
+
+/// A cam follower: see [`crate::CamFollower`]. `cam` is an instance id, `follower` a joint
+/// id; `preload` is 1 or -1 (along or against the joint's axis).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CamFollowerData {
+    pub id: u64,
+    pub cam: u64,
+    pub follower: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub roller_radius: f64,
+    pub preload: f64,
 }
 
 /// A joint frame: see [`crate::JointFrame`].
@@ -616,6 +633,16 @@ impl Scene {
                     offset: c.offset,
                 })
                 .collect(),
+            cam_followers: self
+                .cam_followers()
+                .map(|(id, c)| CamFollowerData {
+                    id: id.0,
+                    cam: c.cam.0,
+                    follower: c.follower.0,
+                    roller_radius: c.roller_radius,
+                    preload: c.preload,
+                })
+                .collect(),
             location: (!self.location().is_default()).then(|| {
                 let l = self.location();
                 LocationData {
@@ -783,10 +810,27 @@ impl Scene {
                 return Err(format!("coupling k{} appears twice", c.id));
             }
         }
+        let mut followers = BTreeMap::new();
+        for c in &data.cam_followers {
+            check_id("cam follower w", c.id)?;
+            let follower = crate::CamFollower {
+                cam: crate::InstanceId(c.cam),
+                follower: crate::JointId(c.follower),
+                roller_radius: c.roller_radius,
+                preload: c.preload,
+            };
+            if followers
+                .insert(crate::CamFollowerId(c.id), follower)
+                .is_some()
+            {
+                return Err(format!("cam follower w{} appears twice", c.id));
+            }
+        }
         let next_after_joints = joints
             .keys()
             .map(|id: &crate::JointId| id.0)
             .chain(couplings.keys().map(|id: &crate::CouplingId| id.0))
+            .chain(followers.keys().map(|id: &crate::CamFollowerId| id.0))
             .map(|id| id.saturating_add(1))
             .max()
             .unwrap_or(0);
@@ -801,6 +845,7 @@ impl Scene {
         );
         scene.joints = joints;
         scene.couplings = couplings;
+        scene.cam_followers = followers;
         if let Some(a) = &data.axes {
             scene.axes = Axes::from_parts(a.origin.into(), a.x.into(), a.y.into(), a.z.into())
                 .map_err(|e| e.to_string())?;

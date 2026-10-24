@@ -672,7 +672,7 @@ pub fn describe() -> Value {
             "batch": {
                 "params": "{commands: [Command], atomic?: bool}",
                 "result": "{outcomes: [Outcome], changes: ChangeSummary, revision}: changes is the net effect of the whole batch",
-                "notes": "atomic: one undo step, all-or-nothing; undo/redo not allowed; an id may be a BatchRef to ids an earlier command of the batch made (\"$0:f0\", \"$0:d0\" for a definition make_unique, make_group, make_component or a primitive (as group or component) made, \"$0:y0\" for a style add_style made, \"$0:j0\" for a joint add_joint made, \"$0:k0\" for a coupling add_coupling made; a bad one is -32602 before anything runs, one past what was made fails its command with invalid_input)",
+                "notes": "atomic: one undo step, all-or-nothing; undo/redo not allowed; an id may be a BatchRef to ids an earlier command of the batch made (\"$0:f0\", \"$0:d0\" for a definition make_unique, make_group, make_component or a primitive (as group or component) made, \"$0:y0\" for a style add_style made, \"$0:j0\" for a joint add_joint made, \"$0:k0\" for a coupling add_coupling made, \"$0:w0\" for a cam follower add_cam_follower made; a bad one is -32602 before anything runs, one past what was made fails its command with invalid_input)",
                 "params_schema": batch_params_schema(),
                 "result_schema": schema::<BatchResult>(),
             },
