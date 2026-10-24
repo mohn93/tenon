@@ -189,6 +189,8 @@ pub enum UiAction {
     UnhideAll,
     /// Entity Info's Hidden checkbox: hide (true) or show the selection.
     SetHidden(bool),
+    /// Entity Info's "Cut by section planes" checkbox: whether the selected instances are cut
+    /// by the section planes of the contexts outside them (`set_section_cut`).
     SetSectionCut(bool),
     /// An Outliner row's menu: hide (true) or show the instance at the path.
     OutlinerSetHidden {

@@ -286,7 +286,7 @@ pub enum Command {
     /// Set how section planes are shown; absent fields stay as they are: `planes` draws the
     /// plane entities, `cuts` applies the active planes' cuts, `fill` fills closed cuts. All
     /// default to true; `fill_color` is `dark` (default, #3a3a3a) or `material` (the color of
-    /// the material most of the cut faces show on their front, else the nearest painted
+    /// the material most of the cut faces' area shows on their front, else the nearest painted
     /// instance's material, else the default face color, darkened by 20%). A view setting
     /// like `set_lighting`: saved with the model, but not an undo step and not a change to the
     /// revision.

@@ -1243,9 +1243,9 @@ impl Walk<'_> {
             (self.glowing && (!self.glows.contains_key(&glow_key) || cutting)).then(Vec::new);
         // The placement's own surface in root coordinates, before any cut, for the cut outlines.
         let mut surface: Vec<[DVec3; 3]> = Vec::new();
-        // With the material fill, how many cut triangles each front color has.
+        // With the material fill, the area of the cut triangles each front color has.
         let by_material = display.fill && display.fill_color == SectionFillColor::Material;
-        let mut votes: Vec<([f32; 3], usize)> = Vec::new();
+        let mut votes: Vec<([f32; 3], f64)> = Vec::new();
         let base = &mut self.base;
         let first_caster = base.casters.len();
         for face in &parts.faces {
@@ -1329,9 +1329,11 @@ impl Walk<'_> {
                         surface.push(tri.map(|c| c.0));
                     }
                     if by_material && !ghost && crosses_plane(&tri.map(|c| c.0), &planes) {
+                        let [p, q, r] = tri.map(|c| c.0);
+                        let area = 0.5 * (q - p).cross(r - p).length();
                         match votes.iter_mut().find(|(c, _)| *c == front.color) {
-                            Some((_, n)) => *n += 1,
-                            None => votes.push((front.color, 1)),
+                            Some((_, n)) => *n += area,
+                            None => votes.push((front.color, area)),
                         }
                     }
                     let attributes = tri.map(|(p, n, uv)| (p, (n, uv)));
@@ -1502,12 +1504,12 @@ impl Walk<'_> {
                 base.spans.edges.push((*eid, start..base.edges.len()));
             }
         }
-        // The fill: the material most of the cut faces show, else the look the placement gives
+        // The fill: the material most of the cut area shows, else the look the placement gives
         // faces without one (the nearest painted instance's, or the default).
         let fill_color = if by_material {
             let winner = votes
                 .iter()
-                .fold(None, |best: Option<&([f32; 3], usize)>, v| {
+                .fold(None, |best: Option<&([f32; 3], f64)>, v| {
                     best.filter(|b| b.1 >= v.1).or(Some(v))
                 })
                 .map_or(front.color, |v| v.0);

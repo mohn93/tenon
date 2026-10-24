@@ -1060,6 +1060,83 @@ fn an_instance_left_whole_writes_schema_22_and_round_trips() {
     assert!(instance_entry(&e, &g).get("section_cut").is_none());
 }
 
+/// The ids of the instances in the open context that are left whole.
+fn left_whole(d: &Document) -> Vec<String> {
+    ask(d, json!({"type": "entities"}))["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["section_cut"] == false)
+        .map(|i| i["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+fn set_whole(d: &mut Document, id: &str) {
+    run(
+        d,
+        json!({"type": "set_section_cut", "ids": [id], "cut": false}),
+    )
+    .unwrap();
+}
+
+#[test]
+fn section_cut_survives_explode() {
+    let mut d = doc();
+    let inner = grouped_cube(&mut d);
+    set_whole(&mut d, &inner);
+    let outer = run(&mut d, json!({"type": "make_group", "ids": [inner]})).unwrap();
+    let outer = made(&outer, 'i');
+    assert!(
+        left_whole(&d).is_empty(),
+        "inside the group, not in the root"
+    );
+    run(&mut d, json!({"type": "explode", "ids": [outer]})).unwrap();
+    assert_eq!(left_whole(&d).len(), 1, "the freed instance is still whole");
+}
+
+#[test]
+fn section_cut_survives_paste() {
+    let mut d = doc();
+    let g = grouped_cube(&mut d);
+    set_whole(&mut d, &g);
+    let clip = d.clip(&[g.parse().unwrap()]).unwrap();
+    let out = run(
+        &mut d,
+        json!({"type": "paste", "clip": clip, "at": [10, 0, 0]}),
+    )
+    .unwrap();
+    let pasted = made(&out, 'i');
+    assert_ne!(pasted, g);
+    let mut whole = left_whole(&d);
+    whole.sort();
+    let mut both = vec![g, pasted];
+    both.sort();
+    assert_eq!(whole, both);
+}
+
+#[test]
+fn section_cut_survives_make_unique() {
+    let mut d = doc();
+    let ids = cube(&mut d);
+    let out = run(
+        &mut d,
+        json!({"type": "make_component", "ids": ids, "name": "Box"}),
+    )
+    .unwrap();
+    let c = made(&out, 'i');
+    let copy = run(
+        &mut d,
+        json!({"type": "copy", "ids": [c], "offset": [5, 0, 0]}),
+    )
+    .unwrap()["placed"][0]
+        .as_str()
+        .unwrap()
+        .to_string();
+    set_whole(&mut d, &copy);
+    run(&mut d, json!({"type": "make_unique", "ids": [copy]})).unwrap();
+    assert_eq!(left_whole(&d), [copy]);
+}
+
 #[test]
 fn a_group_left_whole_stays_whole_in_the_line_drawing_while_a_sibling_is_cut() {
     use session::drawing::line_drawing;

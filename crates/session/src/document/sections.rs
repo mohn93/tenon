@@ -17,7 +17,7 @@ pub enum SectionFillColor {
     /// The fixed dark gray (#3a3a3a).
     #[default]
     Dark,
-    /// The color of the material most of the cut faces show on their front, darkened by 20%.
+    /// The color of the material most of the cut faces' area shows on their front, darkened by 20%.
     Material,
 }
 
