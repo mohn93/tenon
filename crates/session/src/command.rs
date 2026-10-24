@@ -354,6 +354,17 @@ pub enum Command {
         ids: Vec<EntityId>,
         offset: [f64; 3],
     },
+    /// Spread instances of the open context apart as one undo step: each moves by
+    /// `(c_i - center) * factor`, `c_i` its bounding box center in the context's coordinates.
+    /// `center` defaults to the center of all their boxes. `factor` is finite, -0.99 to 100
+    /// (0 changes nothing; negative pulls them together). Other ids are `invalid_input`.
+    ExplodeView {
+        ids: Vec<EntityId>,
+        factor: f64,
+        #[serde(default)]
+        #[schemars(with = "Option<ModelPoint>")]
+        center: Option<[f64; 3]>,
+    },
     /// Copy edges, faces, instances, guides, dimensions, notes and section planes (copies are
     /// inactive) `count` times (default 1), copy k
     /// shifted by `k * offset`, as one undo step. A copied annotation anchored to a copied vertex

@@ -688,6 +688,7 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::MakeGroup { ids, .. }
         | Command::MakeComponent { ids, .. }
         | Command::Explode { ids }
+        | Command::ExplodeView { ids, .. }
         | Command::Hide { ids }
         | Command::Unhide { ids }
         | Command::ReverseFaces { ids }

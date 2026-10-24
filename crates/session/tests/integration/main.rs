@@ -13,6 +13,7 @@ mod commands;
 mod contract;
 mod curves;
 mod drawing;
+mod explode_view;
 mod export;
 mod files;
 mod follow_me;

@@ -807,6 +807,7 @@ impl Document {
             | Command::MakeGroup { .. }
             | Command::MakeComponent { .. }
             | Command::Explode { .. }
+            | Command::ExplodeView { .. }
             | Command::MakeUnique { .. }
             | Command::SetAxes { .. }
             | Command::ResetAxes {}
@@ -1057,6 +1058,11 @@ impl Document {
             Command::MakeGroup { ids, name } => self.group_changes(ids, None, name.as_deref()),
             Command::MakeComponent { ids, name } => self.group_changes(ids, Some(name), None),
             Command::Explode { ids } => self.explode_changes(ids),
+            Command::ExplodeView {
+                ids,
+                factor,
+                center,
+            } => self.explode_view_changes(ids, *factor, *center),
             Command::SetAxes {
                 origin,
                 x_axis,
@@ -1828,6 +1834,76 @@ impl Document {
             );
             c.ops
                 .extend(m.transform_sections(&parts.sections, shift).ops);
+            Ok(c)
+        })
+        .map_err(|e| self.kernel_error(e, ids))
+    }
+
+    fn explode_view_changes(
+        &mut self,
+        ids: &[EntityId],
+        factor: f64,
+        center: Option<[f64; 3]>,
+    ) -> Result<SceneChange, CommandError> {
+        let invalid = |m: &str| CommandError::new(ErrorKind::InvalidInput, m);
+        if ids.is_empty() {
+            return Err(invalid("ids must list at least one instance"));
+        }
+        if !factor.is_finite() || !(-0.99..=100.0).contains(&factor) {
+            return Err(invalid("factor must be finite, from -0.99 to 100"));
+        }
+        if let Some(c) = center {
+            check_coordinates(&[c])?;
+        }
+        self.require_existing(ids)?;
+        let mut instances: Vec<(InstanceId, DVec3)> = Vec::new();
+        let mut union: Option<[DVec3; 2]> = None;
+        for id in ids {
+            let EntityId::Instance(i) = *id else {
+                return Err(invalid("ids must all be instances").with_ids(vec![*id]));
+            };
+            let Some([lo, hi]) = self.instance_box(i) else {
+                return Err(invalid(
+                    "the instance is empty: it has no box to move from the center",
+                )
+                .with_ids(vec![*id]));
+            };
+            union = Some(match union {
+                Some([ul, uh]) => [ul.min(lo), uh.max(hi)],
+                None => [lo, hi],
+            });
+            if !instances.iter().any(|(j, _)| *j == i) {
+                instances.push((i, (lo + hi) * 0.5));
+            }
+        }
+        let center = match (center, union) {
+            (Some(c), _) => DVec3::from(c),
+            (None, Some([lo, hi])) => (lo + hi) * 0.5,
+            (None, None) => DVec3::ZERO,
+        };
+        let moves: Vec<(InstanceId, DVec3)> = instances
+            .iter()
+            .map(|(i, c)| (*i, (*c - center) * factor))
+            .filter(|(_, d)| d.length_squared() > 0.0)
+            .collect();
+        if moves.is_empty() {
+            return Ok(SceneChange::default());
+        }
+        // Every instance must stay within the coordinate limit after its own move.
+        for (i, d) in &moves {
+            let one = Parts::of(&[EntityId::Instance(*i)]);
+            self.check_placed(
+                &BTreeSet::new(),
+                &one,
+                &[DAffine3::from_translation(*d)],
+                false,
+            )?;
+        }
+        self.edit_mesh(|m| {
+            let mut c = ChangeSet::default();
+            for (i, d) in &moves {
+                c.ops.extend(m.move_instances(&[*i], *d).ops);
+            }
             Ok(c)
         })
         .map_err(|e| self.kernel_error(e, ids))
