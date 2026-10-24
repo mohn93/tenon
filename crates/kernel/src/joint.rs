@@ -9,7 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::edit::KernelError;
-use crate::ids::{InstanceId, JointId};
+use crate::ids::{CouplingId, InstanceId, JointId};
 use crate::scene::{Scene, SceneChange, Step};
 
 /// How far a measured value may be from the stored one and still count as unchanged.
@@ -173,6 +173,18 @@ pub struct Joint {
     pub limits: Option<(f64, f64)>,
 }
 
+/// A coupling between two joints' values, as gears, chains, belts and racks make: the solver
+/// holds `driven value = ratio * driver value + offset`, values in the joints' own units
+/// (radians for an angle, meters for a distance; a cylindrical joint's angle). `ratio` is
+/// finite and not zero; `offset` is finite.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Coupling {
+    pub driver: JointId,
+    pub driven: JointId,
+    pub ratio: f64,
+    pub offset: f64,
+}
+
 /// Fails, saying why, when a joint name is blank (after trimming) or too long.
 pub(crate) fn check_name(name: &str) -> Result<(), String> {
     let name = name.trim();
@@ -265,12 +277,104 @@ impl Scene {
         Ok(step.into())
     }
 
-    /// Removes a joint; undo puts it back.
+    /// Removes a joint and its couplings; undo puts them back.
     pub fn delete_joint(&mut self, id: JointId) -> Result<SceneChange, KernelError> {
         let joint = self.joint(id).ok_or(KernelError::JointNotFound)?.clone();
+        let mut steps = self.drop_couplings_of(&BTreeSet::from([id])).steps;
         let step = Step::RemoveJoint(id, joint);
         self.apply_step(&step);
+        steps.push(step);
+        Ok(SceneChange { steps })
+    }
+
+    pub fn coupling(&self, id: CouplingId) -> Option<&Coupling> {
+        self.couplings.get(&id)
+    }
+
+    /// Every coupling, in id (creation) order.
+    pub fn couplings(&self) -> impl Iterator<Item = (CouplingId, &Coupling)> {
+        self.couplings.iter().map(|(k, v)| (*k, v))
+    }
+
+    /// Adds `coupling` after checking it (see [`Scene::coupling_problem`]). Adding one never
+    /// moves anything: the next drive meets it.
+    pub fn add_coupling(
+        &mut self,
+        coupling: Coupling,
+    ) -> Result<(CouplingId, SceneChange), KernelError> {
+        self.coupling_problem(&coupling, None)
+            .map_err(KernelError::Joint)?;
+        let id = self.alloc_coupling();
+        let step = Step::AddCoupling(id, coupling);
+        self.apply_step(&step);
+        Ok((id, step.into()))
+    }
+
+    /// Removes a coupling; undo puts it back.
+    pub fn delete_coupling(&mut self, id: CouplingId) -> Result<SceneChange, KernelError> {
+        let coupling = *self.coupling(id).ok_or(KernelError::CouplingNotFound)?;
+        let step = Step::RemoveCoupling(id, coupling);
+        self.apply_step(&step);
         Ok(step.into())
+    }
+
+    /// Why `coupling` is not valid, if it is not: a ratio that is not finite or is zero, an
+    /// offset that is not finite, a joint that does not exist or has no value (fixed, ball),
+    /// the same joint twice, or two joints another coupling (but `except`) already couples.
+    pub(crate) fn coupling_problem(
+        &self,
+        coupling: &Coupling,
+        except: Option<CouplingId>,
+    ) -> Result<(), String> {
+        if !coupling.ratio.is_finite() || coupling.ratio == 0.0 {
+            return Err("a coupling's ratio must be a finite number other than 0".into());
+        }
+        if !coupling.offset.is_finite() {
+            return Err("a coupling's offset must be a finite number".into());
+        }
+        if coupling.driver == coupling.driven {
+            return Err("a coupling needs two different joints".into());
+        }
+        for (label, id) in [("driver", coupling.driver), ("driven", coupling.driven)] {
+            let joint = self
+                .joint(id)
+                .ok_or_else(|| format!("the {label} joint {id} does not exist"))?;
+            if !joint.kind.has_value() {
+                return Err(format!(
+                    "the {label} joint {id} is fixed or ball: it has no value to couple"
+                ));
+            }
+        }
+        let pair = |c: &Coupling| {
+            (c.driver == coupling.driver && c.driven == coupling.driven)
+                || (c.driver == coupling.driven && c.driven == coupling.driver)
+        };
+        if let Some((id, _)) = self
+            .couplings()
+            .find(|(id, c)| Some(*id) != except && pair(c))
+        {
+            return Err(format!(
+                "joints {} and {} are already coupled by {id}",
+                coupling.driver, coupling.driven
+            ));
+        }
+        Ok(())
+    }
+
+    /// The steps that remove every coupling of a joint in `joints`, applied.
+    fn drop_couplings_of(&mut self, joints: &BTreeSet<JointId>) -> SceneChange {
+        let gone: Vec<(CouplingId, Coupling)> = self
+            .couplings()
+            .filter(|(_, c)| joints.contains(&c.driver) || joints.contains(&c.driven))
+            .map(|(id, c)| (id, *c))
+            .collect();
+        let mut steps = Vec::new();
+        for (id, c) in gone {
+            let step = Step::RemoveCoupling(id, c);
+            self.apply_step(&step);
+            steps.push(step);
+        }
+        SceneChange { steps }
     }
 
     /// "Joint" followed by the lowest number from 1 no joint's name has ("Joint 1").
@@ -283,7 +387,7 @@ impl Scene {
     }
 
     /// The steps that remove every joint naming an instance that is no longer an instance of
-    /// the root (erased, grouped or exploded), applied.
+    /// the root (erased, grouped or exploded), and those joints' couplings, applied.
     pub(crate) fn drop_stale_joints(&mut self) -> SceneChange {
         let stale: Vec<(JointId, Joint)> = self
             .joints()
@@ -293,7 +397,8 @@ impl Scene {
             })
             .map(|(id, j)| (id, j.clone()))
             .collect();
-        let mut steps = Vec::new();
+        let ids: BTreeSet<JointId> = stale.iter().map(|(id, _)| *id).collect();
+        let mut steps = self.drop_couplings_of(&ids).steps;
         for (id, joint) in stale {
             let step = Step::RemoveJoint(id, joint);
             self.apply_step(&step);

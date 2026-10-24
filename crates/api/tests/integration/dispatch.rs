@@ -261,6 +261,8 @@ fn describe_lists_methods_and_schemas() {
         "change_joint",
         "delete_joint",
         "drive",
+        "add_coupling",
+        "delete_coupling",
         "position_texture",
         "soften_edges",
         "soften_by_angle",
@@ -298,6 +300,7 @@ fn describe_lists_methods_and_schemas() {
         "styles",
         "joints",
         "\"joint\"",
+        "couplings",
         "\"scene\"",
         "outliner",
         "annotations",
@@ -1290,10 +1293,12 @@ fn describe_batch_schema_accepts_references() {
     assert_eq!(definition[1], json!({"$ref": "#/$defs/BatchRef"}));
     assert_eq!(
         defs["BatchRef"]["pattern"],
-        r"^\$(0|[1-9][0-9]*):(([vefigrnsmdyj])(0|[1-9][0-9]*|\*)|\*)$"
+        r"^\$(0|[1-9][0-9]*):(([vefigrnsmdyjk])(0|[1-9][0-9]*|\*)|\*)$"
     );
     let style = defs["StyleId"]["anyOf"].as_array().unwrap();
     assert_eq!(style[1], json!({"$ref": "#/$defs/BatchRef"}));
+    let coupling = defs["CouplingId"]["anyOf"].as_array().unwrap();
+    assert_eq!(coupling[1], json!({"$ref": "#/$defs/BatchRef"}));
     assert!(
         d["methods"]["execute"]["params_schema"]["$defs"]
             .get("BatchRef")

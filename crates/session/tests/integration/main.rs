@@ -12,6 +12,7 @@ mod circle;
 mod clip;
 mod commands;
 mod contract;
+mod couplings;
 mod curves;
 mod drawing;
 mod explode_view;

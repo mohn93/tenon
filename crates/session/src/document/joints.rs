@@ -2,13 +2,13 @@
 
 use glam::{DAffine3, DVec3};
 use kernel::{
-    EntityId, InstanceId, Joint, JointFrame, JointId, JointKind, KernelError, SceneChange,
-    perpendicular,
+    Coupling, CouplingId, EntityId, InstanceId, Joint, JointFrame, JointId, JointKind, KernelError,
+    SceneChange, perpendicular,
 };
 
 use super::{Document, check_coordinates, unit_vector};
 use crate::command::{CommandError, ErrorKind};
-use crate::query::JointInfo;
+use crate::query::{CouplingInfo, JointInfo};
 use crate::rectangle::rectangle_axes;
 
 /// The fields of `add_joint`.
@@ -21,6 +21,19 @@ pub(super) struct NewJoint<'a> {
     pub reference: Option<[f64; 3]>,
     pub name: Option<&'a str>,
     pub limits: Option<[f64; 2]>,
+}
+
+/// The largest size of a coupling's ratio, in the joints' units (degrees or meters).
+pub const MAX_COUPLING_RATIO: f64 = 1000.0;
+
+/// How many radians or meters one unit of a joint of `kind` is in the API (a degree or a
+/// meter).
+fn unit(kind: JointKind) -> f64 {
+    if kind.is_angular() {
+        1f64.to_radians()
+    } else {
+        1.0
+    }
 }
 
 fn invalid(why: impl Into<String>) -> CommandError {
@@ -161,6 +174,75 @@ impl Document {
         self.scene
             .drive_joint(id, value, slide)
             .map_err(|e| joint_error(e, Some(id)))
+    }
+
+    /// Couples `driven` to `driver`: `ratio` and `offset` in the joints' API units (degrees or
+    /// meters); no offset takes the one that holds now.
+    pub(super) fn add_coupling_changes(
+        &mut self,
+        driver: JointId,
+        driven: JointId,
+        ratio: f64,
+        offset: Option<f64>,
+    ) -> Result<SceneChange, CommandError> {
+        let (driver_joint, driven_joint) = (self.joint_ref(driver)?, self.joint_ref(driven)?);
+        if !ratio.is_finite() || ratio == 0.0 || ratio.abs() > MAX_COUPLING_RATIO {
+            return Err(invalid(format!(
+                "ratio must be a finite number other than 0, at most {MAX_COUPLING_RATIO} in size"
+            )));
+        }
+        if offset.is_some_and(|o| !o.is_finite()) {
+            return Err(invalid("offset must be a finite number"));
+        }
+        let (from, to) = (unit(driver_joint.kind), unit(driven_joint.kind));
+        let ratio = ratio * (to / from);
+        let offset = match offset {
+            Some(o) => o * to,
+            None => driven_joint.value - ratio * driver_joint.value,
+        };
+        let coupling = Coupling {
+            driver,
+            driven,
+            ratio,
+            offset,
+        };
+        let (_, change) = self
+            .scene
+            .add_coupling(coupling)
+            .map_err(|e| joint_error(e, None))?;
+        Ok(change)
+    }
+
+    /// Removes a coupling.
+    pub(super) fn delete_coupling_changes(
+        &mut self,
+        id: CouplingId,
+    ) -> Result<SceneChange, CommandError> {
+        self.scene.delete_coupling(id).map_err(|e| match e {
+            KernelError::CouplingNotFound => {
+                CommandError::new(ErrorKind::NotFound, format!("no coupling {id}"))
+            }
+            e => joint_error(e, None),
+        })
+    }
+
+    /// Every coupling, in the order they were made, in the joints' API units.
+    pub(super) fn coupling_infos(&self) -> Vec<CouplingInfo> {
+        self.scene
+            .couplings()
+            .map(|(id, c)| {
+                let kind =
+                    |j: JointId| self.scene.joint(j).map_or(JointKind::Prismatic, |j| j.kind);
+                let (from, to) = (unit(kind(c.driver)), unit(kind(c.driven)));
+                CouplingInfo {
+                    id,
+                    driver: c.driver,
+                    driven: c.driven,
+                    ratio: c.ratio * (from / to),
+                    offset: c.offset / to,
+                }
+            })
+            .collect()
     }
 
     /// Every joint, in the order they were made.

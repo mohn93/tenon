@@ -9,6 +9,12 @@
 //! them; a large drive is taken in small steps from the current value, each starting from the
 //! last step's motion taken again, so a closed loop keeps its branch (a piston stays on its
 //! side of the crank, a parallelogram stays one through its flat point).
+//!
+//! A coupling between two joints of the assembly adds one residual, the driven joint's value
+//! less the ratio times the driver's less the offset, both values measured from the pose as
+//! the turn nearest their values at the start of the step (so a value counts on past a full
+//! turn: a cam coupled 1:2 to a crank turns once in two). Joints linked only through a coupling
+//! (a crank and a cam on separate shafts) are one assembly.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -68,9 +74,22 @@ struct Link {
     driven: bool,
 }
 
+/// A coupling of the assembly: `links[driven]`'s value less `ratio` times `links[driver]`'s
+/// less `offset` is held at 0.
+struct Bond {
+    driver: usize,
+    driven: usize,
+    ratio: f64,
+    offset: f64,
+}
+
 /// The assembly being solved: its joints, and the movable parts' current transforms.
 struct System {
     links: Vec<Link>,
+    bonds: Vec<Bond>,
+    /// Each link's value and slide at the start of the step: a value is measured as the turn
+    /// nearest it.
+    near: Vec<(f64, f64)>,
     parts: Vec<InstanceId>,
     poses: Vec<DAffine3>,
     /// Where each part's rotation unknowns turn about: the mean of its joints' origins.
@@ -184,13 +203,37 @@ impl System {
             Body::Held(t) => t,
             Body::Part(i) => poses[i],
         };
-        self.links
+        let joints: f64 = self
+            .links
             .iter()
             .map(|l| {
                 let (r, n) = self.link_rows(l, &pose(l.a), &pose(l.b), target);
                 r[..n].iter().map(|x| x * x).sum::<f64>()
             })
-            .sum()
+            .sum();
+        let bonds: f64 = self
+            .bonds
+            .iter()
+            .map(|b| self.bond_residual(b, &pose).powi(2))
+            .sum();
+        joints + bonds
+    }
+
+    /// The value of `links[k]` with the parts at `pose`, the turn nearest its value at the
+    /// start of the step.
+    fn link_value(&self, k: usize, pose: &dyn Fn(Body) -> DAffine3) -> f64 {
+        let link = &self.links[k];
+        let a = link.frame_a.world(&pose(link.a));
+        let b = link.frame_b.world(&pose(link.b));
+        let (value, slide) = self.near[k];
+        measure_joint(link.kind, &a, &b, value, slide).0
+    }
+
+    /// The residual of a coupling with the parts at `pose`: zero when it holds.
+    fn bond_residual(&self, bond: &Bond, pose: &dyn Fn(Body) -> DAffine3) -> f64 {
+        self.link_value(bond.driven, pose)
+            - bond.ratio * self.link_value(bond.driver, pose)
+            - bond.offset
     }
 
     /// The normal equations `J^T J` (row-major, 6 unknowns per part) and `J^T r` at the
@@ -225,6 +268,41 @@ impl System {
                 jtr[*p] += (0..m).map(|r| dp[r] * r0[r]).sum::<f64>();
                 for (q, dq) in &cols {
                     jtj[p * n + q] += (0..m).map(|r| dp[r] * dq[r]).sum::<f64>();
+                }
+            }
+        }
+        for bond in &self.bonds {
+            let current = |b: Body| self.pose(b);
+            let r0 = self.bond_residual(bond, &current);
+            let mut parts: Vec<usize> = [bond.driver, bond.driven]
+                .iter()
+                .flat_map(|k| [self.links[*k].a, self.links[*k].b])
+                .filter_map(|b| match b {
+                    Body::Part(i) => Some(i),
+                    Body::Held(_) => None,
+                })
+                .collect();
+            parts.sort_unstable();
+            parts.dedup();
+            let mut cols: Vec<(usize, f64)> = Vec::with_capacity(6 * parts.len());
+            for i in parts {
+                for k in 0..6 {
+                    let at = |h: f64| {
+                        let (w, t) = unknown(k, h);
+                        let moved = rigid(w, t, self.pivots[i]) * self.poses[i];
+                        let pose = |b: Body| match b {
+                            Body::Part(j) if j == i => moved,
+                            b => self.pose(b),
+                        };
+                        self.bond_residual(bond, &pose)
+                    };
+                    cols.push((6 * i + k, (at(NUDGE) - at(-NUDGE)) / (2.0 * NUDGE)));
+                }
+            }
+            for (p, dp) in &cols {
+                jtr[*p] += dp * r0;
+                for (q, dq) in &cols {
+                    jtj[p * n + q] += dp * dq;
                 }
             }
         }
@@ -280,6 +358,37 @@ impl System {
             }
         }
         cost
+    }
+
+    /// How many steps keep every angle coupled to the driven link's turning by at most 10
+    /// degrees a step, when the driven link's value changes by `change`: each coupled link's
+    /// change follows through the couplings, either way.
+    fn coupled_steps(&self, change: f64) -> usize {
+        let mut changes: Vec<Option<f64>> = self
+            .links
+            .iter()
+            .map(|l| l.driven.then_some(change))
+            .collect();
+        let mut more = true;
+        while more {
+            more = false;
+            for b in &self.bonds {
+                match (changes[b.driver], changes[b.driven]) {
+                    (Some(d), None) => changes[b.driven] = Some(b.ratio * d),
+                    (None, Some(d)) => changes[b.driver] = Some(d / b.ratio),
+                    _ => continue,
+                }
+                more = true;
+            }
+        }
+        self.links
+            .iter()
+            .zip(&changes)
+            .filter(|(l, _)| l.kind.is_angular())
+            .filter_map(|(_, c)| *c)
+            .map(|c| turn_steps(c.abs()))
+            .max()
+            .unwrap_or(1)
     }
 
     /// Every link's value and slide at the current poses, each angle the turn nearest the
@@ -403,7 +512,8 @@ impl Scene {
                 (j.value, j.slide)
             })
             .collect();
-        let steps = drive_steps(&driven, value, slide);
+        let steps =
+            drive_steps(&driven, value, slide).max(system.coupled_steps(value - driven.value));
         let unmet = || {
             refuse(format!(
                 "the joints cannot all be met at {}",
@@ -424,6 +534,7 @@ impl Scene {
                     slide: driven.slide + (slide - driven.slide) * f,
                 }
             };
+            system.near.clone_from(&values);
             let from = system.poses.clone();
             let met = |cost: f64| !cost.is_nan() && cost.sqrt() <= DRIVE_TOLERANCE;
             let mut cost = f64::NAN;
@@ -498,14 +609,23 @@ impl Scene {
     }
 
     /// The assembly of joint `id`: the parts connected to it through joints (not through the
-    /// ground), every joint between them, and which parts move.
+    /// ground) and couplings, every joint and coupling between them, and which parts move.
     fn assembly(&self, id: JointId, driven: &Joint) -> System {
         let mut neighbours: BTreeMap<InstanceId, Vec<InstanceId>> = BTreeMap::new();
+        let mut join = |x: InstanceId, y: InstanceId| {
+            neighbours.entry(x).or_default().push(y);
+            neighbours.entry(y).or_default().push(x);
+        };
         for (_, j) in self.joints() {
             if let Some(a) = j.a {
-                neighbours.entry(a).or_default().push(j.b);
-                neighbours.entry(j.b).or_default().push(a);
+                join(a, j.b);
             }
+        }
+        for (_, c) in self.couplings() {
+            let (Some(x), Some(y)) = (self.joint(c.driver), self.joint(c.driven)) else {
+                continue;
+            };
+            join(x.b, y.b);
         }
         let mut members: BTreeSet<InstanceId> = BTreeSet::new();
         let mut queue: VecDeque<InstanceId> = driven.a.into_iter().chain([driven.b]).collect();
@@ -547,6 +667,26 @@ impl Scene {
                 driven: *jid == id,
             })
             .collect();
+        let link_index: BTreeMap<JointId, usize> =
+            links.iter().enumerate().map(|(k, l)| (l.id, k)).collect();
+        let bonds: Vec<Bond> = self
+            .couplings()
+            .filter_map(|(_, c)| {
+                Some(Bond {
+                    driver: *link_index.get(&c.driver)?,
+                    driven: *link_index.get(&c.driven)?,
+                    ratio: c.ratio,
+                    offset: c.offset,
+                })
+            })
+            .collect();
+        let near = links
+            .iter()
+            .map(|l| {
+                let j = &self.joints[&l.id];
+                (j.value, j.slide)
+            })
+            .collect();
         let poses: Vec<DAffine3> = parts.iter().map(|i| transform(*i)).collect();
         let mut sums = vec![(DVec3::ZERO, 0usize); parts.len()];
         for (_, j) in &joints {
@@ -564,6 +704,8 @@ impl Scene {
             .collect();
         System {
             links,
+            bonds,
+            near,
             parts,
             poses,
             pivots,
@@ -571,11 +713,16 @@ impl Scene {
     }
 }
 
+/// How many steps of at most 10 degrees turn through `angle` (not negative).
+fn turn_steps(angle: f64) -> usize {
+    // A hair under a whole number of steps is that number (720 degrees is 72 steps).
+    (angle / MAX_ANGLE_STEP - 1e-9).ceil().max(1.0) as usize
+}
+
 /// How many steps a drive of `joint` to `value` and `slide` takes: turns of at most 10
 /// degrees, slides in tenths.
 fn drive_steps(joint: &Joint, value: f64, slide: f64) -> usize {
-    // A hair under a whole number of steps is that number (720 degrees is 72 steps).
-    let turn = |from: f64, to: f64| ((to - from).abs() / MAX_ANGLE_STEP - 1e-9).ceil() as usize;
+    let turn = |from: f64, to: f64| turn_steps((to - from).abs());
     let slid = |from: f64, to: f64| if from == to { 1 } else { SLIDE_STEPS };
     let n = match joint.kind {
         JointKind::Revolute => turn(joint.value, value),

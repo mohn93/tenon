@@ -49,18 +49,18 @@ pub fn any_of_root(schemas: Vec<Value>) -> Value {
 }
 
 /// The grammar of a batch reference, whole string.
-const BATCH_REF_PATTERN: &str = r"^\$(0|[1-9][0-9]*):(([vefigrnsmdyj])(0|[1-9][0-9]*|\*)|\*)$";
+const BATCH_REF_PATTERN: &str = r"^\$(0|[1-9][0-9]*):(([vefigrnsmdyjk])(0|[1-9][0-9]*|\*)|\*)$";
 
 /// The schema of a batch reference: a string naming ids an earlier command of the batch made.
 pub fn batch_ref_schema() -> Value {
     json!({
         "type": "string",
         "pattern": BATCH_REF_PATTERN,
-        "description": "In a batch, ids an earlier command of it made: \"$N:KI\" the I-th id of kind K (v vertex, e edge, f face, i instance, g guide, r dimension, n note, s section plane, m material, d definition, y style, j joint) command N made, \"$N:K*\" all of that kind (in id lists only), \"$N:*\" every edge, face, instance, guide, dimension, note and section plane it created."
+        "description": "In a batch, ids an earlier command of it made: \"$N:KI\" the I-th id of kind K (v vertex, e edge, f face, i instance, g guide, r dimension, n note, s section plane, m material, d definition, y style, j joint, k coupling) command N made, \"$N:K*\" all of that kind (in id lists only), \"$N:*\" every edge, face, instance, guide, dimension, note and section plane it created."
     })
 }
 
-/// Lets the `EntityId`, `MaterialId`, `DefinitionId`, `StyleId` and `JointId` definitions in `defs` also be
+/// Lets the `EntityId`, `MaterialId`, `DefinitionId`, `StyleId`, `JointId` and `CouplingId` definitions in `defs` also be
 /// batch references (`anyOf` the id or a `BatchRef`) and adds the `BatchRef` definition.
 pub fn with_batch_refs(defs: &mut Map<String, Value>) {
     for name in [
@@ -69,6 +69,7 @@ pub fn with_batch_refs(defs: &mut Map<String, Value>) {
         "DefinitionId",
         "StyleId",
         "JointId",
+        "CouplingId",
     ] {
         if let Some(def) = defs.get_mut(name) {
             let id = def.take();

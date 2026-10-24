@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::annotation::{Dimension, Note};
 use crate::geom::{LENGTH_TOL, vector_area};
 use crate::ids::{
-    CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, JointId,
-    MaterialId, NoteId, PageId, SectionId, StyleId, TagId, VertexId,
+    CouplingId, CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId,
+    JointId, MaterialId, NoteId, PageId, SectionId, StyleId, TagId, VertexId,
 };
 use crate::index::Index;
 use crate::section::SectionPlane;
@@ -415,6 +415,9 @@ pub struct ChangeSummary {
     /// none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub joints: Vec<JointId>,
+    /// Couplings added or removed (see `SceneChange::summary`). Absent when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub couplings: Vec<CouplingId>,
 }
 
 impl ChangeSummary {
@@ -429,6 +432,7 @@ impl ChangeSummary {
         let mut scenes = BTreeSet::new();
         let mut styles = BTreeSet::new();
         let mut joints = BTreeSet::new();
+        let mut couplings = BTreeSet::new();
         for s in summaries {
             let listed = s
                 .created
@@ -444,6 +448,7 @@ impl ChangeSummary {
             scenes.extend(s.scenes.iter().copied());
             styles.extend(s.styles.iter().copied());
             joints.extend(s.joints.iter().copied());
+            couplings.extend(s.couplings.iter().copied());
         }
         let mut net = ChangeSummary::default();
         for (id, (before, after)) in state {
@@ -459,6 +464,7 @@ impl ChangeSummary {
         net.scenes = scenes.into_iter().collect();
         net.styles = styles.into_iter().collect();
         net.joints = joints.into_iter().collect();
+        net.couplings = couplings.into_iter().collect();
         net
     }
 }
@@ -1572,6 +1578,7 @@ mod tests {
             scenes: vec![],
             styles: vec![],
             joints: vec![],
+            couplings: vec![],
         };
         let b = ChangeSummary {
             created: vec![v(3)],
@@ -1582,6 +1589,7 @@ mod tests {
             scenes: vec![],
             styles: vec![],
             joints: vec![],
+            couplings: vec![],
         };
         let net = ChangeSummary::join([&a, &b]);
         // made then changed is made; made then erased is gone

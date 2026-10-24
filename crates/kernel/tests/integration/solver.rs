@@ -10,12 +10,15 @@ use kernel::{
     Scene,
 };
 
-fn p(x: f64, y: f64, z: f64) -> DVec3 {
+pub(crate) fn p(x: f64, y: f64, z: f64) -> DVec3 {
     DVec3::new(x, y, z)
 }
 
 /// A scene with `n` instances of a small box component, each placed by `place(k)`.
-fn parts_placed(n: usize, place: impl Fn(usize) -> DAffine3) -> (Scene, Vec<InstanceId>) {
+pub(crate) fn parts_placed(
+    n: usize,
+    place: impl Fn(usize) -> DAffine3,
+) -> (Scene, Vec<InstanceId>) {
     let mut m = Model::new();
     let c = m
         .add_polygon(&[
@@ -58,16 +61,16 @@ fn parts_placed(n: usize, place: impl Fn(usize) -> DAffine3) -> (Scene, Vec<Inst
     (s, ids)
 }
 
-fn parts(n: usize) -> (Scene, Vec<InstanceId>) {
+pub(crate) fn parts(n: usize) -> (Scene, Vec<InstanceId>) {
     parts_placed(n, |_| DAffine3::IDENTITY)
 }
 
-fn transform(s: &Scene, i: InstanceId) -> DAffine3 {
+pub(crate) fn transform(s: &Scene, i: InstanceId) -> DAffine3 {
     s.root().instance(i).unwrap().transform
 }
 
 /// Adds a joint whose world frame is (`point`, `axis`, `reference`) as the parts stand now.
-fn join(
+pub(crate) fn join(
     s: &mut Scene,
     kind: JointKind,
     a: Option<InstanceId>,
@@ -100,17 +103,17 @@ fn join(
     s.add_joint(joint).unwrap().0
 }
 
-fn value(s: &Scene, j: JointId) -> f64 {
+pub(crate) fn value(s: &Scene, j: JointId) -> f64 {
     s.joint(j).unwrap().value
 }
 
-const R: f64 = 0.05;
-const L: f64 = 0.15;
+pub(crate) const R: f64 = 0.05;
+pub(crate) const L: f64 = 0.15;
 
 /// A slider-crank in the XY plane: a crank turning about Z at the origin (pin at (R, 0)), a rod
 /// of length L and a piston sliding along X. Returns the scene, [crank, rod, piston] and the
 /// joints [crank, crank pin, wrist pin, bore].
-fn slider_crank(rod_place: DAffine3) -> (Scene, [InstanceId; 3], [JointId; 4]) {
+pub(crate) fn slider_crank(rod_place: DAffine3) -> (Scene, [InstanceId; 3], [JointId; 4]) {
     let (mut s, ids) = parts_placed(3, |k| {
         if k == 1 {
             rod_place
@@ -152,7 +155,7 @@ fn slider_crank(rod_place: DAffine3) -> (Scene, [InstanceId; 3], [JointId; 4]) {
     (s, [crank, rod, piston], [j0, j1, j2, j3])
 }
 
-fn piston_x(t: f64) -> f64 {
+pub(crate) fn piston_x(t: f64) -> f64 {
     R * t.cos() + (L * L - R * R * t.sin().powi(2)).sqrt()
 }
 
@@ -251,19 +254,19 @@ fn a_four_bar_rocker_follows_its_exact_angle() {
 /// piston sliding along its bank's bore (banks at +/-30 degrees from Z). Cylinders share pins
 /// in pairs, the pins 120 degrees apart. Returns the scene, the crank, the pistons with their
 /// bore (start, direction) and wrist pin, and the crank's joint.
-struct Engine {
-    scene: Scene,
-    crank: InstanceId,
-    crank_joint: JointId,
-    pistons: Vec<(InstanceId, DVec3, DVec3)>,
-    rods: Vec<(InstanceId, DVec3)>,
-    joints: Vec<JointId>,
+pub(crate) struct Engine {
+    pub(crate) scene: Scene,
+    pub(crate) crank: InstanceId,
+    pub(crate) crank_joint: JointId,
+    pub(crate) pistons: Vec<(InstanceId, DVec3, DVec3)>,
+    pub(crate) rods: Vec<(InstanceId, DVec3)>,
+    pub(crate) joints: Vec<JointId>,
 }
 
-const ER: f64 = 0.04;
-const EL: f64 = 0.14;
+pub(crate) const ER: f64 = 0.04;
+pub(crate) const EL: f64 = 0.14;
 
-fn engine(cylinders: usize, flywheel: bool) -> Engine {
+pub(crate) fn engine(cylinders: usize, flywheel: bool) -> Engine {
     let n = 1 + 2 * cylinders + usize::from(flywheel);
     let (mut s, ids) = parts(n);
     let crank = ids[0];
@@ -344,7 +347,7 @@ fn engine(cylinders: usize, flywheel: bool) -> Engine {
 }
 
 /// Every piston's wrist pin lies on its bore line at the exact distance for the crank angle.
-fn check_engine(e: &Engine, wrists: &[DVec3]) {
+pub(crate) fn check_engine(e: &Engine, wrists: &[DVec3]) {
     let s = &e.scene;
     for (k, ((piston, base, dir), wrist0)) in e.pistons.iter().zip(wrists).enumerate() {
         let wrist = transform(s, *piston).transform_point3(*wrist0);
@@ -363,7 +366,7 @@ fn check_engine(e: &Engine, wrists: &[DVec3]) {
     }
 }
 
-fn wrists(e: &Engine) -> Vec<DVec3> {
+pub(crate) fn wrists(e: &Engine) -> Vec<DVec3> {
     e.pistons
         .iter()
         .map(|(piston, _, _)| {

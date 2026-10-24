@@ -5,6 +5,7 @@ mod annotations;
 mod axes;
 mod clip;
 mod connected;
+mod couplings;
 mod curves;
 mod data;
 mod density;

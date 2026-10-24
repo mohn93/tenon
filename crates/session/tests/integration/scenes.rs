@@ -1069,7 +1069,7 @@ fn the_scene_transition_is_saved_and_the_schema_is_20_only_when_it_is_not_the_de
         session::file::TRANSITION_SCHEMA_VERSION
     );
     assert_eq!(session::file::TRANSITION_SCHEMA_VERSION, 24);
-    assert_eq!(session::file::SCHEMA_VERSION, 26);
+    assert_eq!(session::file::SCHEMA_VERSION, 27);
     let mut e = doc();
     run(
         &mut e,

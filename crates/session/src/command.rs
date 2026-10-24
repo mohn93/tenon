@@ -2,8 +2,8 @@ use std::fmt;
 use std::path::PathBuf;
 
 use kernel::{
-    ChangeSummary, DefinitionId, EdgeColorMode, EntityId, Fog, Ground, JointId, JointKind,
-    MaterialId, PageId, Side, Sketchy, SoftenReport, StyleId, TagId,
+    ChangeSummary, CouplingId, DefinitionId, EdgeColorMode, EntityId, Fog, Ground, JointId,
+    JointKind, MaterialId, PageId, Side, Sketchy, SoftenReport, StyleId, TagId,
 };
 
 use schemars::JsonSchema;
@@ -1001,6 +1001,27 @@ pub enum Command {
         #[serde(default)]
         slide: Option<f64>,
     },
+    /// Couple two joints' values, as gears, chains, belts and racks do, as one undo step:
+    /// every drive then holds `driven = ratio * driver + offset`. Values are in the joints'
+    /// units (degrees for revolute and cylindrical joints, their angle; meters for prismatic
+    /// ones), so `ratio` is driven units per driver unit: 0.5 for a cam turning once in two
+    /// crank turns, negative for meshed gears turning opposite ways, meters per degree for a
+    /// pinion driving a rack. `ratio` is finite, not 0 and at most 1000 in size; `offset`
+    /// (driven units, default: the value that holds now, so adding a coupling moves nothing).
+    /// The joints are linked into one assembly however their parts are connected. Two joints
+    /// can be coupled once; a fixed or ball joint has no value to couple. Couplings that
+    /// contradict each other (a cycle whose ratios do not multiply to 1) are refused when a
+    /// drive cannot meet them. The new id ("k<n>") is in the outcome's `changes.couplings`.
+    AddCoupling {
+        driver: JointId,
+        driven: JointId,
+        ratio: f64,
+        #[serde(default)]
+        offset: Option<f64>,
+    },
+    /// Remove a coupling, as one undo step. Deleting a joint (or erasing its part) removes
+    /// its couplings in the same step.
+    DeleteCoupling { coupling: CouplingId },
     /// Hide edges, faces, instances and guides of the open context, as one undo step (an
     /// entity already hidden is ignored; none to hide is a success with no undo step).
     /// A hidden entity is not drawn, picked or snapped to, and leaves the selection.

@@ -855,6 +855,8 @@ impl Document {
             | Command::ChangeJoint { .. }
             | Command::DeleteJoint { .. }
             | Command::Drive { .. }
+            | Command::AddCoupling { .. }
+            | Command::DeleteCoupling { .. }
             | Command::Hide { .. }
             | Command::Unhide { .. }
             | Command::UnhideLast {}
@@ -1334,6 +1336,13 @@ impl Document {
                 value,
                 slide,
             } => self.drive_changes(*joint, *value, *slide),
+            Command::AddCoupling {
+                driver,
+                driven,
+                ratio,
+                offset,
+            } => self.add_coupling_changes(*driver, *driven, *ratio, *offset),
+            Command::DeleteCoupling { coupling } => self.delete_coupling_changes(*coupling),
             Command::Hide { ids } => self.hide_changes(ids),
             Command::SetSectionCut { ids, cut } => self.set_section_cut_changes(ids, *cut),
             Command::Unhide { ids } => self.unhide_changes(ids),
@@ -2954,6 +2963,10 @@ impl Document {
                 revision: self.revision,
             },
             Query::Joint { id } => QueryResult::Joint(self.joint_info_of(*id)?),
+            Query::Couplings {} => QueryResult::Couplings {
+                couplings: self.coupling_infos(),
+                revision: self.revision,
+            },
             Query::Styles {} => QueryResult::Styles {
                 styles: self.style_infos(),
                 revision: self.revision,

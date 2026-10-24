@@ -36,11 +36,13 @@ pub const FORMAT: &str = "sketchup-alt";
 /// 20 studio lighting, and version 21 ambient occlusion in a style, and version 22 the material
 /// section fill and instances left whole by section planes, version 23 the instance positions a
 /// scene stores, and version 24 the scene transition setting, and version 25 joints, and version
-/// 26 material density; older files still open
+/// 26 material density, and version 27 couplings between joints; older files still open
 /// (untagged before version 10, without scenes before version 11, without annotations and in
 /// the default units before version 12, without section planes and with the default section
 /// display before version 13).
-pub const SCHEMA_VERSION: u32 = 26;
+pub const SCHEMA_VERSION: u32 = 27;
+/// The version written when the model has a coupling between joints.
+pub const COUPLINGS_SCHEMA_VERSION: u32 = 27;
 /// The version written when a material has a density.
 pub const DENSITY_SCHEMA_VERSION: u32 = 26;
 /// The version written when the model has a joint.
@@ -364,7 +366,9 @@ pub(crate) fn write_bytes(
     images.dedup_by(|a, b| a.0 == b.0);
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: if weighed {
+        schema_version: if !model.couplings.is_empty() {
+            COUPLINGS_SCHEMA_VERSION
+        } else if weighed {
             DENSITY_SCHEMA_VERSION
         } else if !model.joints.is_empty() {
             JOINTS_SCHEMA_VERSION

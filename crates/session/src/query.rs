@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use kernel::{
-    ChangeSummary, CurveKind, DefinitionId, DefinitionKind, EntityId, ImageFormat, JointId,
-    JointKind, MaterialId, PageId, StyleId, StyleSettings, TagId, TexturePlacement,
+    ChangeSummary, CouplingId, CurveKind, DefinitionId, DefinitionKind, EntityId, ImageFormat,
+    JointId, JointKind, MaterialId, PageId, StyleId, StyleSettings, TagId, TexturePlacement,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -145,6 +145,8 @@ pub enum Query {
     Joint {
         id: JointId,
     },
+    /// Every coupling between joints, in the order they were made (see `add_coupling`).
+    Couplings {},
     /// One scene: the view and the hidden tags it stores.
     Scene {
         scene: PageId,
@@ -908,6 +910,17 @@ pub struct JointInfo {
     pub axis: [f64; 3],
 }
 
+/// A coupling in the `couplings` list: `driven = ratio * driver + offset`, in the joints'
+/// units (degrees or meters; `ratio` is driven units per driver unit, `offset` driven units).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CouplingInfo {
+    pub id: CouplingId,
+    pub driver: JointId,
+    pub driven: JointId,
+    pub ratio: f64,
+    pub offset: f64,
+}
+
 /// A material's texture: the size one copy covers on the model, in meters, and the image's.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TextureInfo {
@@ -1070,6 +1083,11 @@ pub enum QueryResult {
         revision: u64,
     },
     Joint(JointInfo),
+    /// The couplings, in the order they were made.
+    Couplings {
+        couplings: Vec<CouplingInfo>,
+        revision: u64,
+    },
     Scenes {
         scenes: Vec<SceneInfo>,
         revision: u64,

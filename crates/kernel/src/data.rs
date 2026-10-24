@@ -57,6 +57,10 @@ pub struct SceneData {
     /// when there are none).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub joints: Vec<JointData>,
+    /// The couplings between joints' values. Absent in files written before couplings
+    /// existed (and when there are none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub couplings: Vec<CouplingData>,
     /// The model axes. Absent in files written before axes existed (and when they are the
     /// world axes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -93,6 +97,18 @@ pub struct JointData {
 
 fn is_zero(x: &f64) -> bool {
     *x == 0.0
+}
+
+/// A coupling: see [`crate::Coupling`]. `driver` and `driven` are joint ids; the ratio and
+/// offset are in the joints' own units (radians or meters).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CouplingData {
+    pub id: u64,
+    pub driver: u64,
+    pub driven: u64,
+    pub ratio: f64,
+    pub offset: f64,
 }
 
 /// A joint frame: see [`crate::JointFrame`].
@@ -590,6 +606,16 @@ impl Scene {
                     }
                 })
                 .collect(),
+            couplings: self
+                .couplings()
+                .map(|(id, c)| CouplingData {
+                    id: id.0,
+                    driver: c.driver.0,
+                    driven: c.driven.0,
+                    ratio: c.ratio,
+                    offset: c.offset,
+                })
+                .collect(),
             location: (!self.location().is_default()).then(|| {
                 let l = self.location();
                 LocationData {
@@ -741,9 +767,27 @@ impl Scene {
                 return Err(format!("joint j{} appears twice", j.id));
             }
         }
+        let mut couplings = BTreeMap::new();
+        for c in &data.couplings {
+            check_id("coupling k", c.id)?;
+            let coupling = crate::Coupling {
+                driver: crate::JointId(c.driver),
+                driven: crate::JointId(c.driven),
+                ratio: c.ratio,
+                offset: c.offset,
+            };
+            if couplings
+                .insert(crate::CouplingId(c.id), coupling)
+                .is_some()
+            {
+                return Err(format!("coupling k{} appears twice", c.id));
+            }
+        }
         let next_after_joints = joints
             .keys()
-            .map(|id: &crate::JointId| id.0.saturating_add(1))
+            .map(|id: &crate::JointId| id.0)
+            .chain(couplings.keys().map(|id: &crate::CouplingId| id.0))
+            .map(|id| id.saturating_add(1))
             .max()
             .unwrap_or(0);
         let mut scene = Scene::from_meshes(
@@ -756,6 +800,7 @@ impl Scene {
             data.next_id.max(next_after_joints),
         );
         scene.joints = joints;
+        scene.couplings = couplings;
         if let Some(a) = &data.axes {
             scene.axes = Axes::from_parts(a.origin.into(), a.x.into(), a.y.into(), a.z.into())
                 .map_err(|e| e.to_string())?;

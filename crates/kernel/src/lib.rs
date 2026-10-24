@@ -60,15 +60,15 @@ pub use axes::Axes;
 pub use clip::Inserted;
 pub use curves::{Curve, CurveCircle, CurveKind};
 pub use data::{
-    AnchorData, AxesData, CircleData, DefinitionData, DimensionData, EdgeData, FaceData, GuideData,
-    InstanceData, JointData, JointFrameData, LocationData, MAX_ID, MIN_DETERMINANT, MaterialData,
-    MeshData, NoteData, PageData, PagePosition, RadialAnchorData, SceneData, SectionData,
-    StyleData, TagData, TextureData, TransitionData, VertexData,
+    AnchorData, AxesData, CircleData, CouplingData, DefinitionData, DimensionData, EdgeData,
+    FaceData, GuideData, InstanceData, JointData, JointFrameData, LocationData, MAX_ID,
+    MIN_DETERMINANT, MaterialData, MeshData, NoteData, PageData, PagePosition, RadialAnchorData,
+    SceneData, SectionData, StyleData, TagData, TextureData, TransitionData, VertexData,
 };
 pub use edit::KernelError;
 pub use ids::{
-    CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, JointId,
-    MaterialId, NoteId, PageId, SectionId, StyleId, TagId, VertexId,
+    CouplingId, CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId,
+    JointId, MaterialId, NoteId, PageId, SectionId, StyleId, TagId, VertexId,
 };
 pub use import::{MAX_IMPORT_FACES, MeshPolygon, MeshReport};
 pub use import_tree::{
@@ -78,7 +78,8 @@ pub use import_tree::{
 };
 pub use index::{Index, Shape, ray_hits_triangle};
 pub use joint::{
-    JOINT_NAME_BASE, Joint, JointFrame, JointKind, MAX_JOINT_NAME, measure_joint, perpendicular,
+    Coupling, JOINT_NAME_BASE, Joint, JointFrame, JointKind, MAX_JOINT_NAME, measure_joint,
+    perpendicular,
 };
 pub use location::Location;
 pub use material::{

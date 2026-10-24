@@ -384,6 +384,58 @@ impl TryFrom<String> for JointId {
     }
 }
 
+/// A coupling between two joints' values (see `Coupling`). Serialized as "k<n>" ("c" is
+/// taken by curves). Coupling ids come from the same counter as entity ids, so they never
+/// repeat one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct CouplingId(pub u64);
+
+impl fmt::Display for CouplingId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "k{}", self.0)
+    }
+}
+
+impl FromStr for CouplingId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match parse_prefixed(s) {
+            Some(('k', n)) => Ok(CouplingId(n)),
+            _ => Err(format!("invalid coupling id {s:?}")),
+        }
+    }
+}
+
+impl schemars::JsonSchema for CouplingId {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "CouplingId".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "pattern": "^k(0|[1-9][0-9]*)$",
+            "description": "Coupling id: k<n>"
+        })
+    }
+}
+
+impl From<CouplingId> for String {
+    fn from(id: CouplingId) -> String {
+        id.to_string()
+    }
+}
+
+impl TryFrom<String> for CouplingId {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
 /// A style: named edge, background and fog settings a view may choose. Serialized as
 /// "y<n>". Style ids come from the same counter as entity ids, so they never repeat one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -483,6 +535,11 @@ mod tests {
         assert_eq!(JointId(5).to_string(), "j5");
         for s in ["", "j", "p5", "j05", "j+5"] {
             assert!(s.parse::<JointId>().is_err(), "{s:?} parsed");
+        }
+        assert_eq!("k5".parse::<CouplingId>(), Ok(CouplingId(5)));
+        assert_eq!(CouplingId(5).to_string(), "k5");
+        for s in ["", "k", "c5", "k05", "k+5"] {
+            assert!(s.parse::<CouplingId>().is_err(), "{s:?} parsed");
         }
         assert_eq!("y5".parse::<StyleId>(), Ok(StyleId(5)));
         assert_eq!(StyleId(5).to_string(), "y5");

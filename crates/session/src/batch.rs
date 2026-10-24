@@ -2,7 +2,7 @@
 //!
 //! In a batch, an id field may hold a reference instead of an id: `"$N:KI"` is the I-th id of
 //! kind K (`v e f i g r n s` from `changes.created`, `m` from `changes.materials`, `y` from
-//! `changes.styles`, `j` from `changes.joints`, `d` from the outcome's `definitions`) in command N's outcome, `"$N:K*"` all of that kind and `"$N:*"` every edge, face, instance, guide,
+//! `changes.styles`, `j` from `changes.joints`, `k` from `changes.couplings`, `d` from the outcome's `definitions`) in command N's outcome, `"$N:K*"` all of that kind and `"$N:*"` every edge, face, instance, guide,
 //! dimension, note and section plane command N created (not vertices: `"$N:v*"` names
 //! those). `*` references expand in place in id lists only.
 //!
@@ -12,8 +12,8 @@
 use std::fmt;
 
 use kernel::{
-    DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, JointId, MaterialId,
-    NoteId, SectionId, StyleId, VertexId,
+    CouplingId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, JointId,
+    MaterialId, NoteId, SectionId, StyleId, VertexId,
 };
 use serde_json::Value;
 
@@ -62,6 +62,7 @@ pub enum RefKind {
     Definition,
     Style,
     Joint,
+    Coupling,
 }
 
 impl RefKind {
@@ -79,6 +80,7 @@ impl RefKind {
             'd' => RefKind::Definition,
             'y' => RefKind::Style,
             'j' => RefKind::Joint,
+            'k' => RefKind::Coupling,
             _ => return None,
         })
     }
@@ -97,6 +99,7 @@ impl RefKind {
             RefKind::Definition => 'd',
             RefKind::Style => 'y',
             RefKind::Joint => 'j',
+            RefKind::Coupling => 'k',
         }
     }
 
@@ -127,6 +130,8 @@ impl RefKind {
             RefKind::Style => "styles",
             RefKind::Joint if one => "joint",
             RefKind::Joint => "joints",
+            RefKind::Coupling if one => "coupling",
+            RefKind::Coupling => "couplings",
         }
     }
 
@@ -169,7 +174,7 @@ impl fmt::Display for BatchRef {
 }
 
 impl BatchRef {
-    /// Reads `^\$(0|[1-9][0-9]*):(([vefigrnsmdyj])(0|[1-9][0-9]*|\*)|\*)$`.
+    /// Reads `^\$(0|[1-9][0-9]*):(([vefigrnsmdyjk])(0|[1-9][0-9]*|\*)|\*)$`.
     fn parse(text: &str) -> Option<BatchRef> {
         let (command, rest) = text.strip_prefix('$')?.split_once(':')?;
         let command = canonical_number(command)?;
@@ -293,6 +298,12 @@ impl BatchRef {
         Ok(self.pick(joints, RefKind::Joint)?[0])
     }
 
+    /// The coupling this reference stands for.
+    fn coupling(&self, done: &[Outcome]) -> Result<CouplingId, CommandError> {
+        let couplings = &self.outcome(done)?.changes.couplings;
+        Ok(self.pick(couplings, RefKind::Coupling)?[0])
+    }
+
     /// The material this reference stands for.
     fn material(&self, done: &[Outcome]) -> Result<MaterialId, CommandError> {
         let materials = &self.outcome(done)?.changes.materials;
@@ -342,6 +353,8 @@ fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
                     Some("add_dimension" | "solid_split" | "add_joint")
                 )
                 | ("joint", Some("change_joint" | "delete_joint" | "drive"))
+                | ("driver" | "driven", Some("add_coupling"))
+                | ("coupling", Some("delete_coupling"))
                 | ("edge", Some("add_edge_dimension" | "add_radial_dimension"))
                 | ("anchor", Some("add_note"))
                 | ("target", Some("add_label"))
@@ -380,8 +393,10 @@ impl BatchCommand {
                     Want::Definition
                 } else if key == "style" || key == "from" {
                     Want::Style
-                } else if key == "joint" {
+                } else if key == "joint" || key == "driver" || key == "driven" {
                     Want::Joint
+                } else if key == "coupling" {
+                    Want::Coupling
                 } else if key == "item" {
                     Want::Either
                 } else {
@@ -438,6 +453,7 @@ impl BatchCommand {
                 Slot::Definition(d) => usize::from(d.0 >= STAND_IN_BASE),
                 Slot::Style(s) => usize::from(s.0 >= STAND_IN_BASE),
                 Slot::Joint(j) => usize::from(j.0 >= STAND_IN_BASE),
+                Slot::Coupling(k) => usize::from(k.0 >= STAND_IN_BASE),
                 Slot::Item(r) => usize::from(is_stand_in_ref(r)),
             }
         });
@@ -488,6 +504,7 @@ impl BatchCommand {
                 Slot::Definition(d) => self.resolve_definition(d, done),
                 Slot::Style(s) => self.resolve_style(s, done),
                 Slot::Joint(j) => self.resolve_joint(j, done),
+                Slot::Coupling(k) => self.resolve_coupling(k, done),
                 Slot::Item(r) => self.resolve_item(r, done, context),
             };
             if let Err(e) = result {
@@ -572,6 +589,13 @@ impl BatchCommand {
         Ok(())
     }
 
+    fn resolve_coupling(&self, k: &mut CouplingId, done: &[Outcome]) -> Result<(), CommandError> {
+        if k.0 >= STAND_IN_BASE {
+            *k = self.reference(k.0).coupling(done)?;
+        }
+        Ok(())
+    }
+
     fn resolve_material(&self, m: &mut MaterialId, done: &[Outcome]) -> Result<(), CommandError> {
         if m.0 >= STAND_IN_BASE {
             *m = self.reference(m.0).material(done)?;
@@ -588,6 +612,7 @@ enum Want {
     Definition,
     Style,
     Joint,
+    Coupling,
     Either,
 }
 
@@ -607,6 +632,7 @@ fn replace(
             Want::Definition => text.parse::<DefinitionId>().map(|d| d.0).ok(),
             Want::Style => text.parse::<StyleId>().map(|s| s.0).ok(),
             Want::Joint => text.parse::<JointId>().map(|j| j.0).ok(),
+            Want::Coupling => text.parse::<CouplingId>().map(|k| k.0).ok(),
             Want::Entity => text.parse::<EntityId>().map(|id| number(&id)).ok(),
             Want::Either => text.parse::<LibraryRef>().ok().map(|r| match r {
                 LibraryRef::Entity(id) => number(&id),
@@ -636,6 +662,13 @@ fn replace(
     if want != Want::Joint && is_joint {
         return Err(format!("{text:?} is a joint, not an id of that kind"));
     }
+    let is_coupling = r.kind == Some(RefKind::Coupling);
+    if want == Want::Coupling && !is_coupling {
+        return Err(format!("{text:?} is not a coupling"));
+    }
+    if want != Want::Coupling && is_coupling {
+        return Err(format!("{text:?} is a coupling, not an id of that kind"));
+    }
     let is_material = r.kind == Some(RefKind::Material);
     let is_definition = r.kind == Some(RefKind::Definition);
     if want == Want::Material && !is_material {
@@ -650,7 +683,7 @@ fn replace(
     if want != Want::Definition && is_definition {
         return Err(format!("{text:?} is a definition, not an entity"));
     }
-    if r.index.is_none() && (is_material || is_definition || is_style || is_joint) {
+    if r.index.is_none() && (is_material || is_definition || is_style || is_joint || is_coupling) {
         return Err(format!(
             "{text:?} must name one {}",
             if is_material {
@@ -659,6 +692,8 @@ fn replace(
                 "style"
             } else if is_joint {
                 "joint"
+            } else if is_coupling {
+                "coupling"
             } else {
                 "definition"
             }
@@ -707,6 +742,7 @@ enum Slot<'a> {
     Definition(&'a mut DefinitionId),
     Style(&'a mut StyleId),
     Joint(&'a mut JointId),
+    Coupling(&'a mut CouplingId),
     /// An instance or a material (`save_to_library`'s `item`).
     Item(&'a mut LibraryRef),
 }
@@ -847,6 +883,11 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         Command::ChangeJoint { joint, .. }
         | Command::DeleteJoint { joint }
         | Command::Drive { joint, .. } => f(Slot::Joint(joint)),
+        Command::AddCoupling { driver, driven, .. } => {
+            f(Slot::Joint(driver));
+            f(Slot::Joint(driven));
+        }
+        Command::DeleteCoupling { coupling } => f(Slot::Coupling(coupling)),
         Command::AddBox { material, .. }
         | Command::AddCylinder { material, .. }
         | Command::AddTube { material, .. }
