@@ -137,3 +137,45 @@ def _wait_ready(launched, startup_timeout):
                     "the app did not listen within %s s: %s" % (startup_timeout, launched.stderr().strip())
                 )
             time.sleep(0.05)
+
+
+class Session:
+    """A client to a running app (``socket_path``) or to a headless one started for the
+    session (``app``, default ``find_app()``) and stopped on ``close``. ``launched`` says which."""
+
+    def __init__(self, socket_path=None, app=None, timeout=300):
+        self.app = None
+        if socket_path:
+            from .client import Client
+
+            self.client = Client(socket_path, timeout=timeout)
+        else:
+            self.app = launch_headless(app)
+            try:
+                self.client = self.app.client(timeout=timeout)
+            except BaseException:
+                self.app.stop()
+                raise
+
+    @property
+    def launched(self):
+        return self.app is not None
+
+    def close(self):
+        self.client.close()
+        if self.app is not None:
+            self.app.stop()
+            self.app = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+
+def session(socket_path=None, app=None, timeout=300):
+    """``with session(args.socket) as s: s.client...``: connect to ``socket_path``, or launch a
+    headless app when it is None."""
+    return Session(socket_path, app, timeout)

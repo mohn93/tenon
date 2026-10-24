@@ -57,6 +57,14 @@ class TransformTests(unittest.TestCase):
         cross = (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
         self.assertTrue(close(cross, c))
 
+    def test_inverse_and_vectors(self):
+        t = Transform.translate(1, 2, 3) @ Transform.axis_angle((1, 1, 0), 40) @ Transform.scale(2, 1, 0.5)
+        self.assertEqual(t @ t.inverse(), Transform.identity())
+        self.assertTrue(close(t.inverse().apply(t.apply((0.3, -2, 5))), (0.3, -2, 5), 1e-9))
+        self.assertTrue(close(Transform.translate(5, 5, 5).apply_vector((1, 0, 0)), (1, 0, 0)))
+        with self.assertRaises(ValueError):
+            Transform.scale(1, 0, 1).inverse()
+
     def test_bad_input(self):
         with self.assertRaises(ValueError):
             Transform([1, 2, 3])
@@ -197,6 +205,89 @@ class ModelTests(unittest.TestCase):
     def test_scene_positions(self):
         box = self.m.box((0, 0, 0), (1, 1, 1))
         self.assertTrue(self.m.scene("Start", positions=[box]))
+
+    def solid(self, inst):
+        return self.client.query("solid", id=inst.id)["solid"]
+
+    def test_sweeps_and_profiles(self):
+        pipe = self.m.sweep([(0, 0, 0), (0, 0, 1), (0.5, 0, 1.5)], 0.1, inner_radius=0.08, name="Pipe")
+        self.assertTrue(self.solid(pipe))
+        self.assertEqual(self.entity(pipe)["name"], "Pipe")
+        loop = [(3, 0, 0), (4, 0, 0), (4, 1, 0), (3, 1, 0)]
+        section = [(-0.05, -0.02), (0.05, -0.02), (0.05, 0.02), (-0.05, 0.02)]
+        belt = self.m.sweep(loop, closed=True, profile=section, profile_x=(0, 0, 1), smooth=False)
+        self.assertTrue(self.solid(belt))
+        spring = self.m.spring((6, 0, 0), (0, 0, 1), 0.2, 0.03, 0.15, 3, segments=12, wire_segments=6)
+        self.assertTrue(self.solid(spring))
+        self.assertTrue(close(self.entity(spring)["bounds"]["min"], (5.77, -0.23, -0.03), 0.02))
+        prism = self.m.extrude([(8, 0, 0), (9, 0, 0), (8.5, 1, 0)], 0.5)
+        self.assertAlmostEqual(self.client.query("solid", id=prism.id)["volume"], 0.25, places=9)
+        lathe = self.m.revolve([(10.5, 0, 0), (11, 0, 0), (11, 0, 1), (10.5, 0, 1)], (10, 0, 0), (0, 0, 1), segments=48)
+        self.assertTrue(self.solid(lathe))
+        # nothing loose is left behind at the root
+        self.assertEqual(self.client.query("entities", kinds=["edge", "face"]).get("edges", []), [])
+
+    def test_edges_fillet_chamfer(self):
+        box = self.m.box((1, 1, 0), (2, 2, 1))
+        tops = box.edges(lambda a, b: a[2] > 0.99 and b[2] > 0.99)  # model coordinates
+        self.assertEqual(len(tops), 4)
+        box.fillet(tops, 0.1, segments=2)
+        self.assertTrue(self.solid(box))
+        self.assertLess(self.client.query("solid", id=box.id)["volume"], 4.0)
+        other = self.m.box((5, 0, 0), (1, 1, 1))
+        upright = other.edges(lambda a, b: abs(a[2] - b[2]) > 0.5)
+        self.assertEqual(len(upright), 4)
+        other.chamfer(upright, 0.05)
+        self.assertAlmostEqual(self.client.query("solid", id=other.id)["volume"], 1 - 4 * 0.00125, places=9)
+
+    def test_section_clone_polar_and_cut(self):
+        box = self.m.box((0, 0, 0), (1, 1, 1))
+        box.apply(Transform.translate(5, 0, 0) @ Transform.axis_angle((0, 0, 1), 90))
+        twin = box.clone()
+        self.assertNotEqual(self.entity(twin)["definition"], self.entity(box)["definition"])
+        self.assertEqual(twin.transform(), box.transform())
+        plane = box.section((4.5, 0.5, 0.5), (0, 1, 0))  # model coordinates
+        self.client.execute({"type": "open_instance", "id": box.id})
+        try:
+            planes = self.client.query("section_planes")["planes"]
+        finally:
+            self.client.execute({"type": "close_instance"})
+        self.assertEqual([p["id"] for p in planes], [plane])
+        # back in model coordinates the plane is where it was given
+        local = planes[0]
+        t = box.transform()
+        self.assertTrue(close(t.apply(local["point"]), (4.5, 0.5, 0.5), 1e-9))
+        self.assertTrue(close(t.apply_vector(local["normal"]), (0, 1, 0), 1e-9))
+        ring = box.polar((0, 0, 1), 90, 3)
+        self.assertEqual(len(ring), 3)
+        self.m.section_cut(ring, cut=False)
+        self.assertTrue(all(self.entity(i).get("section_cut") is False for i in ring))
+        copies = box.copy((0, 3, 0), count=2)
+        self.assertEqual(len(copies), 2)
+
+    def test_view_settings(self):
+        self.m.lighting("studio")
+        self.assertEqual(self.client.query("camera")["lighting"], "studio")
+        sid = self.m.style("Look", ambient_occlusion={"on": True})
+        self.assertEqual(self.client.query("camera")["style"], sid)
+        self.m.section_display(fill_color="material")
+        self.assertEqual(self.client.query("section_display")["fill_color"], "material")
+        self.m.camera((5, -5, 4), (0, 0, 0), fov_y_deg=40)
+        self.assertEqual(self.client.query("camera")["fov_y_deg"], 40)
+        box = self.m.box((0, 0, 0), (1, 1, 1))
+        s0 = self.m.scene("A", positions=[box])
+        box.move((2, 0, 0))
+        s1 = self.m.scene("B", positions=[box])
+        self.m.transition(True, 0.5)
+        self.m.go_to_scene(s0)
+        self.assertTrue(close(self.entity(box)["bounds"]["min"], (0, 0, 0)))
+        self.m.explode_view([box, self.m.box((3, 0, 0), (1, 1, 1))], 1.0)
+        try:
+            self.m.render(os.path.join(self.tmp, "f.png"), 64, 48, lighting=None, scene=s1, from_=s0, t=0.5, supersample=2)
+        except ApiError as e:
+            if e.kind != "rendering_unavailable":
+                raise
+            self.skipTest("no GPU: %s" % e)
 
     def test_scene_plain(self):
         self.assertTrue(self.m.scene("Front"))

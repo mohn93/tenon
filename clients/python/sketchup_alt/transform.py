@@ -102,6 +102,24 @@ class Transform:
         m = self.m
         return tuple(m[i] * p[0] + m[3 + i] * p[1] + m[6 + i] * p[2] + m[9 + i] for i in range(3))
 
+    def apply_vector(self, v):
+        """Transform the direction ``v`` (no translation)."""
+        m = self.m
+        return tuple(m[i] * v[0] + m[3 + i] * v[1] + m[6 + i] * v[2] for i in range(3))
+
+    def inverse(self):
+        """The inverse transform (raises ``ValueError`` for a singular one)."""
+        a, b, c = self.m[0:3], self.m[3:6], self.m[6:9]
+        det = _dot(a, _cross(b, c))
+        if abs(det) < 1e-15:
+            raise ValueError("a singular transform has no inverse")
+        # rows of the inverse of [a b c] are (b x c, c x a, a x b) / det
+        r0, r1, r2 = (_scale(_cross(b, c), 1 / det), _scale(_cross(c, a), 1 / det), _scale(_cross(a, b), 1 / det))
+        cols = [(r0[j], r1[j], r2[j]) for j in range(3)]
+        lin = Transform(cols[0] + cols[1] + cols[2] + (0, 0, 0))
+        t = lin.apply(self.m[9:12])
+        return Transform(lin.m[:9] + (-t[0], -t[1], -t[2]))
+
     def __matmul__(self, other):
         if not isinstance(other, Transform):
             return NotImplemented
