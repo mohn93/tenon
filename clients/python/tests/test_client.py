@@ -3,13 +3,18 @@
 They skip cleanly when no app binary is found (SKETCHUP_ALT_APP, then
 target/debug/app and target/release/app under the repo root).
 """
+import copy
+import json
 import os
+import pickle
+import socket
 import sys
+import threading
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from sketchup_alt import ApiError, Ref, find_app, launch_headless  # noqa: E402
+from sketchup_alt import ApiError, Client, Ref, find_app, launch_headless  # noqa: E402
 from sketchup_alt.batch import Ref as BatchRef  # noqa: E402
 
 APP = find_app()
@@ -34,6 +39,88 @@ class RefTests(unittest.TestCase):
             Ref(0).f(-1)
         with self.assertRaises(AttributeError):
             Ref(0).q(0)
+
+
+def fake_client(replies, timeout=2):
+    """A Client talking to a thread that answers each request with ``replies(req)``,
+    a list of raw lines to send back."""
+    a, b = socket.socketpair()
+    c = Client.__new__(Client)
+    c.socket_path, c.timeout = "fake", timeout
+    c._buf, c._next_id, c._describe, c._schema, c._sock = bytearray(), 0, None, None, a
+
+    def serve():
+        f = b.makefile("rwb")
+        for line in f:
+            for out in replies(json.loads(line)):
+                f.write(out if isinstance(out, bytes) else json.dumps(out).encode() + b"\n")
+            f.flush()
+        b.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    return c
+
+
+class ProtocolTests(unittest.TestCase):
+    def test_notifications_and_other_ids_skipped(self):
+        c = fake_client(lambda r: [
+            {"jsonrpc": "2.0", "method": "changed", "params": {"revision": 1}},
+            {"jsonrpc": "2.0", "id": 999, "result": {"stale": True}},
+            b"\n",
+            {"jsonrpc": "2.0", "id": r["id"], "result": {"ok": r["id"]}},
+        ])
+        self.assertEqual(c.request("describe"), {"ok": 1})
+        self.assertEqual(c.request("describe"), {"ok": 2})
+        c.close()
+
+    def test_null_id_error_raises(self):
+        c = fake_client(lambda r: [{"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}])
+        with self.assertRaises(ApiError) as cm:
+            c.request("describe")
+        self.assertEqual(cm.exception.kind, "parse_error")
+        c.close()
+
+    def test_malformed_replies_are_connection_errors(self):
+        for bad in (b"not json\n", b"[1,2]\n", b"3\n"):
+            c = fake_client(lambda r, bad=bad: [bad])
+            with self.assertRaises(ConnectionError):
+                c.request("describe")
+            c.close()
+
+    def test_nan_refused_before_sending(self):
+        sent = []
+        c = fake_client(lambda r: sent.append(r) or [])
+        with self.assertRaises(ValueError):
+            c.execute({"type": "add_edge", "start": [float("nan"), 0, 0], "end": [1, 0, 0]})
+        with self.assertRaises(ValueError):
+            c.batch([{"type": "add_edge", "start": [0, 0, float("inf")], "end": [1, 0, 0]}])
+        self.assertEqual(sent, [])
+        c.close()
+
+    def test_api_error_ids_pickle_copy(self):
+        e = ApiError("invalid_input", "bad", {"kind": "invalid_input", "ids": ["f1"]}, -32000)
+        self.assertEqual(e.ids, ["f1"])
+        b = ApiError.from_reply({"code": -32001, "message": "x", "data": {
+            "index": 2, "completed": 2, "rolled_back": False,
+            "error": {"kind": "not_found", "message": "gone", "ids": ["e3"]}}})
+        self.assertEqual((b.kind, b.index, b.ids, b.rolled_back), ("not_found", 2, ["e3"], False))
+        for x in (pickle.loads(pickle.dumps(b)), copy.copy(b), copy.deepcopy(b)):
+            self.assertEqual((x.kind, x.message, x.index, x.ids, x.completed), ("not_found", "gone", 2, ["e3"], 2))
+            self.assertEqual(str(x), str(b))
+
+    def test_nan_in_builder_value(self):
+        class Fake(Client):
+            def __init__(self):
+                pass
+
+            def command_schema(self):
+                return {"add_edge": {"fields": {"start", "end"}, "required": {"start", "end"}, "doc": ""}}
+
+        from sketchup_alt.batch import Batch
+
+        b = Batch(Fake())
+        with self.assertRaises(ValueError):
+            b.add_edge(start=[float("nan"), 0, 0], end=[1, 0, 0])
 
 
 @unittest.skipIf(APP is None, "no sketchup-alt app binary found")
@@ -94,6 +181,26 @@ class AppTests(unittest.TestCase):
         self.assertTrue(cm.exception.rolled_back)
         self.assertEqual(self.client.query("stats")["edges"], 0)
 
+    def test_non_atomic_batch_failure_keeps_earlier_commands(self):
+        with self.assertRaises(ApiError) as cm:
+            self.client.batch(
+                [
+                    {"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [2, 2, 0]},
+                    {"type": "push_pull", "face": "f99", "distance": 1},
+                ],
+                atomic=False,
+            )
+        self.assertEqual(cm.exception.index, 1)
+        self.assertEqual(cm.exception.completed, 1)
+        self.assertFalse(cm.exception.rolled_back)
+        self.assertEqual(self.client.query("stats")["faces"], 1)
+
+    def test_batch_schema_excludes_editor_commands(self):
+        schema = self.client.command_schema()
+        self.assertIn("add_rectangle", schema)
+        for name in ("set_camera", "tool_input"):
+            self.assertNotIn(name, schema)
+
     def test_builder_refs_and_result(self):
         with self.client.batch_builder() as b:
             rect = b.add_rectangle(corner=[0, 0, 0], opposite=[3, 2, 0])
@@ -152,8 +259,6 @@ class AppTests(unittest.TestCase):
             c.close()
 
     def test_env_socket(self):
-        from sketchup_alt import Client
-
         os.environ["SKETCHUP_ALT_SOCKET"] = self.app.socket_path
         try:
             c = Client()

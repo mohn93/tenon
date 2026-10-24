@@ -88,6 +88,9 @@ def launch_headless(app=None, *args, startup_timeout=30):
     if app is None:
         raise FileNotFoundError("no app binary: set SKETCHUP_ALT_APP or run `cargo build -p app`")
     tmpdir = tempfile.mkdtemp(prefix="skalt")
+    if sys.platform != "win32" and len(os.path.join(tmpdir, "api.sock").encode()) > 100:
+        shutil.rmtree(tmpdir, ignore_errors=True)  # too long for a Unix socket path
+        tmpdir = tempfile.mkdtemp(prefix="skalt", dir="/tmp")
     if sys.platform == "win32":
         sock = "sketchup-alt-py-%d-%s" % (os.getpid(), os.path.basename(tmpdir))
     else:
@@ -108,20 +111,29 @@ def launch_headless(app=None, *args, startup_timeout=30):
     finally:
         err.close()
     launched = Launched(proc, sock, tmpdir, errfile)
-    deadline = time.monotonic() + startup_timeout
+    try:
+        _wait_ready(launched, startup_timeout)
+    except BaseException:
+        launched.stop()
+        raise
+    return launched
+
+
+def _wait_ready(launched, startup_timeout):
     from .client import Client
 
+    deadline = time.monotonic() + startup_timeout
     while True:
-        if proc.poll() is not None:
-            msg = launched.stderr()
-            launched.stop()
-            raise RuntimeError("the app exited with code %s: %s" % (proc.returncode, msg.strip()))
+        if launched.proc.poll() is not None:
+            raise RuntimeError(
+                "the app exited with code %s: %s" % (launched.proc.returncode, launched.stderr().strip())
+            )
         try:
-            Client(sock, timeout=5).close()
-            return launched
+            Client(launched.socket_path, timeout=5).close()
+            return
         except OSError:
             if time.monotonic() > deadline:
-                msg = launched.stderr()
-                launched.stop()
-                raise TimeoutError("the app did not listen within %s s: %s" % (startup_timeout, msg.strip()))
+                raise TimeoutError(
+                    "the app did not listen within %s s: %s" % (startup_timeout, launched.stderr().strip())
+                )
             time.sleep(0.05)

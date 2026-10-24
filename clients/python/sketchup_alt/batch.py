@@ -80,7 +80,7 @@ class Batch:
             raise TypeError("%s is missing required field(s) %s" % (type, ", ".join(missing)))
         cmd = {"type": type}
         cmd.update(fields)
-        json.dumps(cmd, default=_default)  # fail on a bad value before sending
+        json.dumps(cmd, default=_default, allow_nan=False)  # a bad value (NaN, a bare Ref) fails before sending
         self.commands.append(cmd)
         return Ref(len(self.commands) - 1)
 

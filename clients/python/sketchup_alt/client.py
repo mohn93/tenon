@@ -25,8 +25,7 @@ class ApiError(Exception):
     """
 
     def __init__(self, kind, message, data=None, code=None, index=None, rolled_back=None, completed=None):
-        text = message if index is None else "command %d: %s" % (index, message)
-        super().__init__("%s: %s" % (kind, text))
+        super().__init__(kind, message, data, code, index, rolled_back, completed)
         self.kind = kind
         self.message = message
         self.data = data
@@ -34,6 +33,16 @@ class ApiError(Exception):
         self.index = index
         self.rolled_back = rolled_back
         self.completed = completed
+        ids = None
+        if isinstance(data, dict):
+            ids = data.get("ids")
+            if ids is None and isinstance(data.get("error"), dict):
+                ids = data["error"].get("ids")
+        self.ids = ids
+
+    def __str__(self):
+        text = self.message if self.index is None else "command %d: %s" % (self.index, self.message)
+        return "%s: %s" % (self.kind, text)
 
     @classmethod
     def from_reply(cls, err):
@@ -154,8 +163,17 @@ class Client:
             line = self._read_line(deadline)
             if not line.strip():
                 continue
-            msg = json.loads(line)
-            if msg.get("id") == req_id:  # anything else is a notification
+            try:
+                msg = json.loads(line)
+            except ValueError as e:
+                raise ConnectionError("protocol error: reply is not JSON: %s" % e) from None
+            if not isinstance(msg, dict):
+                raise ConnectionError("protocol error: reply is not an object: %.80r" % (line,))
+            mid = msg.get("id")
+            if mid is None and isinstance(msg.get("error"), dict):
+                # the app answers an unparseable request with id null
+                raise ApiError.from_reply(msg["error"])
+            if mid == req_id:  # anything else is a notification
                 return msg
 
     def request(self, method, params=None):
@@ -164,10 +182,13 @@ class Client:
         req = {"jsonrpc": "2.0", "id": self._next_id, "method": method}
         if params is not None:
             req["params"] = params
-        self._send_raw(json.dumps(req, separators=(",", ":")).encode() + b"\n")
+        data = json.dumps(req, separators=(",", ":"), allow_nan=False).encode() + b"\n"
+        self._send_raw(data)
         msg = self._read_reply(self._next_id)
-        if "error" in msg:
+        if isinstance(msg.get("error"), dict):
             raise ApiError.from_reply(msg["error"])
+        if "result" not in msg:
+            raise ConnectionError("protocol error: reply has neither result nor error")
         return msg["result"]
 
     # API
@@ -208,22 +229,23 @@ class Client:
     # batch builder
 
     def command_schema(self):
-        """``{type: {fields, required, doc}}`` for every command in ``describe``."""
+        """``{type: {fields, required, doc}}`` for the commands a batch accepts
+        (the Command schema of the ``batch`` params in ``describe``). Screen and
+        editor commands are for ``execute`` only."""
         if self._schema is None:
-            schemas = self.describe()["schemas"]
+            d = self.describe()
+            try:
+                cmd = d["methods"]["batch"]["params_schema"]["$defs"]["Command"]
+            except KeyError:
+                cmd = d["schemas"]["Command"]
             out = {}
-            for key in ("Command", "ScreenCommand", "EditorCommand"):
-                for v in schemas.get(key, {}).get("oneOf", []):
-                    name = v["properties"]["type"]["const"]
-                    fields = set(v["properties"]) - {"type"}
-                    required = set(v.get("required", [])) - {"type"}
-                    doc = v.get("description", "")
-                    if name in out:  # same type in two schemas: accept either
-                        e = out[name]
-                        e["fields"] |= fields
-                        e["required"] &= required
-                    else:
-                        out[name] = {"fields": fields, "required": required, "doc": doc}
+            for v in cmd.get("oneOf", []):
+                name = v["properties"]["type"]["const"]
+                out[name] = {
+                    "fields": set(v["properties"]) - {"type"},
+                    "required": set(v.get("required", [])) - {"type"},
+                    "doc": v.get("description", ""),
+                }
             self._schema = out
         return self._schema
 
