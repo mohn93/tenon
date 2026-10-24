@@ -1251,6 +1251,7 @@ fn page_view(
         fov_y: camera.fov_y,
         parallel: !def.perspective,
         night: false,
+        studio: false,
         color_by_tag: false,
         x_ray: false,
         hidden_geometry: false,

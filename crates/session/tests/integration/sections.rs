@@ -651,7 +651,7 @@ fn a_schema_12_file_opens_with_no_planes_and_default_display() {
     assert_eq!(ask(&e, json!({"type": "section_display"}))["cuts"], true);
 
     // A newer schema is refused.
-    edit_file(&path, |doc| doc["schema_version"] = json!(20));
+    edit_file(&path, |doc| doc["schema_version"] = json!(21));
     let err = run(
         &mut e,
         json!({"type": "open", "path": path.to_str().unwrap(), "discard": true}),

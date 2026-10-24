@@ -1272,6 +1272,7 @@ fn every_golden_image_has_a_test() {
         "style_edges_by_axis",
         "style_profiles_sketchy",
         "finish_spheres",
+        "finish_spheres_studio",
     ];
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden");
     let mut stored: Vec<String> = std::fs::read_dir(&dir)

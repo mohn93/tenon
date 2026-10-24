@@ -64,7 +64,7 @@ all commands and results.
 | `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, `changed` (the ids changed) for `hide`, `unhide`, `unhide_last`, `unhide_all`, `reverse_faces` and `flip` (see Hide and unhide and Reverse and orient faces below), `orient` for `orient_faces`, `intersect` for `intersect_faces` (see Intersect Faces below), `positioned` for `position_texture`, `purged` for `purge_definitions`, `definitions` for `make_unique` (see Make Unique and Flip Along below), `make_group`, `make_component` and the `add_<primitive>` commands as group or component (the one new definition), `placed` (the instances left in the open context, in creation order; present whenever the command placed instances, absent otherwise), e.g. for `copy`, `copy_along_path`, `rotate` with `copies`, `make_group`, `make_component`, the primitives as group or component, `explode`, `paste`, `insert_library_item`, `place_instance` and `import`, `text_3d` for `add_3d_text` (see 3D text below), and `units` (the display units now) for `set_units` and an `undo` or `redo` of a `set_units` step |
 | `batch` | `{"commands": [...], "atomic": true}` | `{outcomes, changes, revision}`; `changes` is the net effect of the whole batch (made then erased is absent); atomic = one undo step, all or nothing. Steps made through the API are `agent` steps |
 | `query` | a Query, see the table below | the QueryResult |
-| `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does; `lighting`, `day` or `night`, is optional and defaults to the document's) | `{width, height, png_base64}` |
+| `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does; `lighting`, `day`, `night` or `studio`, is optional and defaults to the document's) | `{width, height, png_base64}` |
 | `subscribe` | none | `{revision}`, then `changed` notifications after every model change; a `resync` notification (`{revision}`) means changes were missed, so re-read with `{"type": "entities"}` (its `revision` tells you where you are). Also `selection`, `camera` and `editor` notifications; see Notifications below |
 | `tool_input` | `{"events": [{"type": "click", "point": [0,0,0]}, {"type": "type", "text": "3"}], "width": 640, "height": 400}` (size optional; as written this draws a line, so the Line tool must be active: the editor starts in Select) | `{editor, inference, preview, commands, revision}`: the active tool fed the events as the window feeds a user's; see Driving the tools below |
 | `describe` | none | the API description |
@@ -772,8 +772,24 @@ written); `.skr` files keep it, and the `glb` export does not write it.
 A material with an `emission` above 0 glows. The `materials` query always includes `emission`
 (0 for a material that does not glow).
 
-The view is lit by `day` (the default) or by `night`, a view setting `set_lighting` changes and
-the `camera` query reports as `lighting`.
+The view is lit by `day` (the default), by `night` or by `studio`, a view setting `set_lighting`
+changes and the `camera` query reports as `lighting`.
+
+`studio` is for objects floating in space. There is no headlight; three lights follow the camera,
+given by their unit directions toward the light in camera space (x right, y up, z toward the
+viewer): a key light from the upper left front (-0.5, 0.6, 0.6) that adds 0.75 on a face
+square-on to it, a fill light from the right (0.6, 0.1, 0.5) at strength 0.35 and a rim light
+from behind above (0, 0.5, -0.8) at 0.5, each by Lambert's cosine, over an ambient light of 0.25.
+The background is the style's background color (the theme's without a style), or, when the
+style's sky is on, a vertical gradient on the screen from the background at the bottom to the
+sky color at the top; the style's ground and horizon are not drawn, and the grid and axes show as
+by day. With shadows on (`set_shadows`; the date and time do not matter) the key light casts the
+shadow map instead of the sun (the shadows' `light` and `dark` levels are ignored, the ground
+shows the shadows when `on_ground` is set and the key shines from above); the map is drawn again
+when the camera moves, since the light follows it. Fill and rim cast no shadows. Highlights come
+from all three lights, and a metal or smooth surface reflects the backdrop (the sky color or the
+background above, the background at half brightness below) at full strength. Fog and edges work
+as by day. Day and night are unchanged.
 
 A glowing face side is drawn unshaded, in its material's color (or texture). Each placement of
 a group or component whose own faces glow lights its surroundings as one point light, wherever
@@ -1161,7 +1177,7 @@ fails with `invalid_input` and leaves the camera as it was.
   target, which switching projection keeps, so the zoom of a parallel view is set by how far
   the eye is from the target, and zooming moves the eye. A parallel view sees 100 eye-to-target
   distances in front of and behind the target, including geometry behind the eye.
-- `lighting` is `day` or `night` (see Lights).
+- `lighting` is `day`, `night` or `studio` (see Lights).
 - `color_by_tag` is whether faces are drawn in their tags' colors (`set_color_by_tag`; see Tags).
 - `x_ray` is whether every shown face is drawn as glass (`set_x_ray`).
 - `hidden_geometry` is whether entities hidden by their own flag are drawn ghosted and can be
@@ -1183,14 +1199,14 @@ fails with `invalid_input` and leaves the camera as it was.
 | `{"type": "set_projection", "projection": "parallel"}` | Switches between `perspective` and `parallel`, keeping the eye, target and `view_height`. |
 | `{"type": "look_around", "yaw": 30, "pitch": -10}` | Turns the view about the eye (not the target): `yaw` degrees about the vertical, counter-clockwise seen from above, then `pitch` degrees raising the view (negative lowers it); each defaults to 0 and must be finite. The view's pitch stays within -89 and 89 degrees, so the screen's up is always the world's up, even when the view was straight down or up. The target keeps its distance from the eye. Positive `pitch` looks up, as in Fly Mode (unlike `orbit`, whose positive pitch raises the eye); a view straight down or up turns to the 89 degree limit even with only `yaw` given. |
 | `{"type": "position_camera", "point": [2,3,0], "eye_height": 1.676, "look_at": [2,10,0]}` | Stands at `point` (world coordinates, as `look_at`) with the eye `eye_height` meters above it (0.01 to 10,000, default 1.676, 5'6"), looking level toward `look_at` (its height is ignored; it must lie away from the point horizontally). Without `look_at` the view keeps its current horizontal heading (from a view straight down or up, the screen's up direction). Switches to perspective, keeps the field of view. |
-| `{"type": "set_lighting", "mode": "night"}` | Lights the view by `day` or by `night` (see Lights). Like the camera commands it is not an undo step and does not change the revision; it is saved with the camera, and a failed atomic batch puts it back. |
+| `{"type": "set_lighting", "mode": "night"}` | Lights the view by `day`, `night` or `studio` (see Lights). Like the camera commands it is not an undo step and does not change the revision; it is saved with the camera, and a failed atomic batch puts it back. |
 | `{"type": "set_color_by_tag", "on": true}` | Draws faces in their tags' colors, or (`false`) by their materials (see Tags). A view setting like `set_lighting`. |
 | `{"type": "set_x_ray", "on": true}` | X-ray: every shown face is drawn as glass, opacity 0.5 on both sides (a side more transparent already keeps its own), so edges behind faces show. Picking, snapping and shadows are unchanged, and hidden entities stay hidden. A view setting like `set_lighting` (no undo step, not a change to the revision, put back by a failed atomic batch, saved with the camera and stored by scenes); print, PDF, SVG, the line drawing and library thumbnails ignore it. |
 | `{"type": "set_hidden_geometry", "on": true}` | Hidden Geometry: entities hidden by their own flag (see Hide and unhide) are drawn ghosted (faces as glass at opacity 0.25 in their material's color, edges and guides in light grey; they cast no shadow and give no light) and can be picked, box selected and selected, so they can be unhidden. Inference and the tools' snaps still ignore them, and entities on hidden tags stay hidden. Turning it off (or going to a scene that has it off) drops hidden entities from the selection. Annotations and section planes placed by a hidden instance are not drawn while it is on. A view setting like `set_x_ray`; print, PDF, SVG, the line drawing and thumbnails ignore it. |
 | `{"type": "set_shadows", "on": true, "date": "2026-06-21", "time": "16:45", "light": 80, "dark": 45, "on_ground": true}` | Sets the sun's shadows; every field is optional and absent ones stay as they are. See Location and sun shadows below. A view setting like `set_lighting` (no undo step, not a change to the revision, put back by a failed atomic batch, saved with the camera and stored by scenes). |
 
 In the window, the Camera menu has Zoom Extents (Shift+Z; holding the keys zooms once), the
-standard views, the two projections and Night Lighting (checked at night; `set_lighting`); it
+standard views, the two projections, Night Lighting (checked at night) and Studio Lighting (checked in the studio; both `set_lighting`); it
 sends these same commands.
 
 Navigating in the window moves the same document camera, about the point under the cursor:
@@ -1633,7 +1649,7 @@ larger than the detail loses sharpness, and redrawn only when the sun or the cas
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
-(`"sketchup-alt"`), `schema_version` (19 when a material has a `metalness` above 0 or a `roughness` below 1 (written in the material only then; older builds refuse the file), else 18 when the model has a style or the view or a scene's view chooses one (written as `styles` in the model and `style` in the view and scene views; older builds refuse the file), else 17 when the display units use `feet` or have a `length_snap` other than 0, an `angle_precision` other than 1 or an `angle_snap` other than 15 (older builds refuse the fields), else 16 when the location is not the default (written in the model as `location` with `latitude`, `longitude`, `north_angle` and `utc_offset`) or the view or a scene's view has shadow settings other than the defaults (written as `shadows`, with `on`, `year`, `month`, `day`, `minutes`, `light`, `dark` and `on_ground`), else 15 when the model axes are not the world axes (written as `axes` with `origin`, `x`, `y` and `z` in the model), else 14 when something is hidden or the view has `x_ray` or `hidden_geometry` on, else 13 when the model has a section plane or `set_section_display` has turned something off (written in the view as `section_planes`, `section_cuts` and `section_fill`, only when false), else 12 when the model has a dimension or a note, or display units other than meters with 3 decimals, else 11 when the model has a scene, else 10 when the model has a tag or the view colors faces by tag, else 9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
+(`"sketchup-alt"`), `schema_version` (20 when the view or a scene's view is lit by `studio` (written as `"lighting": "studio"` in the camera and `"studio": true` in a scene's view; older builds refuse the file), else 19 when a material has a `metalness` above 0 or a `roughness` below 1 (written in the material only then; older builds refuse the file), else 18 when the model has a style or the view or a scene's view chooses one (written as `styles` in the model and `style` in the view and scene views; older builds refuse the file), else 17 when the display units use `feet` or have a `length_snap` other than 0, an `angle_precision` other than 1 or an `angle_snap` other than 15 (older builds refuse the fields), else 16 when the location is not the default (written in the model as `location` with `latitude`, `longitude`, `north_angle` and `utc_offset`) or the view or a scene's view has shadow settings other than the defaults (written as `shadows`, with `on`, `year`, `month`, `day`, `minutes`, `light`, `dark` and `on_ground`), else 15 when the model axes are not the world axes (written as `axes` with `origin`, `x`, `y` and `z` in the model), else 14 when something is hidden or the view has `x_ray` or `hidden_geometry` on, else 13 when the model has a section plane or `set_section_display` has turned something off (written in the view as `section_planes`, `section_cuts` and `section_fill`, only when false), else 12 when the model has a dimension or a note, or display units other than meters with 3 decimals, else 11 when the model has a scene, else 10 when the model has a tag or the view colors faces by tag, else 9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
 texture, else 6 when a material is see-through, else 5; a material's `opacity` is written only
 when below 1, its `emission` only when above 0, and a face's `texture_position` only when it
 has one, so a model whose materials are all opaque
@@ -1645,12 +1661,12 @@ and older files open without texture positions; version 7
 and older files open without glow; version 6 and older files open without textures; version 5 files open with
 every material opaque, version 4 files, written before materials, open unpainted, version 3 files, written before camera projections, open in perspective, and
 versions 2 and 1, written before curves and guides, still open), the camera (eye, target, field
-of view, up, projection, `lighting` when it is `night`: a file without it opens lit by day,
+of view, up, projection, `lighting` when it is `night` or `studio`: a file without it opens lit by day,
 and `new` starts by day, `"color_by_tag": true` when faces are colored by tag, and `"x_ray"` and `"hidden_geometry": true` when on, which need schema 14 as hidden entities do) and the model with every id, edges with their curve and soft flag, `"hidden": true` on each hidden edge, face, instance and guide (schema 14, written only when something is hidden; a file without hidden entities is written as before),
 the materials and what is painted with them, the tags (name, color, and `"visible": false` when
 hidden) and each entity's `tag` (absent when Untagged), and the scenes in order (`pages`: each
 one's id, name, `view` when it stores one (`eye`, `target`, `up`, `fov_y` in radians, and
-`parallel`, `night`, `color_by_tag`, `x_ray` and `hidden_geometry` when true, and `shadows` when not the defaults), and `tags`, the tag ids it hides, when it
+`parallel`, `night`, `studio`, `color_by_tag`, `x_ray` and `hidden_geometry` when true, and `shadows` when not the defaults), and `tags`, the tag ids it hides, when it
 stores tag visibility), each mesh's `dimensions` and `notes` (see Dimensions and notes; absent
 when none), and the display `units` (absent when the default; `length_snap`, `angle_precision` and `angle_snap` are written only when not 0, 1 and 15). Each texture's image is stored in the archive as
 the file it was read from, `textures/m31.png` (or `.jpg`), and the material's `texture` in
@@ -2086,7 +2102,7 @@ under a pixel and where a click would snap.
 | Group menu and context bar: Make Group (G), Make Component... (Shift+G, a sheet that suggests `Component N`, the first free N), Explode; Close Group (Group menu, Escape, the breadcrumb) | `make_group`, `make_component` (the agent passes `name` itself; an empty name is `invalid_input`), `explode`, `close_instance` |
 | Group > Rename Component... (F2), Entity Info's Name field | `rename_definition` (the instance's `definition` from `entity`) |
 | Group > Purge Unused | `purge_definitions` (`purged`) |
-| Camera menu: Zoom Extents (Shift+Z), standard views, Perspective / Parallel, Night Lighting, the context bar's day/night toggle | `zoom_extents`, `standard_view`, `set_projection`, `set_lighting` |
+| Camera menu: Zoom Extents (Shift+Z), standard views, Perspective / Parallel, Night Lighting, Studio Lighting, the context bar's day/night toggle | `zoom_extents`, `standard_view`, `set_projection`, `set_lighting` |
 | Camera > Field of View... (a sheet; perspective only) | `set_camera` (`fov_y_deg`, with the current `eye`, `target` and `up` kept); `set_camera` takes `fov_y_deg` in either projection |
 | Orbit, pan and zoom with the mouse or trackpad (about the point under the cursor), fly mode (F, Escape) and its speed | `orbit` and `zoom` (`about` a point), `pan`, `set_camera`; a middle `drag` in `tool_input`; `set_fly_mode` (`on`, `speed`), `cancel`; `editor.flying`, `editor.fly_speed`. Flying itself (moving keys, mouse look) moves the camera, which `set_camera` places directly |
 | Drawing by dragging (Line, Rectangle, Circle, Polygon, Arc, Push/Pull); Push/Pull retype and double-click repeat | `tool_input` (`drag`, `type`, `double_click`) |

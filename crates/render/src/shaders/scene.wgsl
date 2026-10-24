@@ -79,6 +79,12 @@ struct Lighting {
     // x: where the fog starts; y: where it is complete; z: 1 when there is fog.
     fog: vec4<f32>,
     fog_color: vec4<f32>,
+    // x: 1 in studio lighting, else 0.
+    studio: vec4<f32>,
+    // xyz: the unit vector toward the studio's fill light and its rim light; w: its strength
+    // (0 outside the studio). The key light is the sun's slot (`sun`, `sun_levels`).
+    studio_fill: vec4<f32>,
+    studio_rim: vec4<f32>,
     // World to the sun map's clip space.
     sun_view_proj: mat4x4<f32>,
     lights: array<Light, MAX_LIGHTS>,
@@ -539,6 +545,11 @@ fn styled_canvas(ndc: vec2<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_canvas(in: CanvasOut) -> @location(0) vec4<f32> {
+    if lighting.studio.x > 0.5 && lighting.canvas.x > 0.5 {
+        // The studio's backdrop: the background at the bottom of the view, the style's sky at the
+        // top (the canvas is only drawn with a sky).
+        return vec4<f32>(mix(lighting.sky.rgb, lighting.background.rgb, in.down), 1.0);
+    }
     if lighting.canvas.x > 0.5 {
         return vec4<f32>(styled_canvas(in.ndc), 1.0);
     }
@@ -668,6 +679,13 @@ fn sun_shade(p: vec3<f32>, n: vec3<f32>) -> f32 {
     return lighting.sun_levels.y + lighting.sun_levels.x * facing * lit;
 }
 
+// The light the studio's fill and rim lights give a surface facing `n`, by Lambert's cosine; 0
+// outside the studio.
+fn studio_extra(n: vec3<f32>) -> f32 {
+    return lighting.studio_fill.w * max(dot(n, lighting.studio_fill.xyz), 0.0)
+        + lighting.studio_rim.w * max(dot(n, lighting.studio_rim.xyz), 0.0);
+}
+
 // What a smooth or metallic surface adds to the matte shading (see `finished_color`). The
 // environment is a vertical gradient: the style's sky above the horizon and its ground below,
 // or these colors without a sky or ground.
@@ -679,6 +697,12 @@ const DAY_AMBIENT: f32 = 0.6;
 
 // The environment seen in direction `dir`.
 fn environment(dir: vec3<f32>) -> vec3<f32> {
+    if lighting.studio.x > 0.5 {
+        // The studio is a backdrop: the sky if the style has one, else the background, above;
+        // the background darkened below.
+        let top = select(lighting.background.rgb, lighting.sky.rgb, lighting.sky.w > 0.5);
+        return mix(lighting.background.rgb * 0.5, top, smoothstep(-0.25, 0.25, dir.z));
+    }
     let sky = select(DEFAULT_SKY, lighting.sky.rgb, lighting.sky.w > 0.5);
     let ground = select(DEFAULT_GROUND, lighting.ground.rgb, lighting.ground.w > 0.0);
     return mix(ground, sky, smoothstep(-0.25, 0.25, dir.z));
@@ -730,12 +754,17 @@ fn finished_color(
     if lighting.sun.w > 0.5 {
         light = sun_highlight(p, n, to_eye, shininess);
     }
+    if lighting.studio.x > 0.5 {
+        light += highlight(n, to_eye, lighting.studio_fill.xyz, shininess, lighting.studio_fill.w);
+        light += highlight(n, to_eye, lighting.studio_rim.xyz, shininess, lighting.studio_rim.w);
+    }
     let spec = tint * (gloss * gloss * light);
     let facing = clamp(dot(n, to_eye), 0.0, 1.0);
     let grazing = pow(1.0 - facing, 5.0);
     let reflectance = mix(vec3<f32>(0.04), shown, metalness);
     let fresnel = reflectance + (vec3<f32>(1.0) - reflectance) * grazing;
-    let dim = clamp(lighting.mode.y / DAY_AMBIENT, 0.0, 1.0);
+    // The studio reflects its backdrop at full strength.
+    let dim = select(clamp(lighting.mode.y / DAY_AMBIENT, 0.0, 1.0), 1.0, lighting.studio.x > 0.5);
     let reflected = environment(reflect(-to_eye, n)) * fresnel * (gloss * dim);
     return diffuse + spec + reflected;
 }
@@ -766,7 +795,7 @@ fn face_color(in: FaceOut, front: bool) -> vec3<f32> {
     }
     var shade = lighting.mode.y + lighting.mode.z * max(dot(n, to_eye), 0.0);
     if lighting.sun.w > 0.5 {
-        shade = sun_shade(in.world, n);
+        shade = sun_shade(in.world, n) + studio_extra(n);
     }
     let finish = select(in.finish.zw, in.finish.xy, front);
     if finish.x > 0.0 || finish.y < 1.0 {
@@ -847,7 +876,11 @@ fn vs_preview(
 fn fs_preview(in: PreviewOut) -> @location(0) vec4<f32> {
     let n = normalize(in.normal);
     let to_eye = normalize(u.eye.xyz - in.world * u.eye.w);
-    let shade = lighting.mode.y + lighting.mode.z * abs(dot(n, to_eye));
+    var shade = lighting.mode.y + lighting.mode.z * abs(dot(n, to_eye));
+    if lighting.studio.x > 0.5 {
+        // No headlight: the key light is the sun's slot, shaded without a shadow.
+        shade += lighting.sun_levels.x * abs(dot(n, lighting.sun.xyz)) + studio_extra(n);
+    }
     return vec4<f32>(in.color.rgb * shade, in.color.a);
 }
 

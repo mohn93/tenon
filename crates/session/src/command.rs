@@ -1186,7 +1186,8 @@ pub enum Command {
         look_at: Option<[f64; 3]>,
     },
     /// Light the view by `day` (a headlight and ambient light, glowing faces adding theirs) or
-    /// by `night` (both dimmed, a dark background: glowing faces light the scene). A view
+    /// by `night` (both dimmed, a dark background: glowing faces light the scene), or by
+    /// `studio` (no headlight: key, fill and rim lights that follow the camera). A view
     /// setting like the camera's: saved with the model, but not an undo step and not a change
     /// to the revision.
     SetLighting { mode: Lighting },

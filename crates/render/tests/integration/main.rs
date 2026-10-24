@@ -9,6 +9,7 @@ mod perf;
 mod profiles;
 mod sections;
 mod snapshot;
+mod studio;
 mod styles;
 mod sun;
 mod tags;

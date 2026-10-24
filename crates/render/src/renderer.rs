@@ -154,6 +154,30 @@ impl Uniforms {
 const DAY: [f32; 2] = [0.6, 0.4];
 /// The same at night, dimmed so glowing faces light the scene.
 const NIGHT: [f32; 2] = [0.08, 0.12];
+/// The studio's ambient light, and what its key light adds to a face square-on to it: together
+/// 1, so a face square-on to the key is lit as fully as one square-on to the day headlight.
+const STUDIO_AMBIENT: f32 = 0.25;
+const STUDIO_KEY: f32 = 0.75;
+/// The studio's fill and rim lights' strengths.
+const STUDIO_FILL: f32 = 0.35;
+const STUDIO_RIM: f32 = 0.5;
+/// The studio lights' directions toward them in camera space: x right, y up, z toward the
+/// viewer (not yet normalized).
+const STUDIO_KEY_DIRECTION: [f32; 3] = [-0.5, 0.6, 0.6];
+const STUDIO_FILL_DIRECTION: [f32; 3] = [0.6, 0.1, 0.5];
+const STUDIO_RIM_DIRECTION: [f32; 3] = [0.0, 0.5, -0.8];
+
+/// The unit vector toward the studio light at `direction` in camera space, in the world.
+fn studio_direction(camera: &Camera, direction: [f32; 3]) -> Vec3 {
+    let [x, y, z] = direction;
+    let (right, up, forward) = (
+        camera.right().as_vec3(),
+        camera.up().as_vec3(),
+        camera.forward().as_vec3(),
+    );
+    (right * x + up * y - forward * z).normalize_or_zero()
+}
+
 /// How far unselected edges, the grid and the axes fade toward the background at night, so they
 /// stay quiet outlines rather than bright lines on the dark.
 const NIGHT_LINE_FADE: f32 = 0.8;
@@ -225,6 +249,12 @@ struct LightingUniforms {
     /// x: where the fog starts; y: where it is complete; z: 1 when there is fog.
     fog: [f32; 4],
     fog_color: [f32; 4],
+    /// x: 1 in studio lighting, else 0.
+    studio: [f32; 4],
+    /// xyz: the unit vector toward the studio fill light and the rim light; w: its strength
+    /// (0 outside the studio).
+    studio_fill: [f32; 4],
+    studio_rim: [f32; 4],
     /// World to the sun map's clip space.
     sun_view_proj: [f32; 16],
     lights: [LightUniform; MAX_LIGHTS],
@@ -265,6 +295,9 @@ impl LightingUniforms {
             ground: [0.0; 4],
             fog: [0.0; 4],
             fog_color: [0.0; 4],
+            studio: [0.0; 4],
+            studio_fill: [0.0; 4],
+            studio_rim: [0.0; 4],
             sun_view_proj: Mat4::IDENTITY.to_cols_array(),
             lights: [LightUniform::default(); MAX_LIGHTS],
         };
@@ -277,7 +310,10 @@ impl LightingUniforms {
         let ([ambient, headlight], night) = match mode {
             Lighting::Day => (DAY, 0.0),
             Lighting::Night => (NIGHT, 1.0),
+            // No headlight: the key light shades like the sun (see `sun_frame`).
+            Lighting::Studio => ([STUDIO_AMBIENT, 0.0], 0.0),
         };
+        uniforms.studio[0] = if mode == Lighting::Studio { 1.0 } else { 0.0 };
         uniforms.mode = [used.len() as f32, ambient, headlight, night];
         let night = mode == Lighting::Night;
         let [r, g, b] = style.selected_face;
@@ -301,21 +337,23 @@ impl LightingUniforms {
         uniforms
     }
 
-    /// The model style's sky, ground and fog. By night the style's background, sky and ground
+    /// The model style's sky, ground and fog. The studio has no ground. By night the style's background, sky and ground
     /// are ignored (the night background and no canvas of the style's), but fog still falls,
     /// toward the night background or its own color.
     fn set_model_style(&mut self, model: &StyleSettings, mode: Lighting) {
-        if mode == Lighting::Day {
+        if mode != Lighting::Night {
             self.canvas[0] = 1.0;
             if let Some(sky) = model.sky {
                 let [r, g, b, _] = rgb(sky);
                 self.sky = [r, g, b, 1.0];
             }
-            if let Some(ground) = &model.ground {
-                let [r, g, b, _] = rgb(ground.color);
-                self.ground = [r, g, b, ground.opacity];
-                self.canvas[2] = if ground.from_below { 1.0 } else { 0.0 };
-            }
+        }
+        if mode == Lighting::Day
+            && let Some(ground) = &model.ground
+        {
+            let [r, g, b, _] = rgb(ground.color);
+            self.ground = [r, g, b, ground.opacity];
+            self.canvas[2] = if ground.from_below { 1.0 } else { 0.0 };
         }
         if let Some(fog) = &model.fog {
             let color = match fog.color {
@@ -347,6 +385,14 @@ impl LightingUniforms {
         let (right, up) = (right.as_vec3(), up.as_vec3());
         self.cam_right = [right.x, right.y, right.z, 0.0];
         self.cam_up = [up.x, up.y, up.z, 0.0];
+        if self.studio[0] > 0.5 {
+            let dir = |d, strength| {
+                let v = studio_direction(camera, d);
+                [v.x, v.y, v.z, strength]
+            };
+            self.studio_fill = dir(STUDIO_FILL_DIRECTION, STUDIO_FILL);
+            self.studio_rim = dir(STUDIO_RIM_DIRECTION, STUDIO_RIM);
+        }
         self.canvas[1] = if !camera.is_parallel() && camera.eye.z < 0.0 {
             1.0
         } else {
@@ -364,6 +410,9 @@ fn rgb([r, g, b]: [u8; 3]) -> [f32; 4] {
 struct SunFrame {
     light: SunLight,
     fit: Option<SunFit>,
+    /// The studio's key light, which shades from any side (the sun below the horizon only
+    /// leaves its dark level).
+    key: bool,
 }
 
 impl LightingUniforms {
@@ -378,7 +427,11 @@ impl LightingUniforms {
         } = sun.light;
         let mode = if sun.fit.is_some() { 2.0 } else { 1.0 };
         self.sun = [direction.x, direction.y, direction.z, mode];
-        let direct = if sun.light.is_up() { light } else { 0.0 };
+        let direct = if sun.key || sun.light.is_up() {
+            light
+        } else {
+            0.0
+        };
         let (texel, range, view_proj) = sun.fit.map_or((0.0, 1.0, Mat4::IDENTITY), |f| {
             (f.texel, f.depth_range, f.view_proj)
         });
@@ -391,7 +444,9 @@ impl LightingUniforms {
 /// the theme's; by night the night background.
 fn background(mode: Lighting, style: &ViewStyle, model: Option<&StyleSettings>) -> [f32; 4] {
     match mode {
-        Lighting::Day => model.map_or_else(|| style.day_background(), |m| rgb(m.background)),
+        Lighting::Day | Lighting::Studio => {
+            model.map_or_else(|| style.day_background(), |m| rgb(m.background))
+        }
         Lighting::Night => NIGHT_BACKGROUND,
     }
 }
@@ -662,7 +717,7 @@ pub struct Renderer {
     sun_generation: u64,
     /// The ground quad the sun's shadows are drawn on, and the rectangle it was made for.
     sun_ground: Option<(Mesh, [[f32; 2]; 2])>,
-    /// Day or night, as of the last `set_lighting`.
+    /// Day, night or studio, as of the last `set_lighting`.
     lighting: Lighting,
     /// Faces drawn in their tags' colors, as of the last `set_color_by_tag` (see
     /// `scene::scene_base_with`).
@@ -1633,11 +1688,33 @@ impl Renderer {
         self.sun_map.as_ref().map_or(0, |m| m.drawn)
     }
 
-    /// The sun for a frame, with its map drawn (or kept) if it has one. None by night or
-    /// without sun shading.
-    fn sun_frame(&mut self, encoder: &mut wgpu::CommandEncoder) -> Option<SunFrame> {
-        let light = self.sun.filter(|_| self.lighting == Lighting::Day)?;
-        let bounds = self.sun_bounds.filter(|_| light.is_up());
+    /// The light that shades a frame like the sun, with its map drawn (or kept) if it has one:
+    /// the sun by day, the studio's key light (from the camera's upper left front) in the studio
+    /// (with a map when shadows are on). None by night or without sun shading.
+    fn sun_frame(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        camera: &Camera,
+    ) -> Option<SunFrame> {
+        let (light, key) = match self.lighting {
+            Lighting::Day => (self.sun?, false),
+            Lighting::Night => return None,
+            Lighting::Studio => {
+                let direction = studio_direction(camera, STUDIO_KEY_DIRECTION);
+                let light = SunLight {
+                    direction,
+                    light: STUDIO_KEY,
+                    dark: STUDIO_AMBIENT,
+                    on_ground: self.sun.is_some_and(|s| s.on_ground) && direction.z > 0.0,
+                };
+                (light, true)
+            }
+        };
+        // The studio's shadows follow the shadow setting: the sun being on.
+        let shadows = self.sun.is_some();
+        let bounds = self
+            .sun_bounds
+            .filter(|_| shadows && (key || light.is_up()));
         let fit = bounds.map(|(lo, hi)| fit(light.direction, lo, hi, SUN_MAP_SIZE));
         if let Some(fit) = &fit {
             if self.sun_map.is_none() {
@@ -1655,7 +1732,7 @@ impl Renderer {
                 );
             }
         }
-        Some(SunFrame { light, fit })
+        Some(SunFrame { light, fit, key })
     }
 
     /// The ground quad for `ground`, kept while it stays the same.
@@ -1680,7 +1757,7 @@ impl Renderer {
         self.sun_ground.as_ref().map(|(m, _)| m)
     }
 
-    /// Lights the frames drawn from now on by day or by night.
+    /// Lights the frames drawn from now on by day, by night or in the studio.
     pub fn set_lighting(&mut self, lighting: Lighting) {
         self.lighting = lighting;
     }
@@ -1964,7 +2041,7 @@ impl Renderer {
             });
         let used = strongest(&self.lights, camera.eye, MAX_LIGHTS);
         let shadow_slots = self.shadow_slots(&used, camera.eye, &mut encoder);
-        let sun = self.sun_frame(&mut encoder);
+        let sun = self.sun_frame(&mut encoder, camera);
         // A print is white paper: the style's background, sky, ground and fog stay out of it.
         let canvas_style = self.model_style.filter(|_| !self.print);
         let mut lighting = LightingUniforms::new(
@@ -2060,10 +2137,12 @@ impl Renderer {
                 pass.set_scissor_rect(x, y, w, h);
                 pass.set_bind_group(0, &self.bind_group, &[]);
                 let canvas = match &canvas_style {
-                    Some(m) => m.sky.is_some() || m.ground.is_some(),
+                    Some(m) => {
+                        m.sky.is_some() || (m.ground.is_some() && self.lighting == Lighting::Day)
+                    }
                     None => self.style.has_gradient(),
                 };
-                if !self.print && self.lighting == Lighting::Day && canvas {
+                if !self.print && self.lighting != Lighting::Night && canvas {
                     pass.set_pipeline(&self.canvas_pipeline);
                     pass.draw(0..3, 0..1);
                 }

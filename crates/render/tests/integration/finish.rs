@@ -138,6 +138,19 @@ fn sum(c: [i32; 3]) -> i32 {
     c.iter().sum()
 }
 
+/// The same spheres lit by the studio lights.
+#[test]
+fn golden_finish_spheres_studio() {
+    let mut d = spheres();
+    let steel = add_material(&mut d, "Steel", [200, 205, 215]);
+    let plastic = add_material(&mut d, "Plastic", [200, 30, 30]);
+    set_finish(&mut d, steel, 1.0, 0.3);
+    set_finish(&mut d, plastic, 0.0, 0.25);
+    finish_spheres(&mut d, steel, plastic);
+    d.lighting = session::Lighting::Studio;
+    check("finish_spheres_studio", &d);
+}
+
 #[test]
 fn a_smooth_sphere_has_a_highlight_a_matte_one_does_not() {
     // Left: plastic (smooth, not metal); right: the default matte finish.
@@ -197,6 +210,36 @@ fn a_mirror_metal_has_no_black_or_broken_pixels_inside_its_silhouette() {
         }
         assert!(checked > 500, "{checked} pixels checked");
     }
+}
+
+#[test]
+fn a_studio_lit_mirror_metal_is_neither_black_nor_flat() {
+    let Some((mut d, _)) = render_spheres((1.0, 0.0), (0.0, 0.0)) else {
+        return;
+    };
+    d.lighting = session::Lighting::Studio;
+    let Some(px) = capture(&d) else { return };
+    let c = d.camera.project(DVec3::new(-1.2, -1.0, 1.0)).unwrap();
+    let edge = d.camera.project(DVec3::new(-0.2, 0.0, 1.0)).unwrap();
+    let radius = (edge - c).length() * 0.97;
+    let (mut lo, mut hi, mut checked) = (i32::MAX, 0, 0);
+    for y in 0..H {
+        for x in 0..W {
+            let (dx, dy) = (f64::from(x) - c.x, f64::from(y) - c.y);
+            if (dx * dx + dy * dy).sqrt() > radius {
+                continue;
+            }
+            let i = ((y * W + x) * 4) as usize;
+            let s = sum([px[i], px[i + 1], px[i + 2]].map(i32::from));
+            assert!(s > 45, "pixel ({x}, {y}) sums to {s}");
+            (lo, hi) = (lo.min(s), hi.max(s));
+            checked += 1;
+        }
+    }
+    assert!(
+        checked > 500 && hi > lo + 150,
+        "{checked} pixels, {lo}..{hi}"
+    );
 }
 
 #[test]

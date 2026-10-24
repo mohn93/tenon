@@ -530,7 +530,7 @@ pub fn describe() -> Value {
                 "result_schema": query_result_schema(),
             },
             "render_view": {
-                "params": "{width, height, camera?: {eye, target, fov_y_deg?, up?, projection?}, lighting?: \"day\" | \"night\"}",
+                "params": "{width, height, camera?: {eye, target, fov_y_deg?, up?, projection?}, lighting?: \"day\" | \"night\" | \"studio\"}",
                 "result": "{width, height, png_base64}",
                 "notes": "does not move the document camera or change its lighting",
                 "params_schema": schema::<RenderParams>(),

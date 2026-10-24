@@ -262,6 +262,24 @@ fn the_camera_menu_has_views_zoom_extents_and_projections() {
         camera_menu(parallel_night, "Night Lighting"),
         [UiAction::SetLighting(Lighting::Day)]
     );
+    // Studio Lighting sits next to it; at night it still lights by studio, and unchecking it goes
+    // back to day.
+    assert_eq!(
+        camera_menu(parallel_night, "Studio Lighting"),
+        [UiAction::SetLighting(Lighting::Studio)]
+    );
+    let studio = || Fixture {
+        lighting: Lighting::Studio,
+        ..Default::default()
+    };
+    assert_eq!(
+        camera_menu(studio, "Studio Lighting"),
+        [UiAction::SetLighting(Lighting::Day)]
+    );
+    assert_eq!(
+        camera_menu(studio, "Night Lighting"),
+        [UiAction::SetLighting(Lighting::Night)]
+    );
 }
 
 /// A fixture for the Edit menu tests.
@@ -437,6 +455,7 @@ fn checked_menu_items_show_the_state() {
         &[
             ("Fly Mode", true),
             ("Night Lighting", true),
+            ("Studio Lighting", false),
             ("Perspective", false),
             ("Parallel Projection", true),
         ],
@@ -447,6 +466,7 @@ fn checked_menu_items_show_the_state() {
         &[
             ("Fly Mode", false),
             ("Night Lighting", false),
+            ("Studio Lighting", false),
             ("Perspective", true),
             ("Parallel Projection", false),
         ],
@@ -838,13 +858,13 @@ fn the_app_menu_reads_about_settings_then_quit() {
 
 #[test]
 fn the_menu_bar_has_the_same_items_in_every_state() {
-    use crate::menus::{item_id, items, menu_bar};
+    use crate::menus::{item_key, items, menu_bar};
     // The Open Recent rows are the stated exception: that submenu is rebuilt when they change.
     let ids = |f: &Fixture| {
         items(&menu_bar(&f.view(), true))
             .iter()
             .filter(|i| !matches!(i.action, UiAction::OpenRecent(_)))
-            .map(|i| item_id(&i.action))
+            .map(|i| item_key(i))
             .collect::<Vec<_>>()
     };
     let empty = ids(&Fixture::default());
@@ -871,6 +891,7 @@ fn the_menu_bar_has_the_same_items_in_every_state() {
         "native items are built once and only synced"
     );
     assert_eq!(empty, ids(&busy(Lighting::Night)), "also at night");
+    assert_eq!(empty, ids(&busy(Lighting::Studio)), "and in the studio");
     let unique: std::collections::BTreeSet<_> = empty.iter().collect();
     assert_eq!(unique.len(), empty.len(), "ids are unique");
     for id in [
