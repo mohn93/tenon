@@ -721,7 +721,9 @@ fn finished_color(
 ) -> vec3<f32> {
     let metalness = finish.x;
     let gloss = 1.0 - finish.y;
-    let diffuse = shown * (1.0 - metalness) * (vec3<f32>(shade) + lamp_light(p, n));
+    // A rough metal keeps some of its color as diffuse light (a blurry reflection).
+    let diffuse_part = (1.0 - metalness) + metalness * finish.y * 0.75;
+    let diffuse = shown * diffuse_part * (vec3<f32>(shade) + lamp_light(p, n));
     let tint = mix(vec3<f32>(1.0), shown, metalness);
     let shininess = exp2(mix(3.0, 10.0, gloss));
     var light = highlight(n, to_eye, to_eye, shininess, lighting.mode.z);
@@ -729,7 +731,7 @@ fn finished_color(
         light = sun_highlight(p, n, to_eye, shininess);
     }
     let spec = tint * (gloss * gloss * light);
-    let facing = max(dot(n, to_eye), 0.0);
+    let facing = clamp(dot(n, to_eye), 0.0, 1.0);
     let grazing = pow(1.0 - facing, 5.0);
     let reflectance = mix(vec3<f32>(0.04), shown, metalness);
     let fresnel = reflectance + (vec3<f32>(1.0) - reflectance) * grazing;
@@ -768,7 +770,15 @@ fn face_color(in: FaceOut, front: bool) -> vec3<f32> {
     }
     let finish = select(in.finish.zw, in.finish.xy, front);
     if finish.x > 0.0 || finish.y < 1.0 {
-        return finished_color(shown, n, to_eye, in.world, shade, finish);
+        // Shaded from the side's own color; the selection and hover tints come after, so a
+        // selected or hovered face of a metal shows them.
+        let finished = finished_color(color, n, to_eye, in.world, shade, finish);
+        let selected = mix(finished, lighting.selected_face.rgb, lighting.selected_face.w * in.selected);
+        return select(
+            selected,
+            mix(finished, lighting.hover_face.rgb, lighting.hover_face.w),
+            in.hovered > 0.5,
+        );
     }
     return shown * (vec3<f32>(shade) + lamp_light(in.world, n));
 }

@@ -226,3 +226,12 @@ fn golden_finish_spheres() {
     finish_spheres(&mut d, steel, plastic);
     check("finish_spheres", &d);
 }
+
+#[test]
+fn a_fully_rough_metal_keeps_its_color_and_is_not_black() {
+    let Some((d, px)) = render_spheres((1.0, 1.0), (0.0, 1.0)) else {
+        return;
+    };
+    let metal = at(&px, &d, DVec3::new(-1.2, -1.0, 1.0));
+    assert!(sum(metal) > 150, "{metal:?}");
+}

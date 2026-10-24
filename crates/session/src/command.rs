@@ -684,7 +684,9 @@ pub enum Command {
     /// The new id is in the outcome's `changes.materials`. `existing` says what happens when
     /// `name` is already taken: `fail` (default) is an error, `reuse` returns the existing
     /// material unchanged (no undo step), `update` gives it the color, opacity, texture,
-    /// emission, metalness and roughness passed, as `change_material` would (one undo step), and returns it.
+    /// emission, metalness and roughness passed, as `change_material` would (one undo step),
+    /// and returns it. `reuse` checks only the ranges of the opacity, emission, metalness and
+    /// roughness given.
     /// `existing` other than `fail` needs a `name`.
     AddMaterial {
         #[serde(default)]
@@ -705,7 +707,8 @@ pub enum Command {
         existing: ExistingMaterial,
     },
     /// Rename, recolor, change the opacity (0 to 1), the texture, the emission (0 to 10), the
-    /// metalness and/or the roughness (each 0 to 1) of a material; absent fields stay as they are. `texture`: null removes it; an object
+    /// metalness and/or the roughness (each 0 to 1) of a material; absent fields stay as they
+    /// are. `texture`: null removes it; an object
     /// sets it, reading `path` (the color becomes the image's average unless `color` is
     /// given), or without `path` keeps the image and changes its size.
     ChangeMaterial {
@@ -988,7 +991,8 @@ pub enum Command {
     /// are always made, materials and tags are matched by name (missing ones are added),
     /// the minimum corner of its bounding box lands at `at`, or at the open context's origin
     /// without it, and what it made becomes the selection. A material: added to the model;
-    /// one with the same name and the same color, opacity, emission, metalness, roughness and texture is reused,
+    /// one with the same name and the same color, opacity, emission, metalness, roughness and
+    /// texture is reused,
     /// otherwise the new one is named "<name> 2", "<name> 3"... (the lowest free). The
     /// outcome's `material` is the material's id.
     InsertLibraryItem {

@@ -1280,7 +1280,12 @@ impl Walk<'_> {
                 uv,
                 layer: [drawn_front.layer(), drawn_back.layer()],
                 glow: [drawn_front.glow(), drawn_back.glow()],
-                finish: Look::finish_of(&drawn_front, &drawn_back),
+                // Ghosted and X-ray faces are matte.
+                finish: if ghost || x_ray {
+                    [0.0, 1.0, 0.0, 1.0]
+                } else {
+                    Look::finish_of(&drawn_front, &drawn_back)
+                },
             };
             let range = face.corners.clone();
             let (tris, _) = parts.corners[range.clone()].as_chunks::<3>();
