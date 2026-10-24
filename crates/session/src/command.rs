@@ -914,7 +914,7 @@ pub enum Command {
     /// group holding everything inside any of them, placed with the first one's transform,
     /// material, tag and hidden flag and its definition's name; the operands are erased.
     /// Faces keep their materials; seams between coplanar faces the operation made are
-    /// removed. `placed` holds the new group. A result that would not be closed is
+    /// removed. `placed` holds the new group and `definitions` its new definition. A result that would not be closed is
     /// `invalid_input` ("the result would not be a solid") and changes nothing.
     SolidUnion { ids: Vec<EntityId> },
     /// Solid Tools Subtract, as one undo step: `target` minus each of `tools` (1 or more) in
@@ -1542,7 +1542,7 @@ pub struct Outcome {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purged: Option<usize>,
     /// The definitions a `make_unique` made, in order (empty when it did nothing), or the one a
-    /// `make_group`, `make_component` or `add_<primitive>` (as group or component) made; absent
+    /// `make_group`, `make_component`, `add_<primitive>` (as group or component) or a Solid Tools command (the new groups' definitions, in `placed` order) made; absent
     /// for other commands. Batch commands can refer to them as `$N:dI`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definitions: Option<Vec<DefinitionId>>,

@@ -10,9 +10,21 @@ use session::{AnnotationShape, Document, Units, format_angle, format_length, not
 /// kind, name and rotation of a single instance; a single face's front and back materials and
 /// a painted instance's material. While a group or component is open, a first line says
 /// which.
+#[cfg(test)]
 pub fn entity_info(doc: &Document) -> Vec<String> {
+    entity_info_with(doc, &|i| {
+        kernel::solid::instance_volume(doc.scene(), i).ok()
+    })
+}
+
+/// As `entity_info`, with `volume` giving a lone selected instance's solid volume (None: not
+/// a solid), so the window can keep the answer between frames.
+pub fn entity_info_with(
+    doc: &Document,
+    volume: &dyn Fn(&kernel::Instance) -> Option<f64>,
+) -> Vec<String> {
     let mut lines = editing(doc).into_iter().collect::<Vec<_>>();
-    lines.extend(selection_info(doc, &doc.units()));
+    lines.extend(selection_info(doc, &doc.units(), volume));
     lines
 }
 
@@ -29,7 +41,11 @@ fn editing(doc: &Document) -> Option<String> {
     })
 }
 
-fn selection_info(doc: &Document, units: &Units) -> Vec<String> {
+fn selection_info(
+    doc: &Document,
+    units: &Units,
+    volume: &dyn Fn(&kernel::Instance) -> Option<f64>,
+) -> Vec<String> {
     let m = doc.model();
     let (mut edges, mut faces, mut instances) = (Vec::new(), Vec::new(), Vec::new());
     let mut guides = Vec::new();
@@ -129,7 +145,7 @@ fn selection_info(doc: &Document, units: &Units) -> Vec<String> {
             _ => vec!["1 group".into()],
         };
         if let (Some(d), Some(i)) = (d, instance)
-            && let Ok(volume) = kernel::solid::instance_volume(doc.scene(), i)
+            && let Some(volume) = volume(i)
         {
             lines.push(
                 match d.kind {

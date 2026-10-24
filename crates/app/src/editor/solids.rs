@@ -95,6 +95,14 @@ pub(super) type SolidCache = (
     SolidTools,
 );
 
+/// What `Editor::selected_volume` was worked out for, and its answer.
+pub(super) type VolumeCache = (
+    u64,
+    Vec<kernel::InstanceId>,
+    std::collections::BTreeSet<EntityId>,
+    Option<f64>,
+);
+
 const PLURAL: &str = "Select two or more solid groups or components";
 
 impl Editor {
@@ -167,13 +175,27 @@ impl Editor {
         tools
     }
 
+    /// The volume of `instance` (the selected one) if it is a solid, kept for the revision,
+    /// context and selection it was worked out for: Entity Info asks every frame.
+    pub fn selected_volume(&self, instance: &kernel::Instance) -> Option<f64> {
+        let key = (
+            self.doc.revision(),
+            self.doc.context().to_vec(),
+            self.doc.selection().clone(),
+        );
+        if let Some((r, c, s, v)) = &*self.volume_cache.borrow()
+            && (*r, c, s) == (key.0, &key.1, &key.2)
+        {
+            return *v;
+        }
+        let v = kernel::solid::instance_volume(self.doc.scene(), instance).ok();
+        *self.volume_cache.borrow_mut() = Some((key.0, key.1, key.2, v));
+        v
+    }
+
     fn work_out_solid_tools(&self) -> SolidTools {
         let n = self.doc.selection().len();
-        let refusal = if n == 0 {
-            Some(PLURAL.to_string())
-        } else {
-            self.not_solids()
-        };
+        let refusal = if n == 0 { None } else { self.not_solids() };
         let mut tools = SolidTools::default();
         for op in SolidOp::ALL {
             let needs = match op {
@@ -181,7 +203,9 @@ impl Editor {
                 _ => 2,
             };
             let reason = refusal.clone().or_else(|| {
-                if n < needs {
+                if n == 0 && op == SolidOp::OuterShell {
+                    Some("Select one or more solid groups or components".to_string())
+                } else if n < needs {
                     Some(PLURAL.to_string())
                 } else if op == SolidOp::Split && n != 2 {
                     Some("Split needs exactly two solids".to_string())
@@ -338,6 +362,13 @@ mod tests {
             assert!(!t.get(op).enabled, "{op:?}");
             assert!(t.get(op).tooltip.as_deref().unwrap().contains("Select"));
         }
+        assert!(
+            t.get(SolidOp::OuterShell)
+                .tooltip
+                .as_deref()
+                .unwrap()
+                .contains("one or more")
+        );
         select(&mut e, vec![a]);
         let t = e.solid_tools();
         assert!(!t.get(SolidOp::Union).enabled);

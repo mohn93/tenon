@@ -35,7 +35,7 @@ use crate::flows::{Effect, Env, Flows, PlatformReply, Then, file_name};
 use crate::fly::FlyKey;
 use crate::gui::Gui;
 use crate::host::{AppHost, CLOSE_WAIT, Offscreen, editor_state};
-use crate::info::entity_info;
+use crate::info::entity_info_with;
 #[cfg(target_os = "macos")]
 use crate::menus;
 #[cfg(target_os = "macos")]
@@ -2554,7 +2554,7 @@ impl State {
             self.edited = modified;
         }
         let status = self.editor.status_parts();
-        let info = entity_info(self.editor.doc());
+        let info = entity_info_with(self.editor.doc(), &|i| self.editor.selected_volume(i));
         let materials = self.material_rows();
         // Thumbnails tiles in view asked for last frame; more wait for the next.
         self.make_thumbnails();

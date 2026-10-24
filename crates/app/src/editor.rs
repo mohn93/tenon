@@ -272,6 +272,8 @@ pub struct Editor {
     unique_cache: RefCell<Option<UniqueCache>>,
     /// The Solid Tools items' state for the revision, context and selection (`solid_tools`).
     solid_cache: RefCell<Option<solids::SolidCache>>,
+    /// The lone selected instance's volume for the revision, context and selection (`selected_volume`).
+    volume_cache: RefCell<Option<solids::VolumeCache>>,
     /// Text typed into the measurements box, not yet submitted.
     typed: String,
     /// Feedback from the last tool action or failed command.
@@ -386,6 +388,7 @@ impl Editor {
             hidden_cache: RefCell::new(None),
             unique_cache: RefCell::new(None),
             solid_cache: RefCell::new(None),
+            volume_cache: RefCell::new(None),
             typed: String::new(),
             style_before_add: Default::default(),
             message: None,

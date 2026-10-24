@@ -1,4 +1,4 @@
-//! Solids: whether a mesh is a closed, outward oriented 2-manifold, and its volume.
+//! Solids: whether a mesh is a closed, consistently oriented 2-manifold, and its volume.
 
 use std::collections::BTreeMap;
 

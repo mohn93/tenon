@@ -537,3 +537,44 @@ fn a_batch_refers_to_trim_split_and_shell_operands() {
     assert_eq!(outcomes[3].placed.clone().unwrap().len(), 2);
     assert_eq!(outcomes[4].placed.clone().unwrap().len(), 1);
 }
+
+#[test]
+fn solid_operations_report_the_new_definitions() {
+    let mut d = doc();
+    let a = add_box(&mut d, [0.0; 3], [2.0, 2.0, 2.0]);
+    let b = add_box(&mut d, [1.0, 0.0, 0.0], [2.0, 2.0, 2.0]);
+    let out = run(&mut d, json!({"type": "solid_union", "ids": [a, b]}));
+    let defs = out["definitions"].as_array().unwrap();
+    assert_eq!(defs.len(), 1, "{out}");
+    let result = out["placed"][0].clone();
+    assert_eq!(
+        instance(&d, &result).definition.to_string(),
+        defs[0].as_str().unwrap()
+    );
+
+    // Split places up to three groups, each with its own definition, in `placed` order.
+    let c = add_box(&mut d, [10.0, 0.0, 0.0], [2.0, 2.0, 2.0]);
+    let e = add_box(&mut d, [11.0, 0.0, 0.0], [2.0, 2.0, 2.0]);
+    let out = run(&mut d, json!({"type": "solid_split", "a": c, "b": e}));
+    assert_eq!(out["definitions"].as_array().unwrap().len(), 3, "{out}");
+
+    // An empty result names no definition.
+    let f = add_box(&mut d, [30.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+    let g = add_box(&mut d, [40.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+    let out = run(&mut d, json!({"type": "solid_intersect", "ids": [f, g]}));
+    assert_eq!(out["empty"], true);
+    assert!(out.get("definitions").is_none(), "{out}");
+
+    // A batch can use `$N:d0`.
+    let commands: Vec<BatchCommand> = [
+        json!({"type": "add_box", "corner": [0, 0, 0], "size": [2, 2, 2]}),
+        json!({"type": "add_box", "corner": [1, 0, 0], "size": [2, 2, 2]}),
+        json!({"type": "solid_union", "ids": ["$0:i0", "$1:i0"]}),
+        json!({"type": "rename_definition", "definition": "$2:d0", "name": "Joined"}),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, v)| BatchCommand::parse(v, i).unwrap())
+    .collect();
+    d.execute_batch(commands, true).unwrap();
+}

@@ -152,6 +152,12 @@ impl Document {
         if placed.is_empty() {
             self.solid_empty = Some(true);
         } else {
+            self.made_definitions = Some(
+                placed
+                    .iter()
+                    .filter_map(|i| self.model().instance(*i).map(|i| i.definition))
+                    .collect(),
+            );
             self.selection = placed.into_iter().map(EntityId::Instance).collect();
         }
         Ok(change)

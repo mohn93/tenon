@@ -38,7 +38,7 @@ pub enum Query {
         id: EntityId,
     },
     /// Whether a group or component is a solid: its own geometry is closed (every edge bounds
-    /// two faces, consistently oriented, outward) and it holds no nested groups or components.
+    /// two faces, consistently oriented) and it holds no nested groups or components.
     /// Gives its volume in cubic meters of the open context (after the placement's scale),
     /// or why it is not one.
     Solid {
