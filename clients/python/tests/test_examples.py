@@ -103,6 +103,34 @@ class ExampleTests(unittest.TestCase):
     def test_v6_engine(self):
         self.run_example("v6_engine", {"v6.png": (320, 200), "v6-front.png": (320, 200), "v6-motion.png": (160, 100)})
 
+    def test_v6_cycle(self):
+        """A quick cycle: frames and a contact sheet that are not blank, a report with its
+        measurements, and no moving part running into another."""
+        mod = __import__("v6_cycle")
+        try:
+            with redirect_stdout(io.StringIO()):
+                mod.main(["--quick", "--app", APP, "--out", self.out, "--frames", "6"])
+        except ApiError as e:
+            if e.kind == "rendering_unavailable":
+                self.skipTest("no GPU: %s" % e)
+            raise
+        frames = sorted(os.listdir(os.path.join(self.out, "frames")))
+        self.assertEqual(frames, ["v6_%03d.png" % k for k in range(6)])
+        for name in (frames[0], frames[3]):
+            w, h, rows = read_png(os.path.join(self.out, "frames", name))
+            self.assertEqual((w, h), (320, 200))
+            self.assertGreater(drawn_fraction(rows), 0.08, "%s looks empty" % name)
+        w, h, rows = read_png(os.path.join(self.out, "v6-cycle.png"))
+        self.assertEqual((w, h), (3 * 160 + 4 * 4, 2 * 100 + 3 * 4))
+        with open(os.path.join(self.out, "v6-report.txt")) as f:
+            report = f.read()
+        for field in ("bore ", "stroke ", "displacement ", "compression ", "engine ", "crankshaft ",
+                      "firing order    1-2 ", "Valve 1 intake front", "Valve 2 exhaust rear",
+                      "piston to valve", "piston to head", "valve to cam"):
+            self.assertIn(field, report)
+        self.assertIn("moving parts interfering: 0\n", report)
+        self.assertNotIn("STOPPED", report)
+
     def test_city(self):
         self.run_example("city", {"city.png": (320, 200)})
 

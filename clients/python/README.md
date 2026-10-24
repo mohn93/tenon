@@ -104,16 +104,26 @@ images to `--out DIR` (default: the current directory). `--quick` makes a small 
 images (the tests use it).
 
 - `examples/v6_engine.py`: a half-open cutaway 60-degree V6 (bores, water jacket, ports, I-beam
-  rods, counterweighted crank, helical valve springs, chains along a path, metal materials, a
-  section with whole moving parts, studio lighting, ambient occlusion, labels and two crank
-  scenes). Writes `v6.png`, `v6-front.png` and `v6-motion.png` (a frame between the scenes).
-  About 5 s of building against a release app.
+  rods, counterweighted crank, helical valve springs, chains along a path, metal materials with
+  densities, a section with whole moving parts, studio lighting, ambient occlusion, labels), rigged
+  as a mechanism: every moving part a root instance on joints (crank, rods, pistons, camshafts
+  coupled 0.5 to the crank, 24 valves following their lobes; firing order 1-2-3-4-5-6), two
+  scenes storing the crank's value. Writes `v6.png`, `v6-front.png` and `v6-motion.png` (the
+  crank turned 60 degrees with `render(joints=...)`), all with `ground=False`. About 4 s of
+  building against a release app.
+- `examples/v6_cycle.py`: the same engine through a whole 720 degree cycle: `frames/v6_000.png`...
+  (`--frames N`, default 72), a contact sheet `v6-cycle.png` (PNG read and written with zlib),
+  `v6-cycle.mp4` when `ffmpeg` is on PATH, and `v6-report.txt`: bore (`measure`), stroke (the
+  piston joints), displacement, compression ratio, masses (`mass_properties`), firing order, valve
+  lift per valve, and `sweep_check` results (no moving part interferes; the smallest clearances
+  and where they occur). About 90 s against a release app, most of it the sweep.
 - `examples/city.py`: a city grid from the air, built in a few large batches (`--size N`
   blocks a side). Writes `city.png`.
 
 ```
 cargo build --release -p app
 SKETCHUP_ALT_APP=target/release/app python3 clients/python/examples/v6_engine.py --out /tmp/v6
+SKETCHUP_ALT_APP=target/release/app python3 clients/python/examples/v6_cycle.py --out /tmp/v6-cycle
 ```
 
 ## Tests
