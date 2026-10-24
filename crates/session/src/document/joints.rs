@@ -141,6 +141,28 @@ impl Document {
             .map_err(|e| joint_error(e, Some(id)))
     }
 
+    /// Drives a joint to `value` (degrees or meters) and `slide` (meters), moving its
+    /// assembly.
+    pub(super) fn drive_changes(
+        &mut self,
+        id: JointId,
+        value: f64,
+        slide: Option<f64>,
+    ) -> Result<SceneChange, CommandError> {
+        let kind = self.joint_ref(id)?.kind;
+        if !value.is_finite() || slide.is_some_and(|s| !s.is_finite()) {
+            return Err(invalid("value and slide must be finite numbers"));
+        }
+        let value = if kind.is_angular() {
+            value.to_radians()
+        } else {
+            value
+        };
+        self.scene
+            .drive_joint(id, value, slide)
+            .map_err(|e| joint_error(e, Some(id)))
+    }
+
     /// Every joint, in the order they were made.
     pub(super) fn joint_infos(&self) -> Vec<JointInfo> {
         self.scene

@@ -30,6 +30,7 @@ mod scale;
 mod sections;
 mod smooth;
 mod soften;
+mod solver;
 mod styles;
 mod tags;
 mod texture_placement;

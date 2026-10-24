@@ -853,6 +853,7 @@ impl Document {
             | Command::AddJoint { .. }
             | Command::ChangeJoint { .. }
             | Command::DeleteJoint { .. }
+            | Command::Drive { .. }
             | Command::Hide { .. }
             | Command::Unhide { .. }
             | Command::UnhideLast {}
@@ -1323,6 +1324,11 @@ impl Document {
                 limits,
             } => self.change_joint_changes(*joint, name.as_deref(), *limits),
             Command::DeleteJoint { joint } => self.delete_joint_changes(*joint),
+            Command::Drive {
+                joint,
+                value,
+                slide,
+            } => self.drive_changes(*joint, *value, *slide),
             Command::Hide { ids } => self.hide_changes(ids),
             Command::SetSectionCut { ids, cut } => self.set_section_cut_changes(ids, *cut),
             Command::Unhide { ids } => self.unhide_changes(ids),

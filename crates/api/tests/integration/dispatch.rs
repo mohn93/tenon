@@ -260,6 +260,7 @@ fn describe_lists_methods_and_schemas() {
         "add_joint",
         "change_joint",
         "delete_joint",
+        "drive",
         "position_texture",
         "soften_edges",
         "soften_by_angle",

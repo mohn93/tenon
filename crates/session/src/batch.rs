@@ -341,7 +341,7 @@ fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
                     "a" | "b",
                     Some("add_dimension" | "solid_split" | "add_joint")
                 )
-                | ("joint", Some("change_joint" | "delete_joint"))
+                | ("joint", Some("change_joint" | "delete_joint" | "drive"))
                 | ("edge", Some("add_edge_dimension" | "add_radial_dimension"))
                 | ("anchor", Some("add_note"))
                 | ("target", Some("add_label"))
@@ -844,9 +844,9 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
             }
             f(Slot::One(b));
         }
-        Command::ChangeJoint { joint, .. } | Command::DeleteJoint { joint } => {
-            f(Slot::Joint(joint))
-        }
+        Command::ChangeJoint { joint, .. }
+        | Command::DeleteJoint { joint }
+        | Command::Drive { joint, .. } => f(Slot::Joint(joint)),
         Command::AddBox { material, .. }
         | Command::AddCylinder { material, .. }
         | Command::AddTube { material, .. }

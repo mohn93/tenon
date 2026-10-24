@@ -39,6 +39,7 @@ mod section_loops;
 mod smooth;
 mod soften;
 pub mod solid;
+mod solver;
 mod style;
 pub mod sweep;
 mod tag;
@@ -72,7 +73,9 @@ pub use import_tree::{
     MAX_IMPORT_PLACEMENTS, TreeReport,
 };
 pub use index::{Index, Shape, ray_hits_triangle};
-pub use joint::{JOINT_NAME_BASE, Joint, JointFrame, JointKind, MAX_JOINT_NAME, perpendicular};
+pub use joint::{
+    JOINT_NAME_BASE, Joint, JointFrame, JointKind, MAX_JOINT_NAME, measure_joint, perpendicular,
+};
 pub use location::Location;
 pub use material::{
     DEFAULT_METALNESS, DEFAULT_ROUGHNESS, MAX_EMISSION, MAX_MATERIAL_NAME, Material, MaterialEdit,
@@ -90,6 +93,7 @@ pub use section::SectionPlane;
 pub use section_loops::{SectionLoops, section_loops, triangulate_section};
 pub use smooth::{ShadedTriangle, SmoothNormals};
 pub use soften::SoftenReport;
+pub use solver::DRIVE_TOLERANCE;
 pub use style::{
     AO_RADIUS, AO_STRENGTH, AmbientOcclusion, ENDPOINT_LENGTH, EdgeColorMode, EdgeStyle, Fog,
     FogColor, Ground, MAX_STYLE_NAME, PROFILE_WIDTH, SKETCHY_EXTENSION, SKETCHY_JITTER,

@@ -539,3 +539,220 @@ fn a_batch_names_a_joint_made_earlier() {
     assert!(BatchCommand::parse(json!({"type": "delete_joint", "joint": "$0:i0"}), 1).is_err());
     assert!(BatchCommand::parse(json!({"type": "delete_joint", "joint": "$0:j*"}), 1).is_err());
 }
+
+/// A slider-crank of box parts: a crank turning about Z at the origin (pin at x = 0.05), a rod
+/// to a piston at x = 0.2 that slides along X. Returns [crank, rod, piston] and the joints
+/// [crank, pin, wrist, bore].
+fn slider_crank(d: &mut Document) -> ([Value; 3], [Value; 4]) {
+    let mut place = |x: f64| {
+        ok(
+            d,
+            json!({"type": "add_box", "corner": [x, 0.0, 0.0], "size": [0.01, 0.01, 0.01]}),
+        )["placed"][0]
+            .clone()
+    };
+    let parts = [place(0.0), place(0.1), place(0.2)];
+    let [crank, rod, piston] = parts.clone();
+    let mut join = |kind: &str, a: Value, b: &Value, x: f64, axis: [f64; 3]| {
+        joint_id(&ok(
+            d,
+            json!({"type": "add_joint", "kind": kind, "a": a, "b": b, "point": [x, 0.0, 0.0], "axis": axis, "reference": [0, 1, 0]}),
+        ))
+    };
+    let z = [0.0, 0.0, 1.0];
+    let joints = [
+        join("revolute", Value::Null, &crank, 0.0, z),
+        join("revolute", crank.clone(), &rod, 0.05, z),
+        join("revolute", rod.clone(), &piston, 0.2, z),
+        join("prismatic", Value::Null, &piston, 0.2, [1.0, 0.0, 0.0]),
+    ];
+    (parts, joints)
+}
+
+fn instance_transforms(d: &Document) -> Vec<glam::DAffine3> {
+    d.scene()
+        .root()
+        .instances()
+        .map(|(_, i)| i.transform)
+        .collect()
+}
+
+fn joint_value(d: &Document, id: &Value) -> f64 {
+    ask(d, json!({"type": "joint", "id": id}))["value"]
+        .as_f64()
+        .unwrap()
+}
+
+#[test]
+fn drive_moves_the_assembly_as_one_undo_step() {
+    let mut d = doc();
+    let (parts, joints) = slider_crank(&mut d);
+    let before = instance_transforms(&d);
+    let listed = ask(&d, json!({"type": "joints"}));
+    let depth = ask(&d, json!({"type": "history"}))["undo_depth"].clone();
+    let out = ok(
+        &mut d,
+        json!({"type": "drive", "joint": joints[0], "value": 90}),
+    );
+    // The crank, rod and piston all move; every joint's value changes.
+    let mut modified: Vec<Value> = out["changes"]["modified"].as_array().unwrap().clone();
+    modified.sort_by_key(|v| v.to_string());
+    let mut expected = parts.to_vec();
+    expected.sort_by_key(|v| v.to_string());
+    assert_eq!(modified, expected);
+    assert_eq!(out["changes"]["joints"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        ask(&d, json!({"type": "history"}))["undo_depth"],
+        json!(depth.as_u64().unwrap() + 1)
+    );
+    assert!((joint_value(&d, &joints[0]) - 90.0).abs() < 1e-12);
+    // At 90 degrees the piston is at sqrt(0.15^2 - 0.05^2) from the axis: travel from 0.2.
+    let travel = (0.15f64 * 0.15 - 0.05 * 0.05).sqrt() - 0.2;
+    assert!((joint_value(&d, &joints[3]) - travel).abs() < 1e-9);
+
+    ok(&mut d, json!({"type": "undo"}));
+    assert_eq!(instance_transforms(&d), before);
+    assert_eq!(
+        ask(&d, json!({"type": "joints"}))["joints"],
+        listed["joints"]
+    );
+    ok(&mut d, json!({"type": "redo"}));
+    assert!((joint_value(&d, &joints[0]) - 90.0).abs() < 1e-12);
+}
+
+#[test]
+fn a_drive_to_the_current_value_makes_no_step() {
+    let mut d = doc();
+    let (_, joints) = slider_crank(&mut d);
+    let depth = ask(&d, json!({"type": "history"}))["undo_depth"].clone();
+    let revision = d.revision();
+    let out = ok(
+        &mut d,
+        json!({"type": "drive", "joint": joints[0], "value": 0}),
+    );
+    assert!(out["changes"]["modified"].as_array().unwrap().is_empty());
+    assert_eq!(ask(&d, json!({"type": "history"}))["undo_depth"], depth);
+    assert_eq!(d.revision(), revision);
+}
+
+#[test]
+fn bad_drives_are_refused_and_change_nothing() {
+    let mut d = doc();
+    let (parts, joints) = slider_crank(&mut d);
+    ok(
+        &mut d,
+        json!({"type": "change_joint", "joint": joints[0], "limits": [-45, 45]}),
+    );
+    let before = instance_transforms(&d);
+    let listed = ask(&d, json!({"type": "joints"}));
+    let e = run(
+        &mut d,
+        json!({"type": "drive", "joint": joints[0], "value": 60}),
+    )
+    .unwrap_err();
+    assert_eq!(e.0, ErrorKind::InvalidInput);
+    assert!(e.1.contains("limits"), "{}", e.1);
+    let e = run(
+        &mut d,
+        json!({"type": "drive", "joint": joints[0], "value": 10, "slide": 0.1}),
+    )
+    .unwrap_err();
+    assert_eq!(e.0, ErrorKind::InvalidInput);
+    let e = run(
+        &mut d,
+        json!({"type": "drive", "joint": "j99999", "value": 10}),
+    )
+    .unwrap_err();
+    assert_eq!(e.0, ErrorKind::NotFound);
+    // The piston cannot slide 1 m: the rod is 0.15 m long.
+    let e = run(
+        &mut d,
+        json!({"type": "drive", "joint": joints[3], "value": 1}),
+    )
+    .unwrap_err();
+    assert_eq!(e.0, ErrorKind::InvalidInput);
+    assert!(e.1.contains("cannot all be met at 1 m"), "{}", e.1);
+    // A fixed joint has no value to drive.
+    let fixed = joint_id(&ok(
+        &mut d,
+        json!({"type": "add_joint", "kind": "fixed", "a": parts[0], "b": parts[2], "point": [0, 0, 0], "axis": [0, 0, 1]}),
+    ));
+    let e = run(&mut d, json!({"type": "drive", "joint": fixed, "value": 1})).unwrap_err();
+    assert_eq!(e.0, ErrorKind::InvalidInput);
+    ok(&mut d, json!({"type": "undo"}));
+    assert_eq!(instance_transforms(&d), before);
+    assert_eq!(
+        ask(&d, json!({"type": "joints"}))["joints"],
+        listed["joints"]
+    );
+}
+
+#[test]
+fn a_cylindrical_drive_takes_degrees_and_meters() {
+    let mut d = doc();
+    let (a, _) = two_parts(&mut d);
+    let screw = joint_id(&ok(
+        &mut d,
+        json!({"type": "add_joint", "kind": "cylindrical", "b": a, "point": [0, 0, 0], "axis": [0, 0, 1], "reference": [1, 0, 0]}),
+    ));
+    ok(
+        &mut d,
+        json!({"type": "drive", "joint": screw, "value": 90, "slide": 0.5}),
+    );
+    let info = ask(&d, json!({"type": "joint", "id": screw}));
+    assert!((info["value"].as_f64().unwrap() - 90.0).abs() < 1e-12);
+    assert_eq!(info["slide"], 0.5);
+    let t = d.scene().root().instances().next().unwrap().1.transform;
+    assert!(
+        t.transform_point3(DVec3::X)
+            .abs_diff_eq(DVec3::new(0.0, 1.0, 0.5), 1e-9)
+    );
+}
+
+#[test]
+fn going_to_a_scene_with_positions_sets_joint_values_from_the_pose() {
+    let mut d = doc();
+    let (parts, joints) = slider_crank(&mut d);
+    let scene = ok(
+        &mut d,
+        json!({"type": "add_scene", "name": "Start", "positions": parts}),
+    )["changes"]["scenes"][0]
+        .clone();
+    ok(
+        &mut d,
+        json!({"type": "drive", "joint": joints[0], "value": 30}),
+    );
+    assert!(joint_value(&d, &joints[3]).abs() > 1e-3);
+    let out = ok(&mut d, json!({"type": "go_to_scene", "scene": scene}));
+    assert_eq!(out["changes"]["joints"].as_array().unwrap().len(), 4);
+    for j in &joints {
+        assert!(
+            joint_value(&d, j).abs() < 1e-9,
+            "{j}: {}",
+            joint_value(&d, j)
+        );
+    }
+    // Undo puts the values back with the positions.
+    ok(&mut d, json!({"type": "undo"}));
+    assert!((joint_value(&d, &joints[0]) - 30.0).abs() < 1e-9);
+}
+
+#[test]
+fn a_batch_drives_a_joint_made_earlier() {
+    let mut d = doc();
+    let (a, b) = two_parts(&mut d);
+    let commands: Vec<BatchCommand> = vec![
+        hinge(&a, &b),
+        json!({"type": "drive", "joint": "$0:j0", "value": 45}),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, v)| BatchCommand::parse(v, i).unwrap())
+    .collect();
+    d.execute_batch(commands, true).unwrap();
+    let joint = &ask(&d, json!({"type": "joints"}))["joints"][0];
+    assert!((joint["value"].as_f64().unwrap() - 45.0).abs() < 1e-12);
+    assert!(
+        BatchCommand::parse(json!({"type": "drive", "joint": "$0:i0", "value": 1}), 1).is_err()
+    );
+}

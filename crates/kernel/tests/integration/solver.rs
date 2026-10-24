@@ -1,0 +1,635 @@
+//! Driving joints: the solver moves every part connected to a driven joint so that all the
+//! joints of the assembly hold, checked against linkages whose motion is known exactly.
+
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
+use std::time::Instant;
+
+use glam::{DAffine3, DQuat, DVec3};
+use kernel::{
+    DefinitionKind, EntityId, InstanceId, Joint, JointFrame, JointId, JointKind, MeshId, Model,
+    Scene,
+};
+
+fn p(x: f64, y: f64, z: f64) -> DVec3 {
+    DVec3::new(x, y, z)
+}
+
+/// A scene with `n` instances of a small box component, each placed by `place(k)`.
+fn parts_placed(n: usize, place: impl Fn(usize) -> DAffine3) -> (Scene, Vec<InstanceId>) {
+    let mut m = Model::new();
+    let c = m
+        .add_polygon(&[
+            p(0.0, 0.0, 0.0),
+            p(0.01, 0.0, 0.0),
+            p(0.01, 0.01, 0.0),
+            p(0.0, 0.01, 0.0),
+        ])
+        .unwrap();
+    let face = c
+        .summary()
+        .created
+        .iter()
+        .find_map(|id| match id {
+            EntityId::Face(f) => Some(*f),
+            _ => None,
+        })
+        .unwrap();
+    m.push_pull(face, 0.01).unwrap();
+    let mut s = Scene::from_root(m);
+    let edges: Vec<_> = s.root().edges().map(|(id, _)| id).collect();
+    let faces: Vec<_> = s.root().faces().map(|(id, _)| id).collect();
+    let (first, _) = s
+        .make_group(
+            MeshId::Root,
+            &edges,
+            &faces,
+            &[],
+            DefinitionKind::Component,
+            "Part",
+        )
+        .unwrap();
+    let d = s.root().instance(first).unwrap().definition;
+    s.set_instance_transform(MeshId::Root, first, place(0))
+        .unwrap();
+    let mut ids = vec![first];
+    for k in 1..n {
+        ids.push(s.place_instance(MeshId::Root, d, place(k)).unwrap().0);
+    }
+    (s, ids)
+}
+
+fn parts(n: usize) -> (Scene, Vec<InstanceId>) {
+    parts_placed(n, |_| DAffine3::IDENTITY)
+}
+
+fn transform(s: &Scene, i: InstanceId) -> DAffine3 {
+    s.root().instance(i).unwrap().transform
+}
+
+/// Adds a joint whose world frame is (`point`, `axis`, `reference`) as the parts stand now.
+fn join(
+    s: &mut Scene,
+    kind: JointKind,
+    a: Option<InstanceId>,
+    b: InstanceId,
+    point: DVec3,
+    axis: DVec3,
+    reference: DVec3,
+) -> JointId {
+    let world = JointFrame {
+        origin: point,
+        axis: axis.normalize(),
+        reference: reference.normalize(),
+    };
+    let local = |i: Option<InstanceId>| {
+        let t = i.map_or(DAffine3::IDENTITY, |i| transform(s, i));
+        JointFrame::local(&world, &t).unwrap()
+    };
+    let name = s.free_joint_name();
+    let joint = Joint {
+        name,
+        kind,
+        a,
+        b,
+        frame_a: local(a),
+        frame_b: local(Some(b)),
+        value: 0.0,
+        slide: 0.0,
+        limits: None,
+    };
+    s.add_joint(joint).unwrap().0
+}
+
+fn value(s: &Scene, j: JointId) -> f64 {
+    s.joint(j).unwrap().value
+}
+
+const R: f64 = 0.05;
+const L: f64 = 0.15;
+
+/// A slider-crank in the XY plane: a crank turning about Z at the origin (pin at (R, 0)), a rod
+/// of length L and a piston sliding along X. Returns the scene, [crank, rod, piston] and the
+/// joints [crank, crank pin, wrist pin, bore].
+fn slider_crank(rod_place: DAffine3) -> (Scene, [InstanceId; 3], [JointId; 4]) {
+    let (mut s, ids) = parts_placed(3, |k| {
+        if k == 1 {
+            rod_place
+        } else {
+            DAffine3::IDENTITY
+        }
+    });
+    let [crank, rod, piston] = [ids[0], ids[1], ids[2]];
+    let z = DVec3::Z;
+    let x = DVec3::X;
+    let j0 = join(&mut s, JointKind::Revolute, None, crank, DVec3::ZERO, z, x);
+    let j1 = join(
+        &mut s,
+        JointKind::Revolute,
+        Some(crank),
+        rod,
+        p(R, 0.0, 0.0),
+        z,
+        x,
+    );
+    let j2 = join(
+        &mut s,
+        JointKind::Revolute,
+        Some(rod),
+        piston,
+        p(R + L, 0.0, 0.0),
+        z,
+        x,
+    );
+    let j3 = join(
+        &mut s,
+        JointKind::Prismatic,
+        None,
+        piston,
+        p(R + L, 0.0, 0.0),
+        x,
+        DVec3::Y,
+    );
+    (s, [crank, rod, piston], [j0, j1, j2, j3])
+}
+
+fn piston_x(t: f64) -> f64 {
+    R * t.cos() + (L * L - R * R * t.sin().powi(2)).sqrt()
+}
+
+#[test]
+fn a_slider_crank_follows_the_exact_piston_position_over_a_turn() {
+    let (mut s, [crank, rod, piston], [j0, j1, j2, j3]) = slider_crank(DAffine3::IDENTITY);
+    for k in 1..=24 {
+        let t = (15.0 * k as f64).to_radians();
+        let change = s.drive_joint(j0, t, None).unwrap();
+        assert!(!change.is_empty());
+        let wrist = transform(&s, piston).transform_point3(p(R + L, 0.0, 0.0));
+        assert!((wrist.x - piston_x(t)).abs() < 1e-9, "{k}: {wrist}");
+        assert!(wrist.y.abs() < 1e-9 && wrist.z.abs() < 1e-9);
+        let pin = transform(&s, crank).transform_point3(p(R, 0.0, 0.0));
+        assert!((pin - p(R * t.cos(), R * t.sin(), 0.0)).length() < 1e-9);
+        // The rod joins the pin and the wrist.
+        let rod_t = transform(&s, rod);
+        assert!((rod_t.transform_point3(p(R, 0.0, 0.0)) - pin).length() < 1e-9);
+        assert!((rod_t.transform_point3(p(R + L, 0.0, 0.0)) - wrist).length() < 1e-9);
+        // Stored values follow the pose: the crank's is the target, the bore's the travel.
+        assert_eq!(value(&s, j0), t);
+        assert!((value(&s, j3) - (piston_x(t) - R - L)).abs() < 1e-9);
+        // The rod leans at phi; the crank pin's value runs on continuously from 0.
+        let phi = -(R * t.sin() / L).asin();
+        assert!(
+            (value(&s, j1) - (phi - t)).abs() < 1e-9,
+            "{k}: {}",
+            value(&s, j1)
+        );
+        assert!((value(&s, j2) + phi).abs() < 1e-9);
+    }
+    // A full turn is 360 degrees, not 0: the crank's value keeps counting.
+    assert!((value(&s, j0) - TAU).abs() < 1e-12);
+}
+
+#[test]
+fn a_four_bar_rocker_follows_its_exact_angle() {
+    // Ground pivots O2 = (0, 0), O4 = (D, 0); crank A, coupler B, rocker C (crank-rocker).
+    let (a, b, c, d) = (0.1, 0.3, 0.25, 0.3);
+    let rocker_end = |t: f64| {
+        let pa = p(a * t.cos(), a * t.sin(), 0.0);
+        let o4 = p(d, 0.0, 0.0);
+        let dist = (o4 - pa).length();
+        let along = (dist * dist + b * b - c * c) / (2.0 * dist);
+        let h = (b * b - along * along).sqrt();
+        let u = (o4 - pa) / dist;
+        let n = p(-u.y, u.x, 0.0);
+        pa + u * along + n * h
+    };
+    let t0 = FRAC_PI_2;
+    let pa = p(a * t0.cos(), a * t0.sin(), 0.0);
+    let pb = rocker_end(t0);
+    let o4 = p(d, 0.0, 0.0);
+    let (mut s, ids) = parts(3);
+    let [crank, coupler, rocker] = [ids[0], ids[1], ids[2]];
+    let z = DVec3::Z;
+    let j0 = join(&mut s, JointKind::Revolute, None, crank, DVec3::ZERO, z, pa);
+    join(
+        &mut s,
+        JointKind::Revolute,
+        Some(crank),
+        coupler,
+        pa,
+        z,
+        DVec3::X,
+    );
+    join(
+        &mut s,
+        JointKind::Revolute,
+        Some(coupler),
+        rocker,
+        pb,
+        z,
+        DVec3::X,
+    );
+    let j3 = join(&mut s, JointKind::Revolute, None, rocker, o4, z, pb - o4);
+    let start = (pb - o4).y.atan2((pb - o4).x);
+    for k in 1..=24 {
+        let drive = (15.0 * k as f64).to_radians();
+        s.drive_joint(j0, drive, None).unwrap();
+        let end = rocker_end(t0 + drive);
+        let expected = (end - o4).y.atan2((end - o4).x) - start;
+        assert!((value(&s, j3) - expected).abs() < 1e-9, "{k}");
+        let rocker_tip = transform(&s, rocker).transform_point3(pb);
+        assert!((rocker_tip - end).length() < 1e-9);
+        // The coupler's far end is where the rocker's is.
+        let coupler_end = transform(&s, coupler).transform_point3(pb);
+        assert!(
+            (coupler_end - end).length() < 1e-9,
+            "{k}: {coupler_end} vs {end}"
+        );
+    }
+}
+
+/// A V engine along X: a crank turning about X, and per cylinder a rod on a crank pin and a
+/// piston sliding along its bank's bore (banks at +/-30 degrees from Z). Cylinders share pins
+/// in pairs, the pins 120 degrees apart. Returns the scene, the crank, the pistons with their
+/// bore (start, direction) and wrist pin, and the crank's joint.
+struct Engine {
+    scene: Scene,
+    crank: InstanceId,
+    crank_joint: JointId,
+    pistons: Vec<(InstanceId, DVec3, DVec3)>,
+    rods: Vec<(InstanceId, DVec3)>,
+    joints: Vec<JointId>,
+}
+
+const ER: f64 = 0.04;
+const EL: f64 = 0.14;
+
+fn engine(cylinders: usize, flywheel: bool) -> Engine {
+    let n = 1 + 2 * cylinders + usize::from(flywheel);
+    let (mut s, ids) = parts(n);
+    let crank = ids[0];
+    let x = DVec3::X;
+    let crank_joint = join(
+        &mut s,
+        JointKind::Revolute,
+        None,
+        crank,
+        DVec3::ZERO,
+        x,
+        DVec3::Z,
+    );
+    let mut joints = vec![crank_joint];
+    let mut pistons = Vec::new();
+    let mut rods = Vec::new();
+    for c in 0..cylinders {
+        let (rod, piston) = (ids[1 + 2 * c], ids[2 + 2 * c]);
+        let throw = (c / 2) as f64 * TAU / 3.0;
+        let bank = if c % 2 == 0 { PI / 6.0 } else { -PI / 6.0 };
+        let px = 0.1 * c as f64;
+        let pin = p(px, ER * throw.sin(), ER * throw.cos());
+        let dir = p(0.0, bank.sin(), bank.cos());
+        let base = p(px, 0.0, 0.0);
+        let rel = pin - base;
+        let along = rel.dot(dir) + (EL * EL - rel.length_squared() + rel.dot(dir).powi(2)).sqrt();
+        let wrist = base + dir * along;
+        joints.push(join(
+            &mut s,
+            JointKind::Revolute,
+            Some(crank),
+            rod,
+            pin,
+            x,
+            DVec3::Z,
+        ));
+        joints.push(join(
+            &mut s,
+            JointKind::Revolute,
+            Some(rod),
+            piston,
+            wrist,
+            x,
+            DVec3::Z,
+        ));
+        joints.push(join(
+            &mut s,
+            JointKind::Prismatic,
+            None,
+            piston,
+            wrist,
+            dir,
+            x,
+        ));
+        pistons.push((piston, base, dir));
+        rods.push((rod, pin));
+    }
+    if flywheel {
+        let f = *ids.last().unwrap();
+        joints.push(join(
+            &mut s,
+            JointKind::Fixed,
+            Some(crank),
+            f,
+            p(-0.1, 0.0, 0.0),
+            x,
+            DVec3::Z,
+        ));
+    }
+    Engine {
+        scene: s,
+        crank,
+        crank_joint,
+        pistons,
+        rods,
+        joints,
+    }
+}
+
+/// Every piston's wrist pin lies on its bore line at the exact distance for the crank angle.
+fn check_engine(e: &Engine, wrists: &[DVec3]) {
+    let s = &e.scene;
+    for (k, ((piston, base, dir), wrist0)) in e.pistons.iter().zip(wrists).enumerate() {
+        let wrist = transform(s, *piston).transform_point3(*wrist0);
+        let off = wrist - *base;
+        let across = off - *dir * off.dot(*dir);
+        assert!(
+            across.length() < 1e-9,
+            "piston {k} off its bore by {across}"
+        );
+        let (rod, pin0) = e.rods[k];
+        let pin = transform(s, e.crank).transform_point3(pin0);
+        assert!((transform(s, rod).transform_point3(pin0) - pin).length() < 1e-9);
+        let rel = pin - *base;
+        let along = rel.dot(*dir) + (EL * EL - rel.length_squared() + rel.dot(*dir).powi(2)).sqrt();
+        assert!((off.dot(*dir) - along).abs() < 1e-9, "piston {k}");
+    }
+}
+
+fn wrists(e: &Engine) -> Vec<DVec3> {
+    e.pistons
+        .iter()
+        .map(|(piston, _, _)| {
+            let j = e
+                .scene
+                .joints()
+                .find(|(_, j)| j.b == *piston && j.kind == JointKind::Prismatic)
+                .unwrap()
+                .1;
+            j.frame_b.origin
+        })
+        .collect()
+}
+
+#[test]
+fn a_v6_turns_two_full_turns_and_back_with_every_piston_on_its_bore() {
+    let mut e = engine(6, false);
+    let w = wrists(&e);
+    let start: Vec<DAffine3> = e
+        .scene
+        .root()
+        .instances()
+        .map(|(_, i)| i.transform)
+        .collect();
+    for k in 1..=4 {
+        let t = (180.0 * k as f64).to_radians();
+        e.scene.drive_joint(e.crank_joint, t, None).unwrap();
+        assert_eq!(value(&e.scene, e.crank_joint), t);
+        check_engine(&e, &w);
+    }
+    e.scene.drive_joint(e.crank_joint, 0.0, None).unwrap();
+    check_engine(&e, &w);
+    for &j in &e.joints {
+        assert!(
+            value(&e.scene, j).abs() < 1e-9,
+            "{j} at {}",
+            value(&e.scene, j)
+        );
+    }
+    let end: Vec<DAffine3> = e
+        .scene
+        .root()
+        .instances()
+        .map(|(_, i)| i.transform)
+        .collect();
+    for (a, b) in start.iter().zip(&end) {
+        assert!(a.abs_diff_eq(*b, 1e-9), "{a:?} vs {b:?}");
+    }
+}
+
+#[test]
+fn driving_outside_the_limits_is_refused_and_changes_nothing() {
+    let (mut s, [crank, ..], [j0, ..]) = slider_crank(DAffine3::IDENTITY);
+    let mut limited = s.joint(j0).unwrap().clone();
+    limited.limits = Some((-0.5, 0.5));
+    s.change_joint(j0, limited).unwrap();
+    let before = transform(&s, crank);
+    let e = s.drive_joint(j0, 0.6, None).unwrap_err();
+    assert!(e.to_string().contains("limits"), "{e}");
+    assert_eq!(transform(&s, crank), before);
+    assert_eq!(value(&s, j0), 0.0);
+    s.drive_joint(j0, 0.5, None).unwrap();
+    assert_eq!(value(&s, j0), 0.5);
+}
+
+#[test]
+fn an_unreachable_drive_is_refused_and_changes_nothing() {
+    // A link pinned to the crank and held by a ball at a fixed point locks the crank.
+    let (mut s, ids) = parts(2);
+    let [crank, link] = [ids[0], ids[1]];
+    let j0 = join(
+        &mut s,
+        JointKind::Revolute,
+        None,
+        crank,
+        DVec3::ZERO,
+        DVec3::Z,
+        DVec3::X,
+    );
+    join(
+        &mut s,
+        JointKind::Revolute,
+        Some(crank),
+        link,
+        p(0.05, 0.0, 0.0),
+        DVec3::Z,
+        DVec3::X,
+    );
+    join(
+        &mut s,
+        JointKind::Ball,
+        None,
+        link,
+        p(0.2, 0.05, 0.0),
+        DVec3::Z,
+        DVec3::X,
+    );
+    let joints: Vec<Joint> = s.joints().map(|(_, j)| j.clone()).collect();
+    let before = [transform(&s, crank), transform(&s, link)];
+    let e = s.drive_joint(j0, 90f64.to_radians(), None).unwrap_err();
+    assert!(
+        e.to_string().contains("cannot all be met at 90 degrees"),
+        "{e}"
+    );
+    assert_eq!([transform(&s, crank), transform(&s, link)], before);
+    let after: Vec<Joint> = s.joints().map(|(_, j)| j.clone()).collect();
+    assert_eq!(after, joints);
+}
+
+#[test]
+fn a_drive_to_the_current_value_changes_nothing() {
+    let (mut s, _, [j0, ..]) = slider_crank(DAffine3::IDENTITY);
+    assert!(s.drive_joint(j0, 0.0, None).unwrap().is_empty());
+    s.drive_joint(j0, 0.3, None).unwrap();
+    assert!(s.drive_joint(j0, 0.3, None).unwrap().is_empty());
+}
+
+#[test]
+fn undoing_a_drive_restores_every_transform_and_value_exactly() {
+    let (mut s, ids, joints) = slider_crank(DAffine3::IDENTITY);
+    s.drive_joint(joints[0], 0.4, None).unwrap();
+    let transforms: Vec<DAffine3> = ids.iter().map(|i| transform(&s, *i)).collect();
+    let values: Vec<Joint> = s.joints().map(|(_, j)| j.clone()).collect();
+    let change = s.drive_joint(joints[0], 2.0, None).unwrap();
+    s.apply(&change.inverse());
+    let after: Vec<DAffine3> = ids.iter().map(|i| transform(&s, *i)).collect();
+    assert_eq!(after, transforms);
+    assert_eq!(
+        s.joints().map(|(_, j)| j.clone()).collect::<Vec<_>>(),
+        values
+    );
+}
+
+#[test]
+fn a_floating_assembly_holds_the_driven_joints_first_part() {
+    let (mut s, ids) = parts_placed(2, |k| DAffine3::from_translation(p(k as f64, 0.0, 0.0)));
+    let [a, b] = [ids[0], ids[1]];
+    let hinge = join(
+        &mut s,
+        JointKind::Revolute,
+        Some(a),
+        b,
+        p(0.5, 0.0, 0.0),
+        DVec3::Z,
+        DVec3::X,
+    );
+    let before_a = transform(&s, a);
+    let before_b = transform(&s, b);
+    s.drive_joint(hinge, FRAC_PI_2, None).unwrap();
+    assert_eq!(transform(&s, a), before_a);
+    let turn = DAffine3::from_translation(p(0.5, 0.0, 0.0))
+        * DAffine3::from_quat(DQuat::from_rotation_z(FRAC_PI_2))
+        * DAffine3::from_translation(p(-0.5, 0.0, 0.0));
+    assert!(transform(&s, b).abs_diff_eq(turn * before_b, 1e-9));
+    // Driving the other way round the same hinge, from b's side, holds b.
+    let back = join(
+        &mut s,
+        JointKind::Revolute,
+        Some(b),
+        a,
+        p(0.5, 0.0, 0.0),
+        DVec3::Z,
+        DVec3::X,
+    );
+    let held = transform(&s, b);
+    s.drive_joint(back, 0.1, None).unwrap();
+    assert_eq!(transform(&s, b), held);
+}
+
+#[test]
+fn a_prismatic_drive_slides_and_a_cylindrical_drive_turns_and_slides() {
+    let (mut s, ids) = parts(2);
+    let slider = join(
+        &mut s,
+        JointKind::Prismatic,
+        None,
+        ids[0],
+        DVec3::ZERO,
+        DVec3::X,
+        DVec3::Y,
+    );
+    s.drive_joint(slider, 0.25, None).unwrap();
+    assert!(
+        transform(&s, ids[0])
+            .translation
+            .abs_diff_eq(p(0.25, 0.0, 0.0), 1e-9)
+    );
+    let screw = join(
+        &mut s,
+        JointKind::Cylindrical,
+        None,
+        ids[1],
+        DVec3::ZERO,
+        DVec3::Z,
+        DVec3::X,
+    );
+    s.drive_joint(screw, FRAC_PI_2, Some(0.1)).unwrap();
+    let t = transform(&s, ids[1]);
+    assert!(
+        t.transform_point3(p(1.0, 0.0, 0.0))
+            .abs_diff_eq(p(0.0, 1.0, 0.1), 1e-9)
+    );
+    assert_eq!(s.joint(screw).unwrap().slide, 0.1);
+    // Without a slide the slide stays.
+    s.drive_joint(screw, 0.0, None).unwrap();
+    assert!(
+        transform(&s, ids[1])
+            .transform_point3(p(1.0, 0.0, 0.0))
+            .abs_diff_eq(p(1.0, 0.0, 0.1), 1e-9)
+    );
+}
+
+#[test]
+fn a_mirrored_rod_drives_as_its_unmirrored_twin() {
+    let mirror =
+        DAffine3::from_translation(p(0.3, 0.2, 0.0)) * DAffine3::from_scale(p(-1.0, 2.0, 1.0));
+    let (mut s, [_, rod, piston], [j0, ..]) = slider_crank(mirror);
+    for k in 1..=8 {
+        let t = (45.0 * k as f64).to_radians();
+        s.drive_joint(j0, t, None).unwrap();
+        let wrist = transform(&s, piston).transform_point3(p(R + L, 0.0, 0.0));
+        assert!((wrist.x - piston_x(t)).abs() < 1e-9, "{k}");
+        // The rod keeps its mirror and scale: only rotated and moved.
+        let m = transform(&s, rod).matrix3;
+        assert!((m.determinant() - mirror.matrix3.determinant()).abs() < 1e-9);
+    }
+}
+
+#[test]
+fn measured_values_follow_a_moved_pose() {
+    let (mut s, [crank, rod, piston], [j0, _, _, j3]) = slider_crank(DAffine3::IDENTITY);
+    let mut moved = s.clone();
+    moved.drive_joint(j0, 1.0, None).unwrap();
+    let mut limited = s.joint(j0).unwrap().clone();
+    limited.limits = Some((-0.5, 0.5));
+    s.change_joint(j0, limited).unwrap();
+    for i in [crank, rod, piston] {
+        s.set_instance_transform(MeshId::Root, i, transform(&moved, i))
+            .unwrap();
+    }
+    let change = s.update_joint_values();
+    assert!(!change.is_empty());
+    assert!((value(&s, j0) - 1.0).abs() < 1e-9);
+    // The pose passed the crank's limits: they go, so the value can stand.
+    assert_eq!(s.joint(j0).unwrap().limits, None);
+    assert!((value(&s, j3) - value(&moved, j3)).abs() < 1e-9);
+    assert!(s.update_joint_values().is_empty());
+}
+
+/// 30 parts and 43 joints: a 14-cylinder engine with a flywheel.
+#[test]
+#[ignore = "timing; run in release"]
+fn perf_a_thirty_part_engine_drives_in_under_20_ms() {
+    let mut e = engine(14, true);
+    assert_eq!(e.scene.root().instances().count(), 30);
+    assert!(e.joints.len() >= 40);
+    let w = wrists(&e);
+    let mut worst = 0.0f64;
+    for k in 1..=36 {
+        let t = Instant::now();
+        e.scene
+            .drive_joint(e.crank_joint, (10.0 * k as f64).to_radians(), None)
+            .unwrap();
+        worst = worst.max(t.elapsed().as_secs_f64());
+    }
+    check_engine(&e, &w);
+    eprintln!("worst 10 degree drive: {:.2} ms", worst * 1e3);
+    assert!(worst < 0.020, "{worst}");
+}

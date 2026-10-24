@@ -972,6 +972,24 @@ pub enum Command {
     },
     /// Remove a joint, as one undo step. Erasing a part removes its joints in the same step.
     DeleteJoint { joint: JointId },
+    /// Set a joint's value and move the parts connected to it through joints so that every
+    /// joint between them holds, as one undo step. `value` is degrees for revolute and
+    /// cylindrical joints and meters for prismatic ones; `slide` (meters, cylindrical only)
+    /// sets the slide too, absent keeping it. The other joints' values are free and follow
+    /// the new pose. Parts joined to the ground keep it fixed; an assembly with no ground
+    /// holds the joint's part `a`. Large turns are taken in steps of at most 10 degrees (a
+    /// slide in tenths) so a closed loop keeps its branch. A fixed or ball joint, a value
+    /// outside the joint's limits, a pose where the joints cannot all be met (to 1e-9) or one
+    /// where another joint would pass its limits is `invalid_input` and changes nothing; the
+    /// joint's current value changes nothing (no undo step). The outcome's
+    /// `changes.modified` lists the moved instances and `changes.joints` the joints whose
+    /// values changed.
+    Drive {
+        joint: JointId,
+        value: f64,
+        #[serde(default)]
+        slide: Option<f64>,
+    },
     /// Hide edges, faces, instances and guides of the open context, as one undo step (an
     /// entity already hidden is ignored; none to hide is a success with no undo step).
     /// A hidden entity is not drawn, picked or snapped to, and leaves the selection.

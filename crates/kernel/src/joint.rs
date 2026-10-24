@@ -12,6 +12,9 @@ use crate::edit::KernelError;
 use crate::ids::{InstanceId, JointId};
 use crate::scene::{Scene, SceneChange, Step};
 
+/// How far a measured value may be from the stored one and still count as unchanged.
+pub(crate) const VALUE_TOLERANCE: f64 = 1e-12;
+
 /// The longest joint name, in characters.
 pub const MAX_JOINT_NAME: usize = 100;
 
@@ -19,9 +22,10 @@ pub const MAX_JOINT_NAME: usize = 100;
 pub const JOINT_NAME_BASE: &str = "Joint";
 
 /// What a joint lets the two parts do (frames A and B met in the world):
-/// - `revolute`: origins on one line along the axes, axes parallel; free rotation about it.
-/// - `prismatic`: as revolute with the references equal; free sliding along the axis.
-/// - `cylindrical`: as revolute, with the sliding free too.
+/// - `revolute`: origins equal, axes parallel; free rotation about the axis.
+/// - `prismatic`: origins on one line along the axes, axes parallel and the references
+///   equal; free sliding along the axis.
+/// - `cylindrical`: as revolute, with sliding along the axis free too.
 /// - `fixed`: the frames are equal.
 /// - `ball`: the origins are equal; free rotation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -107,6 +111,42 @@ impl JointFrame {
     }
 }
 
+/// The signed angle from `a`'s reference to `b`'s about `a`'s axis, in [-pi, pi].
+pub(crate) fn frame_angle(a: &JointFrame, b: &JointFrame) -> f64 {
+    a.axis
+        .dot(a.reference.cross(b.reference))
+        .atan2(a.reference.dot(b.reference))
+}
+
+/// The signed distance from `a`'s origin to `b`'s along `a`'s axis.
+pub(crate) fn frame_distance(a: &JointFrame, b: &JointFrame) -> f64 {
+    (b.origin - a.origin).dot(a.axis)
+}
+
+/// `x` less the whole turns that bring it nearest 0, in [-pi, pi].
+pub(crate) fn wrap_angle(x: f64) -> f64 {
+    x - std::f64::consts::TAU * (x / std::f64::consts::TAU).round()
+}
+
+/// The value and slide of a joint of `kind` whose frames stand at `a` and `b` in the world,
+/// an angle taken as the turn nearest `value` (so it counts on past a full turn). A fixed or
+/// ball joint keeps `value` and `slide`.
+pub fn measure_joint(
+    kind: JointKind,
+    a: &JointFrame,
+    b: &JointFrame,
+    value: f64,
+    slide: f64,
+) -> (f64, f64) {
+    let angle = || value + wrap_angle(frame_angle(a, b) - value);
+    match kind {
+        JointKind::Revolute => (angle(), slide),
+        JointKind::Prismatic => (frame_distance(a, b), slide),
+        JointKind::Cylindrical => (angle(), frame_distance(a, b)),
+        JointKind::Fixed | JointKind::Ball => (value, slide),
+    }
+}
+
 /// `v` with its part along `axis` removed, made unit; None when nothing is left (`v` is
 /// parallel to `axis`, or zero).
 pub fn perpendicular(v: DVec3, axis: DVec3) -> Option<DVec3> {
@@ -148,6 +188,52 @@ pub(crate) fn check_name(name: &str) -> Result<(), String> {
 }
 
 impl Scene {
+    /// The frames of `joint` in the world, through its parts' current transforms (a part that
+    /// is not an instance of the root, which a stored joint never names, stands at identity).
+    pub fn joint_world_frames(&self, joint: &Joint) -> (JointFrame, JointFrame) {
+        let to_world = |i: Option<InstanceId>| {
+            i.and_then(|i| self.root().instance(i))
+                .map_or(DAffine3::IDENTITY, |i| i.transform)
+        };
+        (
+            joint.frame_a.world(&to_world(joint.a)),
+            joint.frame_b.world(&to_world(Some(joint.b))),
+        )
+    }
+
+    /// Sets every joint's stored value (and slide) from the parts' current pose, as
+    /// [`measure_joint`] reads it, each angle the turn nearest the stored one. The steps,
+    /// applied. A joint whose new value falls outside its limits loses them (the value must
+    /// lie within, and the pose is what it is).
+    pub fn update_joint_values(&mut self) -> SceneChange {
+        let changed: Vec<(JointId, Joint, Joint)> = self
+            .joints()
+            .filter_map(|(id, j)| {
+                let (a, b) = self.joint_world_frames(j);
+                let (value, slide) = measure_joint(j.kind, &a, &b, j.value, j.slide);
+                let same = (value - j.value).abs() < VALUE_TOLERANCE
+                    && (slide - j.slide).abs() < VALUE_TOLERANCE;
+                if same {
+                    return None;
+                }
+                let mut to = j.clone();
+                to.value = value;
+                to.slide = slide;
+                if to.limits.is_some_and(|(lo, hi)| value < lo || value > hi) {
+                    to.limits = None;
+                }
+                Some((id, j.clone(), to))
+            })
+            .collect();
+        let mut steps = Vec::new();
+        for (id, from, to) in changed {
+            let step = Step::ChangeJoint(id, from, to);
+            self.apply_step(&step);
+            steps.push(step);
+        }
+        SceneChange { steps }
+    }
+
     pub fn joint(&self, id: JointId) -> Option<&Joint> {
         self.joints.get(&id)
     }
