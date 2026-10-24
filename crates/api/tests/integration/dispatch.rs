@@ -226,6 +226,8 @@ fn describe_lists_methods_and_schemas() {
         "close_instance",
         "open_path",
         "rename_definition",
+        "place_instance",
+        "set_transform",
         "purge_definitions",
         "add_material",
         "change_material",

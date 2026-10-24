@@ -393,6 +393,75 @@ impl Scene {
         (copy, SceneChange::join([change, added.into(), filled]))
     }
 
+    /// True when `from` is `target` or places it, directly or through nested instances.
+    pub fn definition_reaches(&self, from: DefinitionId, target: DefinitionId) -> bool {
+        let mut seen = BTreeSet::new();
+        let mut pending = vec![from];
+        while let Some(d) = pending.pop() {
+            if d == target {
+                return true;
+            }
+            if !seen.insert(d) {
+                continue;
+            }
+            if let Some(def) = self.definition(d) {
+                pending.extend(def.mesh.instances().map(|(_, i)| i.definition));
+            }
+        }
+        false
+    }
+
+    /// Places a new instance of `definition` in mesh `parent` at `transform` (the same
+    /// definition, shared, for a component or a group's). A missing mesh or definition is
+    /// `DefinitionNotFound`; a non-finite transform is `NotFinite`; placing a definition
+    /// inside itself, directly or through nesting, is `InvalidImport` (a cycle).
+    pub fn place_instance(
+        &mut self,
+        parent: MeshId,
+        definition: DefinitionId,
+        transform: DAffine3,
+    ) -> Result<(InstanceId, SceneChange), KernelError> {
+        if !transform.is_finite() {
+            return Err(KernelError::NotFinite);
+        }
+        if self.definition(definition).is_none() || self.mesh(parent).is_none() {
+            return Err(KernelError::DefinitionNotFound);
+        }
+        if let MeshId::Definition(open) = parent
+            && self.definition_reaches(definition, open)
+        {
+            return Err(KernelError::InvalidImport(
+                "a definition cannot be placed inside itself".to_string(),
+            ));
+        }
+        let mut placed = None;
+        let change = self.edit(parent, |m| {
+            placed = Some(m.insert_instance(Instance::new(definition, transform)));
+            Ok(m.take_changes())
+        })?;
+        Ok((placed.expect("the instance was inserted"), change))
+    }
+
+    /// Replaces the transform of an instance of mesh `parent`. A missing instance is
+    /// `InstanceNotFound`; an unchanged transform changes nothing.
+    pub fn set_instance_transform(
+        &mut self,
+        parent: MeshId,
+        id: InstanceId,
+        transform: DAffine3,
+    ) -> Result<SceneChange, KernelError> {
+        if !transform.is_finite() {
+            return Err(KernelError::NotFinite);
+        }
+        if self.mesh(parent).and_then(|m| m.instance(id)).is_none() {
+            return Err(KernelError::InstanceNotFound);
+        }
+        self.edit(parent, |m| {
+            m.set_instance_transform(id, transform);
+            Ok(m.take_changes())
+        })
+    }
+
     /// How many instances of each definition the meshes the root reaches hold.
     pub fn placed_instance_counts(&self) -> BTreeMap<DefinitionId, usize> {
         let mut counts = BTreeMap::new();

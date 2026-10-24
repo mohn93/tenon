@@ -426,6 +426,19 @@ pub enum Command {
         definition: DefinitionId,
         name: String,
     },
+    /// Place a new instance of an existing definition (a component, or a group's definition,
+    /// which then is shared like a component's) in the open context at `transform`, as one
+    /// undo step. The new instance becomes the selection; the outcome's `changes.created` and
+    /// `placed` name it. An unknown definition is `not_found`; placing a definition inside
+    /// itself, directly or through nesting, is `invalid_input`.
+    PlaceInstance {
+        definition: DefinitionId,
+        #[serde(default)]
+        transform: Transform,
+    },
+    /// Replace the transform of an instance of the open context, as one undo step (the
+    /// outcome's `changes.modified` names it). Same transform rules as `place_instance`.
+    SetTransform { id: EntityId, transform: Transform },
     /// Remove every definition that no instance places (components left after their last
     /// instance was erased or exploded), and what only they placed.
     PurgeDefinitions {},
@@ -1367,4 +1380,77 @@ pub struct BatchError {
     pub error: CommandError,
     pub completed: Vec<Outcome>,
     pub rolled_back: bool,
+}
+
+/// Where an instance sits: either `matrix` (12 numbers, column-major 3x4: x axis, y axis, z
+/// axis, translation, the layout the `entities` query reports for an instance), or any of
+/// `origin` (default 0), `x_axis` (default [1,0,0]), `y_axis` (default [0,1,0]) and `z_axis`
+/// (default [0,0,1]); not both. All numbers must be finite, the origin and each axis
+/// component within +/-1e6, and the axes' determinant at least 1e-12 in size. Mirrors
+/// (negative determinant), scale and skew are allowed.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Transform {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<ModelPoint>")]
+    pub origin: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_axis: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y_axis: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub z_axis: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matrix: Option<[f64; 12]>,
+}
+
+impl Transform {
+    /// The transform as an affine map, or `invalid_input` for a mix of forms, a number that
+    /// is not finite or too large, or axes that are (nearly) singular. Never panics.
+    pub fn to_affine(&self) -> Result<glam::DAffine3, CommandError> {
+        use glam::{DAffine3, DMat3, DVec3};
+        let bad = |m: &str| CommandError::new(ErrorKind::InvalidInput, m.to_string());
+        let (x, y, z, o) = match self.matrix {
+            Some(m) => {
+                if self.origin.is_some()
+                    || self.x_axis.is_some()
+                    || self.y_axis.is_some()
+                    || self.z_axis.is_some()
+                {
+                    return Err(bad("give either matrix or origin and axes, not both"));
+                }
+                (
+                    [m[0], m[1], m[2]],
+                    [m[3], m[4], m[5]],
+                    [m[6], m[7], m[8]],
+                    [m[9], m[10], m[11]],
+                )
+            }
+            None => (
+                self.x_axis.unwrap_or([1.0, 0.0, 0.0]),
+                self.y_axis.unwrap_or([0.0, 1.0, 0.0]),
+                self.z_axis.unwrap_or([0.0, 0.0, 1.0]),
+                self.origin.unwrap_or([0.0; 3]),
+            ),
+        };
+        let limit = crate::document::MAX_COORDINATE;
+        if ![x, y, z, o]
+            .iter()
+            .flatten()
+            .all(|c| c.is_finite() && c.abs() <= limit)
+        {
+            return Err(bad(&format!(
+                "transform numbers must be finite and within +/-{limit}"
+            )));
+        }
+        let linear = DMat3::from_cols(DVec3::from(x), DVec3::from(y), DVec3::from(z));
+        let det = linear.determinant();
+        if !det.is_finite() || det.abs() < 1e-12 {
+            return Err(bad("the transform's axes are singular (zero volume)"));
+        }
+        Ok(DAffine3 {
+            matrix3: linear,
+            translation: DVec3::from(o),
+        })
+    }
 }

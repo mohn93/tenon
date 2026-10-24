@@ -650,6 +650,8 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         Command::PushPull { face, .. } => f(Slot::One(face)),
         Command::OpenInstance { id } => f(Slot::One(id)),
         Command::RenameDefinition { definition, .. } => f(Slot::Definition(definition)),
+        Command::PlaceInstance { definition, .. } => f(Slot::Definition(definition)),
+        Command::SetTransform { id, .. } => f(Slot::One(id)),
         Command::OrientFaces { id, ids } => {
             f(Slot::One(id));
             f(Slot::List(ids));

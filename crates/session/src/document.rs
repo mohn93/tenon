@@ -38,6 +38,7 @@ mod follow_me;
 mod groups;
 mod hide;
 mod import;
+mod instances;
 mod intersect;
 mod library;
 mod materials;
@@ -784,6 +785,8 @@ impl Document {
             | Command::SetLocation { .. }
             | Command::Flip { .. }
             | Command::RenameDefinition { .. }
+            | Command::PlaceInstance { .. }
+            | Command::SetTransform { .. }
             | Command::PurgeDefinitions {}
             | Command::AddMaterial { .. }
             | Command::ChangeMaterial { .. }
@@ -987,6 +990,11 @@ impl Document {
             Command::RenameDefinition { definition, name } => {
                 self.rename_changes(*definition, name)
             }
+            Command::PlaceInstance {
+                definition,
+                transform,
+            } => self.place_instance_changes(*definition, transform),
+            Command::SetTransform { id, transform } => self.set_transform_changes(*id, transform),
             Command::PurgeDefinitions {} => {
                 let change = self.scene.purge();
                 // Each step is one RemoveDefinition.
@@ -2178,6 +2186,7 @@ impl Document {
             | Command::MakeComponent { .. }
             | Command::Explode { .. }
             | Command::Paste { .. }
+            | Command::PlaceInstance { .. }
             | Command::InsertLibraryItem { .. } => true,
             Command::Rotate { copies, .. } => copies.is_some(),
             _ => false,
