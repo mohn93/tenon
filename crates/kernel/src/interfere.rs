@@ -36,6 +36,13 @@ pub const MAX_SWEEP_STEPS: usize = 10_000;
 /// A sweep reports the pairs that come within this many meters (by default).
 pub const SWEEP_REPORT_WITHIN: f64 = 0.005;
 
+/// A sweep stops once it has run this many boolean volume computations.
+pub const MAX_SWEEP_BOOLEANS: usize = 20_000;
+
+/// Why a sweep stopped for running too many booleans.
+pub const SWEEP_TOO_COSTLY: &str =
+    "sweep stopped: too many overlapping steps; use fewer steps or ids";
+
 /// One definition's closed mesh placed into the coordinates of the parts' mesh.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Shell {
@@ -65,6 +72,12 @@ pub enum Contact {
     },
     /// The boolean that measures the overlap failed; the text says why.
     Failed(String),
+    /// Some shell pairs share `volume` (a lower bound) but another pair's boolean failed.
+    Partial {
+        volume: f64,
+        point: DVec3,
+        why: String,
+    },
 }
 
 /// Two overlapping parts.
@@ -139,6 +152,8 @@ enum Probe {
     Near(f64),
     Overlap(f64),
     Failed(String),
+    /// A volume found, and a pair whose boolean failed.
+    Partial(f64, String),
 }
 
 /// Triangle trees and solid checks per definition, kept across queries and poses. The
@@ -147,6 +162,8 @@ enum Probe {
 pub struct Checker {
     trees: HashMap<DefinitionId, Bvh>,
     solid: HashMap<DefinitionId, Result<(), String>>,
+    /// How many boolean volume computations ran.
+    pub booleans: usize,
 }
 
 impl Checker {
@@ -286,6 +303,7 @@ impl Checker {
         let mut volume = 0.0;
         let mut deepest: Option<(f64, DVec3)> = None;
         let mut touch = None;
+        let mut failure: Option<String> = None;
         for sa in &a.shells {
             for sb in &b.shells {
                 let Some(meet) = self.shells_meet(scene, sa, sb) else {
@@ -293,6 +311,7 @@ impl Checker {
                 };
                 let ma = placed_copy(mesh_of(scene, sa), sa.place, None);
                 let mb = placed_copy(mesh_of(scene, sb), sb.place, None);
+                self.booleans += 1;
                 match combine(&ma, &mb, BooleanOp::Intersect) {
                     Ok(Some(m)) => {
                         let v = signed_volume(&m);
@@ -309,12 +328,18 @@ impl Checker {
                     Ok(None) => {
                         touch.get_or_insert(meet);
                     }
-                    Err(e) => return Contact::Failed(e.to_string()),
+                    Err(e) => {
+                        failure.get_or_insert(e.to_string());
+                    }
                 }
             }
         }
         match (deepest, touch) {
-            (Some((_, point)), _) if volume > MIN_VOLUME => Contact::Overlap { volume, point },
+            (Some((_, point)), _) if volume > MIN_VOLUME => match failure {
+                Some(why) => Contact::Partial { volume, point, why },
+                None => Contact::Overlap { volume, point },
+            },
+            _ if failure.is_some() => Contact::Failed(failure.unwrap_or_default()),
             (_, Some(point)) => Contact::Touching { point },
             _ => Contact::Apart,
         }
@@ -339,8 +364,16 @@ impl Checker {
             .or_else(|| self.contained(scene, sb, sa))
     }
 
-    /// A vertex of `inner` when it lies inside `outer` (their surfaces apart).
-    fn contained(&mut self, scene: &Scene, inner: &Shell, outer: &Shell) -> Option<DVec3> {
+    /// The first of `inner`'s vertices (up to `tries`) told inside or outside `outer`: its
+    /// placed position and whether it is inside. None when the boxes do not meet or no
+    /// vertex tried gave an answer.
+    fn locate(
+        &mut self,
+        scene: &Scene,
+        inner: &Shell,
+        outer: &Shell,
+        tries: usize,
+    ) -> Option<(DVec3, bool)> {
         let (bi, bo) = (
             self.tree(scene, inner.definition)
                 .placed_bounds(&inner.place)?,
@@ -353,14 +386,16 @@ impl Checker {
         let inner_mesh = &scene.definition(inner.definition)?.mesh;
         let outer_mesh = &scene.definition(outer.definition)?.mesh;
         let back = outer.place.inverse();
-        // Any vertex answers (the surfaces are apart); a few are tried in case rays graze.
-        for (_, v) in inner_mesh.vertices().take(8) {
+        inner_mesh.vertices().take(tries).find_map(|(_, v)| {
             let p = inner.place.transform_point3(v.pos);
-            if let Some(inside) = point_inside(back.transform_point3(p), outer_mesh) {
-                return inside.then_some(p);
-            }
-        }
-        None
+            point_inside(back.transform_point3(p), outer_mesh).map(|inside| (p, inside))
+        })
+    }
+
+    /// A vertex of `inner` when it lies inside `outer` (their surfaces apart).
+    fn contained(&mut self, scene: &Scene, inner: &Shell, outer: &Shell) -> Option<DVec3> {
+        self.locate(scene, inner, outer, 8)
+            .and_then(|(p, inside)| inside.then_some(p))
     }
 
     fn shell_distance(
@@ -410,6 +445,15 @@ impl Checker {
                         point,
                     }),
                     Contact::Failed(why) => report.failed.push((a.id, b.id, why)),
+                    Contact::Partial { volume, point, why } => {
+                        report.overlaps.push(Overlap {
+                            a: a.id,
+                            b: b.id,
+                            volume,
+                            point,
+                        });
+                        report.failed.push((a.id, b.id, why));
+                    }
                 }
             }
         }
@@ -437,7 +481,10 @@ impl Checker {
         }
         let best = best?;
         if best.distance <= LENGTH_TOL {
-            let overlap = matches!(self.contact(scene, a, b), Contact::Overlap { .. });
+            let overlap = matches!(
+                self.contact(scene, a, b),
+                Contact::Overlap { .. } | Contact::Partial { .. }
+            );
             return Some(Clearance {
                 distance: 0.0,
                 a: best.a,
@@ -507,6 +554,7 @@ impl Checker {
                 Contact::Overlap { volume, .. } => return Some(Probe::Overlap(volume)),
                 Contact::Touching { .. } => return Some(Probe::Near(0.0)),
                 Contact::Failed(why) => return Some(Probe::Failed(why)),
+                Contact::Partial { volume, why, .. } => return Some(Probe::Partial(volume, why)),
                 Contact::Apart => {}
             }
         }
@@ -525,24 +573,15 @@ impl Checker {
     /// Whether shell `inner` lies inside `outer`, their surfaces not crossing: told by the
     /// first of its vertices that is not on `outer`'s surface; None when none tried is.
     fn encloses(&mut self, scene: &Scene, inner: &Shell, outer: &Shell) -> Option<bool> {
-        let (Some(bi), Some(bo)) = (
-            self.tree(scene, inner.definition)
-                .placed_bounds(&inner.place),
-            self.tree(scene, outer.definition)
-                .placed_bounds(&outer.place),
-        ) else {
+        let bounds = |c: &mut Self, s: &Shell| c.tree(scene, s.definition).placed_bounds(&s.place);
+        let (Some(bi), Some(bo)) = (bounds(self, inner), bounds(self, outer)) else {
             return Some(false);
         };
         if !boxes_meet(bi, bo, 0.0) {
             return Some(false);
         }
-        let inner_mesh = &scene.definition(inner.definition)?.mesh;
-        let outer_mesh = &scene.definition(outer.definition)?.mesh;
-        let back = outer.place.inverse() * inner.place;
-        inner_mesh
-            .vertices()
-            .take(32)
-            .find_map(|(_, v)| point_inside(back.transform_point3(v.pos), outer_mesh))
+        self.locate(scene, inner, outer, 32)
+            .map(|(_, inside)| inside)
     }
 
     /// Checks the pairs among `parts` whose boxes come within `within` at joint value
@@ -600,6 +639,16 @@ impl Checker {
                         e.failed.get_or_insert((value, why));
                         0.0
                     }
+                    Probe::Partial(v, why) => {
+                        let first = e.interferes.map_or(value, |(f, _)| f);
+                        e.interferes = Some((first, value));
+                        if v > e.volume {
+                            e.volume = v;
+                            e.volume_at = Some(value);
+                        }
+                        e.failed.get_or_insert((value, why));
+                        0.0
+                    }
                 };
                 if distance < e.clearance {
                     e.clearance = distance;
@@ -616,6 +665,9 @@ impl Checker {
 /// come within `within` meters. Pairs that never come within `within` are left out. A value
 /// the solver cannot meet stops the sweep there. The scene is never changed. The triangle
 /// trees are built once per definition and placed anew at each step.
+///
+/// A sweep that has run more than [`MAX_SWEEP_BOOLEANS`] boolean volume computations stops
+/// after the step that passed it, with [`SWEEP_TOO_COSTLY`] as the reason.
 #[allow(clippy::too_many_arguments)]
 pub fn sweep_check(
     scene: &Scene,
@@ -626,6 +678,32 @@ pub fn sweep_check(
     slide: Option<f64>,
     ids: &[InstanceId],
     within: f64,
+) -> Result<SweepReport, KernelError> {
+    sweep_check_budget(
+        scene,
+        joint,
+        from,
+        to,
+        steps,
+        slide,
+        ids,
+        within,
+        MAX_SWEEP_BOOLEANS,
+    )
+}
+
+/// [`sweep_check`] with its own limit on boolean volume computations.
+#[allow(clippy::too_many_arguments)]
+pub fn sweep_check_budget(
+    scene: &Scene,
+    joint: JointId,
+    from: f64,
+    to: f64,
+    steps: usize,
+    slide: Option<f64>,
+    ids: &[InstanceId],
+    within: f64,
+    budget: usize,
 ) -> Result<SweepReport, KernelError> {
     let refuse = |why: String| Err(KernelError::Joint(why));
     let kind = scene.joint(joint).ok_or(KernelError::JointNotFound)?.kind;
@@ -671,6 +749,10 @@ pub fn sweep_check(
             .collect();
         checker.sweep_step(&scene, &parts, within, value, &mut found);
         report.steps += 1;
+        if checker.booleans > budget {
+            report.stopped = Some((value, SWEEP_TOO_COSTLY.to_string()));
+            break;
+        }
     }
     report.pairs = found.into_values().collect();
     Ok(report)

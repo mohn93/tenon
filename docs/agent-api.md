@@ -562,14 +562,18 @@ the open context (meters, cubic meters).
 
 | Query | Answer |
 |---|---|
-| `{"type": "interference"}` | every pair of solid parts among the open context's groups and components that share a volume: `{"type": "interference", "pairs": [{"a", "b", "volume", "point"}], "skipped": [{"id", "reason"}], "revision"}`. `pairs` is sorted by `volume`, largest first (`a` is the lower id of the two); `point` lies inside the shared volume. `ids` limits the parts to those listed. With `touching: true` the answer also has `touching: [{"a", "b", "point"}]`: pairs whose surfaces meet (shared faces or edges, a pin in a bore of its own size) with no volume in common, sorted by ids; `point` is where they meet. `skipped` lists the parts that are not solid parts with why (e.g. "edge e12 bounds 1 face", "i7 inside it: it encloses no volume"). `failed: [{"a", "b", "reason"}]` appears only when a pair's overlap could not be measured (the boolean's reason). |
+| `{"type": "interference"}` | every pair of solid parts among the open context's groups and components that share a volume: `{"type": "interference", "pairs": [{"a", "b", "volume", "point"}], "skipped": [{"id", "reason"}], "revision"}`. `pairs` is sorted by `volume`, largest first (`a` is the lower id of the two); `point` lies inside the shared volume. `ids` limits the parts to those listed. With `touching: true` the answer also has `touching: [{"a", "b", "point"}]`: pairs whose surfaces meet (shared faces or edges) with no volume in common, sorted by ids; `point` is where they meet. `skipped` lists the parts that are not solid parts with why (e.g. "edge e12 bounds 1 face", "i7 inside it: it encloses no volume"). `failed: [{"a", "b", "reason"}]` appears only when a pair's overlap could not be measured (the boolean's reason); a part with several solids whose other solids did overlap is then also in `pairs` with the volume found so far. |
 | `{"type": "clearance", "a": "i4", "b": "i9"}` | how near two parts come: `{"type": "clearance", "pairs": [{"a", "b", "distance", "point_a", "point_b", "overlap"}], "skipped", "revision"}` with the minimum distance between their surfaces and the nearest point on each. `distance` is 0 when they touch or overlap (`overlap: true` when they share a volume; a part wholly inside another is 0 apart, both points at a vertex of the inner one); use `interference` for how much. `{"type": "clearance", "ids": [...]}` gives every pair among `ids` (2 to 200 parts) in the order named. A part that is not a solid part is in `skipped` and in no pair. |
 | `{"type": "sweep_check", "joint": "j3", "from": 0, "to": 360, "steps": 73}` | drives `joint` on a copy of the model (as `drive`: degrees for revolute and cylindrical joints, meters for prismatic ones) through `steps` (2 to 10000) evenly spaced values from `from` to `to`, ends included, and checks the root's solid parts at each: `{"type": "sweep_check", "pairs": [{"a", "b", "first", "last", "volume", "volume_at", "clearance", "clearance_at"}], "skipped", "steps", "revision"}`. A pair is listed when it comes within `report_within` meters (default 0.005) at some step; pairs are sorted by ids (`a` the lower). `first` and `last` are the first and last values where the pair interferes (absent when it never does), `volume` the largest volume shared (0 when none) at `volume_at`, `clearance` the smallest distance between the surfaces (0 while touching or overlapping) at `clearance_at`, its first occurrence. `ids` limits the parts (root groups and components; every one when empty); `slide` (meters, cylindrical joints only) holds the slide. The first step drives the joint from where it stands to `from`. A value the solver cannot meet (a pose the joints cannot all reach, a value outside a joint's limits) ends the sweep there: `stopped: {"value", "reason"}` is present and `steps` counts the values checked before it. `failed: {"value", "reason"}` on a pair gives the first value where its overlap could not be measured. The model, its joints and the history never change. |
 
 Overlap is decided exactly on the faces as modelled (circles are their polygons): two parts
 interfere when their surfaces cross or one lies inside the other, and the shared volume (from the
 `solid_intersect` boolean run on copies) exceeds 1e-12 m3; less than that is touching. Surfaces
-within 0.001 mm of each other meet. When a part places several solids, its volumes against the
+within 0.001 mm of each other meet. A pin in a bore of its own size (or with clearance measured to the circumscribed radius) touches
+only while its polygon lines up with the bore's; turned, its corners overlap the bore. For a
+turning pin to clear, the bore's flat-to-centre (inscribed) radius must exceed the pin's corner
+(circumscribed) radius: extra clearance r(1 - cos(pi/n)), e.g. 0.086 mm for r = 10 mm and 24
+sides. When a part places several solids, its volumes against the
 other part are added up (solids overlapping within one part count each). Ids that are not
 instances are `invalid_input`, unknown ones `not_found`; `clearance` with neither `a` and `b`
 nor `ids`, both, only one of `a` and `b`, `a` equal to `b`, or fewer than 2 or more than 200
@@ -577,9 +581,10 @@ distinct `ids` is `invalid_input`.
 
 `sweep_check` checks only the pairs whose boxes come within `report_within`, by distance first:
 the overlap boolean runs only for a pair whose surfaces cross or where one part may lie inside the
-other, so parts that only touch (a pin turning in a bore of its own size) cost a distance check per
-step. Each solid's triangle tree is built once and placed at every step; a 60-part engine sweeps
-720 steps in well under 5 s. An unknown `joint` is `not_found`; a fixed or ball joint, `steps`
+other, so parts that only touch (layers face to face) cost a distance check per step. Each solid's triangle tree is built once and placed at every step; a 60-part engine sweeps
+720 steps in well under 5 s. A sweep that has run more than 20,000 boolean volume computations
+stops after the step that passed that count: `stopped: {"value", "reason": "sweep stopped: too many
+overlapping steps; use fewer steps or ids"}`, with the pairs found so far. An unknown `joint` is `not_found`; a fixed or ball joint, `steps`
 outside 2 to 10000, a negative `report_within`, `slide` on a joint that is not cylindrical, or
 an id that is not an instance is `invalid_input`; an id that is no instance of the root is
 `not_found`.

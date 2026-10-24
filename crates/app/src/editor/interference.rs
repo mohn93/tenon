@@ -81,18 +81,30 @@ impl Editor {
             ));
             return true;
         }
-        let ids: Vec<EntityId> = self
+        let selected = self.doc.selection().len();
+        let mut ids: Vec<EntityId> = self
             .doc
             .selection()
             .iter()
             .copied()
             .filter(|id| matches!(id, EntityId::Instance(_)))
             .collect();
+        if selected > 0 && ids.is_empty() {
+            self.message = Some(Message::error(
+                "Select parts (groups or components) to check",
+            ));
+            return true;
+        }
+        // One selected part is checked against all the others.
+        let only = (ids.len() == 1).then(|| ids[0]);
+        if only.is_some() {
+            ids.clear();
+        }
         let result = self.doc.query(&Query::Interference {
             ids,
             touching: false,
         });
-        let (pairs, skipped) = match result {
+        let (mut pairs, skipped) = match result {
             Ok(QueryResult::Interference { pairs, skipped, .. }) => (pairs, skipped.len()),
             Ok(_) => return true,
             Err(e) => {
@@ -100,6 +112,9 @@ impl Editor {
                 return true;
             }
         };
+        if let Some(id) = only {
+            pairs.retain(|p| p.a == id || p.b == id);
+        }
         let unit = self.doc.units().length;
         let rows: Vec<InterferenceRow> = pairs
             .iter()
@@ -232,6 +247,61 @@ mod tests {
         );
         let sel: Vec<_> = e.doc().selection().iter().copied().collect();
         assert!(sel.contains(&a) && sel.contains(&b) && sel.len() == 2);
+    }
+
+    #[test]
+    fn one_selected_part_is_checked_against_all_the_others() {
+        let mut e = editor();
+        let (a, b) = two_boxes(&mut e, 1.0);
+        select(&mut e, vec![a]);
+        assert!(e.check_interference());
+        let report = e.interference_window().unwrap();
+        assert_eq!(report.rows.len(), 1);
+        let sel: Vec<_> = e.doc().selection().iter().copied().collect();
+        assert!(sel.contains(&a) && sel.contains(&b));
+    }
+
+    #[test]
+    fn a_selection_without_parts_asks_for_parts() {
+        let mut e = editor();
+        two_boxes(&mut e, 1.0);
+        e.execute(Command::AddRectangle {
+            corner: [10.0, 0.0, 0.0],
+            opposite: [11.0, 1.0, 0.0],
+            normal: None,
+        })
+        .unwrap();
+        let loose = e
+            .doc()
+            .model()
+            .edges()
+            .map(|(id, _)| EntityId::Edge(id))
+            .next()
+            .unwrap();
+        select(&mut e, vec![loose]);
+        assert!(e.check_interference());
+        assert!(e.interference_window().is_none());
+        assert!(e.status().contains("Select parts"), "{}", e.status());
+    }
+
+    #[test]
+    fn check_is_refused_inside_an_open_group() {
+        let mut e = editor();
+        let (a, _) = two_boxes(&mut e, 1.0);
+        e.execute(Command::OpenInstance { id: a }).unwrap();
+        assert!(e.check_interference());
+        assert!(e.interference_window().is_none());
+        assert!(e.status().contains("Close the open"), "{}", e.status());
+    }
+
+    #[test]
+    fn a_new_document_drops_the_window() {
+        let mut e = editor();
+        two_boxes(&mut e, 1.0);
+        e.check_interference();
+        assert!(e.interference_window().is_some());
+        e.document_replaced();
+        assert!(e.interference_window().is_none());
     }
 
     #[test]

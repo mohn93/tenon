@@ -475,6 +475,7 @@ impl Editor {
     fn document_replaced(&mut self) {
         self.documents += 1;
         self.style_before_add.clear();
+        self.interference = None;
     }
 
     /// How many times the document was replaced (new or open, by the window or an agent).

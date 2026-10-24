@@ -4,7 +4,9 @@
 use std::time::Instant;
 
 use glam::{DAffine3, DQuat, DVec3};
-use kernel::interfere::{SWEEP_REPORT_WITHIN, SweepPair, SweepReport, sweep_check};
+use kernel::interfere::{
+    SWEEP_REPORT_WITHIN, SWEEP_TOO_COSTLY, SweepPair, SweepReport, sweep_check, sweep_check_budget,
+};
 use kernel::{
     DefinitionKind, InstanceId, Joint, JointFrame, JointId, JointKind, MeshId, Scene, Solid,
 };
@@ -519,4 +521,24 @@ fn perf_a_sixty_part_engine_sweeps_720_steps_in_under_5_s() {
     let elapsed = sweep_six(721);
     eprintln!("720 step sweep of 61 parts: {elapsed:.2} s");
     assert!(elapsed < 5.0, "{elapsed}");
+}
+
+#[test]
+fn a_sweep_that_runs_too_many_booleans_stops_with_a_reason() {
+    let c = slider_crank();
+    let r = sweep_check_budget(
+        &c.scene,
+        c.joints[0],
+        90f64.to_radians(),
+        450f64.to_radians(),
+        361,
+        None,
+        &[],
+        SWEEP_REPORT_WITHIN,
+        3,
+    )
+    .unwrap();
+    let (_, why) = r.stopped.expect("the sweep stops");
+    assert_eq!(why, SWEEP_TOO_COSTLY);
+    assert!(r.steps < 361, "{}", r.steps);
 }
