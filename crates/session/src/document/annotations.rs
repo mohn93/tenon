@@ -205,7 +205,8 @@ impl Document {
                     .inverse()
                     .transform_point3(self.camera.eye);
                 let mut tris = Vec::new();
-                self.instance_triangles(&inst, 0, &mut tris);
+                let hidden_tags = self.scene.hidden_tags();
+                self.instance_triangles(&inst, 0, &hidden_tags, &mut tris);
                 let toward = eye - center;
                 let hit = (toward.length() > 1e-9)
                     .then(|| toward.normalize())
@@ -253,21 +254,35 @@ impl Document {
 
     /// The triangles of an instance's geometry, nested instances included, in the open
     /// context's coordinates.
-    fn instance_triangles(&self, inst: &kernel::Instance, depth: usize, out: &mut Vec<[DVec3; 3]>) {
+    /// The triangles of the faces of `inst` that are shown (not hidden, not on `hidden_tags`),
+    /// placed, including those of its shown instances.
+    fn instance_triangles(
+        &self,
+        inst: &kernel::Instance,
+        depth: usize,
+        hidden_tags: &std::collections::BTreeSet<kernel::TagId>,
+        out: &mut Vec<[DVec3; 3]>,
+    ) {
         let Some(m) = self.scene.mesh(kernel::MeshId::Definition(inst.definition)) else {
             return;
         };
         if depth > 16 {
             return;
         }
-        for (f, _) in m.faces() {
+        for (f, face) in m.faces() {
+            if face.hidden || !kernel::tag_shown_among(hidden_tags, face.tag) {
+                continue;
+            }
             for t in m.triangulate(f).unwrap_or_default() {
                 out.push(t.map(|p| inst.transform.transform_point3(p)));
             }
         }
         for (_, child) in m.instances() {
+            if child.hidden || !kernel::tag_shown_among(hidden_tags, child.tag) {
+                continue;
+            }
             let placed = kernel::Instance::new(child.definition, inst.transform * child.transform);
-            self.instance_triangles(&placed, depth + 1, out);
+            self.instance_triangles(&placed, depth + 1, hidden_tags, out);
         }
     }
 

@@ -19,6 +19,7 @@ mod gui;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod headless;
 mod host;
+mod image_labels;
 mod info;
 mod library;
 #[cfg(not(target_arch = "wasm32"))]

@@ -1825,3 +1825,58 @@ fn all_ids(d: &Document) -> Vec<String> {
         .map(|e| e["id"].as_str().unwrap().to_string())
         .collect()
 }
+
+#[test]
+fn an_instance_label_ignores_hidden_faces_and_faces_on_hidden_tags() {
+    let mut d = doc();
+    let r = rectangle(&mut d);
+    run(
+        &mut d,
+        json!({"type": "push_pull", "face": r.face, "distance": 1.0}),
+    )
+    .unwrap();
+    let ids: Vec<String> = all_ids(&d);
+    let out = run(&mut d, json!({"type": "make_group", "ids": ids})).unwrap();
+    let group = made(&out, 'i');
+    run(&mut d, json!({"type": "standard_view", "view": "top"})).unwrap();
+    // The top face: the one whose vertices are all at z = 1.
+    run(&mut d, json!({"type": "open_instance", "id": group})).unwrap();
+    let faces = ask(&d, json!({"type": "entities", "kinds": ["face"]}));
+    let top = faces["faces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["id"].as_str().unwrap().to_string())
+        .find(|id| entity(&d, id)["normal"][2].as_f64().unwrap_or(0.0) > 0.9)
+        .expect("a face looks up");
+    let center_z = 0.5;
+    let tag = run(&mut d, json!({"type": "add_tag"})).unwrap()["changes"]["tags"][0]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Hidden by its own flag: the ray goes through to nothing, so the label stays at the center.
+    run(&mut d, json!({"type": "hide", "ids": [top]})).unwrap();
+    run(&mut d, json!({"type": "close_instance"})).unwrap();
+    let info = label(&mut d, &group, json!({}));
+    near(
+        &json!([0.0, 0.0, info["anchor"]["point"][2]]),
+        [0.0, 0.0, center_z],
+    );
+
+    // Shown again, but on a hidden tag: the same.
+    run(&mut d, json!({"type": "open_instance", "id": group})).unwrap();
+    run(&mut d, json!({"type": "unhide", "ids": [top]})).unwrap();
+    run(&mut d, json!({"type": "set_tag", "ids": [top], "tag": tag})).unwrap();
+    run(
+        &mut d,
+        json!({"type": "change_tag", "tag": tag, "visible": false}),
+    )
+    .unwrap();
+    run(&mut d, json!({"type": "close_instance"})).unwrap();
+    let info = label(&mut d, &group, json!({}));
+    near(
+        &json!([0.0, 0.0, info["anchor"]["point"][2]]),
+        [0.0, 0.0, center_z],
+    );
+}

@@ -588,7 +588,11 @@ line from the center (for a diameter, from the far side of the circle) through t
 label, with an arrow where it meets the circle; a leader note a line from its anchor to its
 text, with an arrow at the anchor. Their labels (the dimension's length at the middle of its
 line, a note's text) are written by the window over the view, and left out when their point is
-out of view or behind the eye; a screen note is only a label. `render_view` draws the lines but no labels. In
+out of view or behind the eye; a screen note is only a label. `render_view` (and the headless render) draws the lines and the labels as the window does, with
+the same fonts: text is 1 point = 1 pixel, scaled by width / 1000 (at most 4) for images over
+2000 pixels wide; day images use the light theme's label colors, night the dark's; hidden
+annotations and those on hidden tags are left out. Print and PDF output do not draw the labels
+yet. In
 the window, clicking a dimension's or note's lines or label selects it (or the group holding
 it), and `editor.hovered` names it under the cursor.
 

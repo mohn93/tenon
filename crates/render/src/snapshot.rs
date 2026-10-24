@@ -17,7 +17,13 @@ pub struct Snapshotter {
     software: bool,
 }
 
-const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+/// The format captures are rendered in.
+pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+/// Paints over a finished capture before it is read back: given the device, its queue, the
+/// image's view (to load and draw onto, in [`FORMAT`]) and the camera as rendered (its viewport
+/// the image size). It submits its own commands.
+pub type Overlay<'a> = &'a mut dyn FnMut(&wgpu::Device, &wgpu::Queue, &wgpu::TextureView, &Camera);
 
 impl Snapshotter {
     /// Creates its own GPU device. None when no adapter is available, and always None on the web
@@ -131,6 +137,24 @@ impl Snapshotter {
         self.capture_prepared(camera, lighting, width, height)
     }
 
+    /// [`Snapshotter::capture`] with `overlay` painting over the image before it is read back
+    /// (the window's labels of dimensions and notes, which the app draws with egui).
+    #[allow(clippy::too_many_arguments)]
+    pub fn capture_over(
+        &mut self,
+        scene: &Scene,
+        context: &[InstanceId],
+        selection: &BTreeSet<EntityId>,
+        camera: &Camera,
+        lighting: Lighting,
+        width: u32,
+        height: u32,
+        overlay: Overlay,
+    ) -> Option<Vec<u8>> {
+        self.renderer.set_scene(scene, context, selection);
+        self.capture_inner(camera, lighting, width, height, Some(overlay))
+    }
+
     /// Sets the scene to render, with the open context and `selection` shown, for later
     /// [`Snapshotter::capture_prepared`] calls: many views of one scene upload it once.
     pub fn prepare(
@@ -149,6 +173,17 @@ impl Snapshotter {
         lighting: Lighting,
         width: u32,
         height: u32,
+    ) -> Option<Vec<u8>> {
+        self.capture_inner(camera, lighting, width, height, None)
+    }
+
+    fn capture_inner(
+        &mut self,
+        camera: &Camera,
+        lighting: Lighting,
+        width: u32,
+        height: u32,
+        overlay: Option<Overlay>,
     ) -> Option<Vec<u8>> {
         let (width, height) = (width.max(1), height.max(1));
         let mut camera = camera.clone();
@@ -172,6 +207,9 @@ impl Snapshotter {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         self.renderer.set_lighting(lighting);
         self.renderer.render(&view, (width, height), &camera, &[]);
+        if let Some(overlay) = overlay {
+            overlay(&self.device, &self.queue, &view, &camera);
+        }
 
         // Texture-to-buffer copies need rows padded to a multiple of 256 bytes.
         let row = width * 4;

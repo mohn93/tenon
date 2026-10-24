@@ -35,13 +35,23 @@ impl Editor {
     /// is selected or hovered (in the danger color when Erase hovers); those outside the open
     /// instance are faded.
     pub(super) fn hud_labels(&self) -> Vec<HudLabel> {
+        self.labels_seen_by(&self.doc.camera, self.hovered())
+    }
+
+    /// The labels of an image of the model rendered from `camera` (its viewport the image size,
+    /// in pixels), as the window would draw them for that view: those of `hud_labels`, with
+    /// nothing hovered.
+    pub fn image_labels(&self, camera: &session::Camera) -> Vec<HudLabel> {
+        self.labels_seen_by(camera, None)
+    }
+
+    /// `hud_labels` for `camera`, with `hovered` lit.
+    fn labels_seen_by(&self, camera: &session::Camera, hovered: Option<EntityId>) -> Vec<HudLabel> {
         let layout = self.layout();
         let scenery = scenery_in(&layout, &self.doc);
         let to_root = self.doc.context_transform();
-        let camera = &self.doc.camera;
         let units = self.doc.units();
         let selection = self.doc.selection();
-        let hovered = self.hovered();
         let mut out = Vec::new();
         for &(k, id, shape) in scenery.annotations() {
             let part = scenery.part(k);
