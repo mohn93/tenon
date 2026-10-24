@@ -68,7 +68,8 @@ pub fn signed_volume(m: &Model) -> f64 {
 
 /// The volume of `instance` in the units of the context holding it (its definition's volume
 /// times the absolute determinant of the placement), or why it is not a solid: its own
-/// geometry must be closed and outward, with no nested instances.
+/// geometry must be closed (faces pointing in or out) and enclose a volume, with no nested
+/// instances. The volume is positive either way.
 pub fn instance_volume(scene: &Scene, instance: &Instance) -> Result<f64, String> {
     let d = scene
         .definition(instance.definition)
@@ -79,13 +80,10 @@ pub fn instance_volume(scene: &Scene, instance: &Instance) -> Result<f64, String
     if let Some(reason) = open_reason(&d.mesh) {
         return Err(reason);
     }
-    let volume = signed_volume(&d.mesh);
-    if volume <= 0.0 {
-        return Err(if volume < 0.0 {
-            "its faces point inward".into()
-        } else {
-            "it encloses no volume".into()
-        });
+    // A closed mesh with every face pointing inward is still a solid; it has the same volume.
+    let volume = signed_volume(&d.mesh).abs();
+    if volume <= 1e-12 {
+        return Err("it encloses no volume".into());
     }
     Ok(volume * instance.transform.matrix3.determinant().abs())
 }
@@ -168,6 +166,40 @@ mod tests {
             .instance(id)
             .unwrap()
             .clone()
+    }
+
+    #[test]
+    fn an_inward_solid_counts_with_a_positive_volume() {
+        let mut scene = Scene::new();
+        let (id, _) = scene
+            .add_solid(
+                MeshId::Root,
+                &Solid::cuboid(DVec3::ONE).unwrap(),
+                DefinitionKind::Group,
+                "S",
+                DAffine3::IDENTITY,
+                None,
+            )
+            .unwrap();
+        let inst = scene
+            .mesh(MeshId::Root)
+            .unwrap()
+            .instance(id)
+            .unwrap()
+            .clone();
+        let all: Vec<_> = scene
+            .definition(inst.definition)
+            .unwrap()
+            .mesh
+            .faces()
+            .map(|(f, _)| f)
+            .collect();
+        scene
+            .edit(MeshId::Definition(inst.definition), |m| {
+                Ok(m.reverse_faces(&all).0)
+            })
+            .unwrap();
+        assert!((instance_volume(&scene, &inst).unwrap() - 1.0).abs() < 1e-9);
     }
 
     #[test]
