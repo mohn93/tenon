@@ -205,6 +205,17 @@ impl Scene {
         })
     }
 
+    /// Checks the parts of `material` other than its name as `add_material_from` does: the
+    /// opacity, the emission and the texture.
+    pub fn check_material_parts(&self, material: &Material) -> Result<(), KernelError> {
+        check_opacity(material.opacity).map_err(KernelError::MaterialOpacity)?;
+        check_emission(material.emission).map_err(KernelError::MaterialEmission)?;
+        if let Some(t) = &material.texture {
+            self.check_new_texture(t, None)?;
+        }
+        Ok(())
+    }
+
     /// Adds `material` after checking every part of it: the name (valid, see
     /// [`MAX_MATERIAL_NAME`], and not taken), the opacity (0 to 1), the texture (see
     /// [`MAX_TEXTURES`]) and the emission (0 to [`MAX_EMISSION`]).

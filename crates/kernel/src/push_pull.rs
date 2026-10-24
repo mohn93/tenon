@@ -593,9 +593,8 @@ impl Model {
 
     /// Runs `draw` (an edit that draws a shape through `point` in the plane with normal
     /// `normal`) and turns every face it newly makes in that plane to face along `normal`,
-    /// keeping materials on their sides, as one ChangeSet. When the drawing changed a face
-    /// already in that plane (it split it), nothing is turned: the pieces keep that face's
-    /// orientation.
+    /// keeping materials on their sides, as one ChangeSet. A new face lying inside a face
+    /// that was in that plane before (a piece split from it) keeps that face's orientation.
     pub fn draw_facing(
         &mut self,
         point: DVec3,
@@ -608,28 +607,40 @@ impl Model {
                 .first()
                 .is_some_and(|v| Plane::through(m.pos(*v), f.normal).same_as(&plane))
         };
-        let before: BTreeSet<FaceId> = self
+        let project = |m: &Model, l: &[VertexId]| -> Vec<DVec2> {
+            l.iter().map(|v| plane.project(m.pos(*v))).collect()
+        };
+        // The outlines of the faces already in the plane: outer loop and holes.
+        let before: Vec<(Vec<DVec2>, Vec<Vec<DVec2>>)> = self
             .faces()
             .filter(|(_, f)| in_plane(self, f))
-            .map(|(id, _)| id)
+            .map(|(_, f)| {
+                (
+                    project(self, &f.outer),
+                    f.holes.iter().map(|h| project(self, h)).collect(),
+                )
+            })
             .collect();
         let mut changes = draw(self)?;
         let summary = changes.summary();
-        let touched = summary
-            .deleted
-            .iter()
-            .chain(&summary.modified)
-            .any(|e| matches!(e, EntityId::Face(f) if before.contains(f)));
-        if touched {
-            return Ok(changes);
-        }
         for e in &summary.created {
-            if let EntityId::Face(id) = e
-                && let Some(f) = self.face(*id)
-                && in_plane(self, f)
-            {
-                self.orient(*id, normal);
+            let EntityId::Face(id) = e else { continue };
+            let Some(f) = self.face(*id) else { continue };
+            if !in_plane(self, f) {
+                continue;
             }
+            let outer = project(self, &f.outer);
+            let holes: Vec<Vec<DVec2>> = f.holes.iter().map(|h| project(self, h)).collect();
+            let inside_face = |p: DVec2, o: &[DVec2], hs: &[Vec<DVec2>]| {
+                point_in_polygon(p, o) && !hs.iter().any(|h| point_in_polygon(p, h))
+            };
+            let Some(p) = interior_point(&outer, |p| inside_face(p, &outer, &holes)) else {
+                continue;
+            };
+            if before.iter().any(|(o, hs)| inside_face(p, o, hs)) {
+                continue;
+            }
+            self.orient(*id, normal);
         }
         changes.ops.extend(self.take_changes().ops);
         Ok(changes)
@@ -746,4 +757,14 @@ fn in_swept(p: DVec3, a: DVec3, b: DVec3, offset: DVec3) -> bool {
 
 fn side(a: VertexId, b: VertexId) -> (VertexId, VertexId) {
     (a.min(b), a.max(b))
+}
+
+/// A point inside a polygon (and accepted by `ok`): the centroid of three consecutive corners
+/// for some corner, or the centroid of the corners.
+fn interior_point(poly: &[DVec2], ok: impl Fn(DVec2) -> bool) -> Option<DVec2> {
+    let n = poly.len();
+    let whole = poly.iter().copied().sum::<DVec2>() / n.max(1) as f64;
+    std::iter::once(whole)
+        .chain((0..n).map(|i| (poly[i] + poly[(i + 1) % n] + poly[(i + 2) % n]) / 3.0))
+        .find(|p| ok(*p))
 }

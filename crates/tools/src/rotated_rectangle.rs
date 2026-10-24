@@ -112,6 +112,7 @@ impl RotatedRectangleTool {
             corner: a.to_array(),
             edge_end: b.to_array(),
             width_point: w.to_array(),
+            normal: None,
         });
         self.on_external_change();
     }
@@ -301,6 +302,7 @@ mod tests {
                 corner,
                 edge_end,
                 width_point,
+                ..
             } => [corner, edge_end, width_point].map(|q| DVec3::from_array(*q)),
             other => panic!("not a rotated rectangle: {other:?}"),
         }

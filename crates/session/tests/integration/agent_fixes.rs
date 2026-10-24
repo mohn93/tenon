@@ -113,16 +113,14 @@ fn shapes_pull_along_the_normal_they_were_given() {
 }
 
 #[test]
-fn a_rotated_rectangle_faces_along_its_side_cross_width() {
-    // (1,0,0) x (0,1,0) = +z.
+fn a_rotated_rectangle_faces_along_its_given_normal() {
     pulls_along(
-        json!({"type": "add_rotated_rectangle", "corner": [0, 0, 0], "edge_end": [1, 0, 0], "width_point": [0, 1, 0]}),
+        json!({"type": "add_rotated_rectangle", "corner": [0, 0, 0], "edge_end": [1, 0, 0], "width_point": [0, 1, 0], "normal": [0, 0, 1]}),
         2,
         1.0,
     );
-    // (1,0,0) x (0,-1,0) = -z.
     pulls_along(
-        json!({"type": "add_rotated_rectangle", "corner": [0, 0, 0], "edge_end": [1, 0, 0], "width_point": [0, -1, 0]}),
+        json!({"type": "add_rotated_rectangle", "corner": [0, 0, 0], "edge_end": [1, 0, 0], "width_point": [0, 1, 0], "normal": [0, 0, -1]}),
         2,
         -1.0,
     );
@@ -185,7 +183,7 @@ fn whole_turns_do_nothing_without_copies() {
     let face = first_face(&out);
     let steps = depth(&d);
     let revision = d.revision();
-    for angle in [0.0, 360.0, -720.0] {
+    for angle in [0.0, 360.0, -720.0, -1e-20, 1e-15, 360.0 - 1e-12] {
         let out = run(
             &mut d,
             json!({"type": "rotate", "ids": [face], "center": [0, 0, 0], "angle": angle}),
@@ -365,4 +363,137 @@ fn batch_material_references_resolve_in_every_case() {
         let target = if existing == "fail" { "Fresh" } else { "Brick" };
         assert_eq!(by_name(target)["color"], json!([5, 5, 5]), "{existing}");
     }
+}
+
+#[test]
+fn a_rotated_rectangle_normal_must_fit_the_rectangle() {
+    let mut d = doc();
+    let (kind, _) = run(
+        &mut d,
+        json!({"type": "add_rotated_rectangle", "corner": [0, 0, 0], "edge_end": [1, 0, 0], "width_point": [0, 1, 0], "normal": [0, 1, 1]}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput);
+    let (kind, _) = run(
+        &mut d,
+        json!({"type": "add_rotated_rectangle", "corner": [0, 0, 0], "edge_end": [1, 0, 0], "width_point": [0, 1, 0], "normal": [0, 0, 0]}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput);
+    // Without one the face is canonical (+Z) whichever way the width points.
+    let out = run(
+        &mut d,
+        json!({"type": "add_rotated_rectangle", "corner": [0, 0, 0], "edge_end": [1, 0, 0], "width_point": [0, -1, 0]}),
+    )
+    .unwrap();
+    let f = ask(&d, json!({"type": "entities", "kinds": ["face"]}));
+    assert_eq!(f["faces"][0]["normal"], json!([0.0, 0.0, 1.0]), "{out}");
+}
+
+fn face_normals(d: &Document) -> Vec<(f64, f64)> {
+    // (normal z, area) of every face.
+    let f = ask(d, json!({"type": "entities", "kinds": ["face"]}));
+    f["faces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            (
+                f["normal"][2].as_f64().unwrap(),
+                f["area"].as_f64().unwrap(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_rectangle_touching_a_floor_along_an_edge_is_turned() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [2, 2, 0]}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [2, 0, 0], "opposite": [4, 2, 0], "normal": [0, 0, -1]}),
+    )
+    .unwrap();
+    let mut n = face_normals(&d);
+    n.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    assert_eq!(n.len(), 2);
+    assert_eq!(n[0].0, -1.0);
+    assert_eq!(n[1].0, 1.0);
+}
+
+#[test]
+fn a_circle_partly_over_a_face_is_turned_outside_only() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [4, 4, 0]}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "add_circle", "center": [4, 2, 0], "radius": 1.0, "normal": [0, 0, -1]}),
+    )
+    .unwrap();
+    let n = face_normals(&d);
+    // The floor (with a bite out of it) and the piece inside it face up; the half outside
+    // faces down.
+    assert!(n.iter().any(|(z, _)| *z == -1.0), "{n:?}");
+    assert!(n.iter().filter(|(z, _)| *z == 1.0).count() >= 2, "{n:?}");
+    let down: f64 = n.iter().filter(|(z, _)| *z == -1.0).map(|(_, a)| a).sum();
+    let circle = 0.5 * 24.0 * (std::f64::consts::TAU / 24.0).sin();
+    assert!(
+        (down - circle / 2.0).abs() < 0.2,
+        "{down} vs half of {circle}"
+    );
+}
+
+#[test]
+fn a_failed_update_leaves_nothing_for_the_next_command() {
+    let mut d = doc();
+    run(&mut d, material("Brick", [200, 0, 0], None)).unwrap();
+    let mut bad = material("Brick", [0, 200, 0], Some("update"));
+    bad["opacity"] = json!(5);
+    let (kind, _) = run(&mut d, bad).unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput);
+    let out = run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [1, 1, 0]}),
+    )
+    .unwrap();
+    assert!(out["changes"]["materials"].is_null(), "{out}");
+}
+
+#[test]
+fn reuse_validates_the_other_fields() {
+    let mut d = doc();
+    run(&mut d, material("Brick", [200, 0, 0], None)).unwrap();
+    for name in ["Brick", "Fresh"] {
+        for bad in [json!({"opacity": 5}), json!({"emission": 99})] {
+            let mut c = material(name, [1, 2, 3], Some("reuse"));
+            for (k, v) in bad.as_object().unwrap() {
+                c[k] = v.clone();
+            }
+            let (kind, _) = run(&mut d, c).unwrap_err();
+            assert_eq!(kind, ErrorKind::InvalidInput, "{name} {bad}");
+        }
+    }
+}
+
+#[test]
+fn update_with_only_a_name_changes_nothing() {
+    let mut d = doc();
+    let first = run(&mut d, material("Brick", [200, 0, 0], None)).unwrap();
+    let steps = depth(&d);
+    let out = run(
+        &mut d,
+        json!({"type": "add_material", "name": "Brick", "existing": "update"}),
+    )
+    .unwrap();
+    assert_eq!(out["changes"]["materials"], first["changes"]["materials"]);
+    assert_eq!(depth(&d), steps);
 }

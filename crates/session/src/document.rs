@@ -880,7 +880,8 @@ impl Document {
                 corner,
                 edge_end,
                 width_point,
-            } => self.add_rotated_rectangle_changes(*corner, *edge_end, *width_point),
+                normal,
+            } => self.add_rotated_rectangle_changes(*corner, *edge_end, *width_point, *normal),
             Command::AddGuideLine { point, direction } => {
                 self.add_guide_line_changes(*point, *direction)
             }
@@ -1494,6 +1495,7 @@ impl Document {
         corner: [f64; 3],
         edge_end: [f64; 3],
         width_point: [f64; 3],
+        normal: Option<[f64; 3]>,
     ) -> Result<SceneChange, CommandError> {
         check_coordinates(&[corner, edge_end, width_point])?;
         let (a, b, w) = (
@@ -1518,11 +1520,22 @@ impl Document {
         }
         let corners = [a, b, b + across, a + across];
         check_coordinates(&corners.map(|c| c.to_array()))?;
-        let normal = side.cross(across).normalize();
-        self.draw_shape(corners[0], Some(normal.to_array()), |m| {
-            m.add_polygon(&corners)
-        })
-        .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
+        if let Some(n) = normal {
+            let Some(n) = unit_vector(DVec3::from(n)) else {
+                return Err(CommandError::new(
+                    ErrorKind::InvalidInput,
+                    "normal must be a finite, non-zero vector",
+                ));
+            };
+            if n.dot(side.normalize()).abs() > 1e-6 || n.dot(across.normalize()).abs() > 1e-6 {
+                return Err(CommandError::new(
+                    ErrorKind::InvalidInput,
+                    "normal must be perpendicular to the rectangle's side and width",
+                ));
+            }
+        }
+        self.draw_shape(corners[0], normal, |m| m.add_polygon(&corners))
+            .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
     }
 
     fn push_pull_changes(
@@ -1667,12 +1680,7 @@ impl Document {
             self.check_placed(&self.vertex_ids(ids), &parts, &places, true)?;
             return self.copy_placed_changes(ids, &parts, &places);
         }
-        let missing: Vec<EntityId> = ids.iter().copied().filter(|id| !self.exists(*id)).collect();
-        if !missing.is_empty() {
-            return Err(
-                CommandError::new(ErrorKind::NotFound, "no such entities").with_ids(missing)
-            );
-        }
+        self.require_existing(ids)?;
         let vertices = self.vertex_ids(ids);
         let parts = Parts::of(ids);
         let turn = rotation(center, axis, angle);

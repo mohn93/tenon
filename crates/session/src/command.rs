@@ -120,7 +120,9 @@ pub enum Command {
     /// Draw a rectangle at any angle, as one undo step: its first side runs from `corner` to
     /// `edge_end`, its width is the distance from `width_point` to the line of that side, and
     /// it lies in the plane through the side and `width_point`, on the side of `width_point`.
-    /// A zero side, or a `width_point` on the side's line, is refused.
+    /// A zero side, or a `width_point` on the side's line, is refused. With `normal` (which
+    /// must be perpendicular to the side and to the width direction) the new face faces along
+    /// it; without it the orientation is canonical, as for the other shapes.
     AddRotatedRectangle {
         #[schemars(with = "ModelPoint")]
         corner: [f64; 3],
@@ -128,6 +130,8 @@ pub enum Command {
         edge_end: [f64; 3],
         #[schemars(with = "ModelPoint")]
         width_point: [f64; 3],
+        #[serde(default)]
+        normal: Option<[f64; 3]>,
     },
     /// Move a face along its normal by `distance` meters (negative: against the normal),
     /// extruding new sides or stretching the faces around it.

@@ -4578,6 +4578,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_refused_retyped_angle_keeps_the_selection() {
+        let mut e = editor();
+        e.select_tool(ToolKind::Line);
+        square(&mut e);
+        let face = EntityId::Face(e.doc().model().faces().next().unwrap().0);
+        e.execute(Command::Select {
+            ids: vec![face],
+            mode: SelectMode::Replace,
+            all: false,
+        })
+        .unwrap();
+        e.select_tool(ToolKind::Rotate);
+        assert!(e.toggle_copy());
+        let revision = e.doc().revision();
+        click_at(&mut e, DVec3::new(6.0, 6.0, 0.0));
+        // Copies turned by a whole turn would coincide: refused.
+        type_text(&mut e, "360");
+        assert!(e.status().contains("coincide"), "{}", e.status());
+        assert_eq!(
+            e.doc().selection().iter().copied().collect::<Vec<_>>(),
+            vec![face],
+            "the selection survives the refused angle"
+        );
+        assert_eq!(e.doc().revision(), revision, "nothing was copied");
+    }
+
     /// Every edge and face in the open context.
     fn context_contents(e: &Editor) -> Vec<EntityId> {
         let m = e.doc().model();

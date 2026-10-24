@@ -31,35 +31,34 @@ impl Document {
         existing: ExistingMaterial,
     ) -> Result<SceneChange, CommandError> {
         self.existing_material = None;
-        if existing != ExistingMaterial::Fail {
-            let Some(name) = name else {
+        let found = match (existing, name) {
+            (ExistingMaterial::Fail, _) => None,
+            (_, None) => {
                 return Err(CommandError::new(
                     ErrorKind::InvalidInput,
                     "existing: reuse and update need a name",
                 ));
-            };
-            let found = self
+            }
+            (_, Some(n)) => self
                 .scene
                 .materials()
-                .find(|(_, m)| m.name == name)
-                .map(|(id, _)| id);
-            if let Some(id) = found {
-                self.existing_material = Some(id);
-                if existing == ExistingMaterial::Reuse {
-                    return Ok(SceneChange::default());
-                }
-                return self.change_material_changes(
-                    id,
-                    MaterialEdit {
-                        name: None,
-                        color,
-                        opacity,
-                        texture: None,
-                        emission,
-                    },
-                    texture.map(Some),
-                );
-            }
+                .find(|(_, m)| m.name == n)
+                .map(|(id, _)| id),
+        };
+        if let (Some(id), ExistingMaterial::Update) = (found, existing) {
+            let change = self.change_material_changes(
+                id,
+                MaterialEdit {
+                    name: None,
+                    color,
+                    opacity,
+                    texture: None,
+                    emission,
+                },
+                texture.map(Some),
+            )?;
+            self.existing_material = Some(id);
+            return Ok(change);
         }
         if texture.is_some_and(|t| t.path.is_none()) {
             return Err(CommandError::new(
@@ -80,14 +79,23 @@ impl Document {
             Some(n) => n.to_string(),
             None => self.scene.free_material_name(DEFAULT_MATERIAL_NAME),
         };
+        let material = Material {
+            name,
+            color,
+            opacity: opacity.unwrap_or(1.0),
+            texture,
+            emission: emission.unwrap_or(0.0),
+        };
+        if let Some(id) = found {
+            // Reuse: the same checks as for a new material, then nothing changes.
+            self.scene
+                .check_material_parts(&material)
+                .map_err(|e| material_error(e, None))?;
+            self.existing_material = Some(id);
+            return Ok(SceneChange::default());
+        }
         self.scene
-            .add_material_from(Material {
-                name,
-                color,
-                opacity: opacity.unwrap_or(1.0),
-                texture,
-                emission: emission.unwrap_or(0.0),
-            })
+            .add_material_from(material)
             .map(|(_, change)| change)
             .map_err(|e| material_error(e, None))
     }
