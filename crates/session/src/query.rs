@@ -45,13 +45,15 @@ pub enum Query {
         id: EntityId,
     },
     /// Volume, mass, centre of gravity and inertia of instances of the open context (`ids`:
-    /// instances; empty means every instance of it), each and in total, in the context's
-    /// coordinates. A part's density is its instance's own material's, else an enclosing
-    /// instance's, else the material most of its faces show on their front. `mass`, `inertia`
+    /// instances, repeats counted once; empty means every instance of it), each and in total,
+    /// in the context's coordinates. A part's density is that of the material most of its faces
+    /// show on the outside (their front, or their back when the solid faces inward), else its
+    /// instance's own material's, else the nearest enclosing instance's (the instances the open
+    /// context sits in included), passing over materials without a density. `mass`, `inertia`
     /// and `principal` are absent when a contributing solid has no density; without a mass
     /// `centroid` is the volume's centroid. `inertia` is about the centroid, in kg m2;
-    /// `principal` gives its moments (ascending) and axes. Loose geometry that is not closed is
-    /// listed in `skipped` and ignored.
+    /// `principal` gives its moments (ascending) and axes. Loose geometry that is not closed, or
+    /// has a face that cannot be triangulated, is listed in `skipped` and ignored.
     MassProperties {
         #[serde(default)]
         ids: Vec<EntityId>,
@@ -61,7 +63,9 @@ pub enum Query {
     /// (`["i1", "i2", "f3"]`), in which case the placements of the instances apply and results
     /// are in open-context coordinates. `distance`: the minimum distance between two entities
     /// (vertices, edges, faces, instances, guides) and the closest point on each; faces are
-    /// planar polygons with holes, instances are measured between their faces. `angle`: between
+    /// planar polygons with holes, instances are measured between their faces (surface to
+    /// surface: an instance inside another is the gap between their faces, not 0), and faces
+    /// that cannot be triangulated are left out and listed in `skipped`. `angle`: between
     /// two edges (directions) or two faces (normals), 0 to 180 degrees. `round`: the circle
     /// (an edge of a circle or arc, or a flat disc face) or cylinder (a face joined by soft
     /// edges to others around one axis) the entity lies on, fitted by least squares with the
@@ -578,6 +582,10 @@ pub struct DistanceInfo {
     pub distance: f64,
     /// The closest point on the first and on the second entity.
     pub points: [[f64; 3]; 2],
+    /// Faces of measured instances that could not be triangulated and were left out, as paths
+    /// from the instance ("i4/i7/f12"); absent when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<String>,
 }
 
 /// The angle between two edges or two faces (see `Query::Measure`).

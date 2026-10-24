@@ -15,7 +15,10 @@ pub fn entity_info(doc: &Document) -> Vec<String> {
     entity_info_with(doc, &|i| {
         kernel::solid::instance_volume(doc.scene(), i)
             .ok()
-            .and_then(|_| kernel::mass::instance_mass(doc.scene(), i))
+            .and_then(|_| {
+                let inherited = kernel::mass::context_density(doc.scene(), doc.context());
+                kernel::mass::instance_mass(doc.scene(), i, inherited)
+            })
     })
 }
 

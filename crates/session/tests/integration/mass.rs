@@ -193,3 +193,53 @@ fn without_density_there_is_no_mass_and_bad_ids_are_refused() {
         serde_json::from_value(json!({"type": "mass_properties", "ids": ["i999"]})).unwrap();
     assert!(d.query(&q).is_err());
 }
+
+#[test]
+fn painted_faces_win_and_the_open_context_does_not_change_the_mass() {
+    let mut d = doc();
+    let steel = material(&mut d, Some(7850.0));
+    let red = run(
+        &mut d,
+        json!({"type": "add_material", "name": "Red", "color": [200, 0, 0]}),
+    )
+    .unwrap()["changes"]["materials"][0]
+        .clone();
+    // Steel faces inside a group painted Red: the faces' Steel counts.
+    let a = add_box(&mut d, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0], &red);
+    run(&mut d, json!({"type": "open_instance", "id": a})).unwrap();
+    let faces: Vec<Value> = ask(&d, json!({"type": "entities"}))["faces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["id"].clone())
+        .collect();
+    run(
+        &mut d,
+        json!({"type": "paint", "ids": faces, "material": steel}),
+    )
+    .unwrap();
+    run(&mut d, json!({"type": "close_instance"})).unwrap();
+    let r = ask(&d, json!({"type": "mass_properties", "ids": [a]}));
+    assert!(close(&r["total"]["mass"], 7850.0), "{r}");
+    // An unpainted box in an outer group painted Steel: the same from the root and inside.
+    let none = Value::Null;
+    let inner = add_box(&mut d, [2.0, 1.0, 1.0], [5.0, 0.0, 0.0], &none);
+    let out = run(&mut d, json!({"type": "make_group", "ids": [inner]})).unwrap();
+    let outer = out["changes"]["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i.as_str().is_some_and(|s| s.starts_with('i')))
+        .cloned()
+        .unwrap_or_else(|| panic!("{out}"));
+    run(
+        &mut d,
+        json!({"type": "paint", "ids": [outer], "material": steel}),
+    )
+    .unwrap();
+    let root = ask(&d, json!({"type": "mass_properties", "ids": [outer]}));
+    assert!(close(&root["total"]["mass"], 2.0 * 7850.0), "{root}");
+    run(&mut d, json!({"type": "open_instance", "id": outer})).unwrap();
+    let inside = ask(&d, json!({"type": "mass_properties"}));
+    assert!(close(&inside["total"]["mass"], 2.0 * 7850.0), "{inside}");
+}

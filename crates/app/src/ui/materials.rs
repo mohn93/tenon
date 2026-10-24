@@ -195,11 +195,14 @@ fn density_field(ui: &mut Ui, m: &MaterialRow, actions: &mut Vec<UiAction>) {
                             format!("{v:.0}")
                         }
                     })
-                    .custom_parser(|s| s.trim().parse::<f64>().ok().or(Some(0.0))),
+                    .custom_parser(parse_density),
             )
             .labelled_by(label.id)
             .on_hover_text("Steel 7850, aluminium 2700, copper 8960; 0 for none");
-        if r.changed() && !r.dragged() || r.drag_stopped() {
+        // A value below the smallest density (a drag can stop there) is refused.
+        if (r.changed() && !r.dragged() || r.drag_stopped())
+            && (value == 0.0 || value >= kernel::MIN_DENSITY)
+        {
             let density = (value >= kernel::MIN_DENSITY).then_some(value);
             if density != m.density {
                 actions.push(UiAction::SetMaterialDensity(m.id, density));
@@ -346,4 +349,34 @@ fn texture_controls(ui: &mut Ui, m: &MaterialRow, actions: &mut Vec<UiAction>) {
 /// An opacity (0 to 1) in whole percent.
 fn percent(opacity: f32) -> u8 {
     (opacity.clamp(0.0, 1.0) * 100.0).round() as u8
+}
+
+/// Reads a typed density: empty, "none" or 0 clears it; text that is not a number, and numbers
+/// below the smallest density other than 0, are refused (None keeps the old value).
+fn parse_density(s: &str) -> Option<f64> {
+    let s = s.trim();
+    let s = s.strip_suffix("kg/m³").unwrap_or(s).trim();
+    if s.is_empty() || s.eq_ignore_ascii_case("none") {
+        return Some(0.0);
+    }
+    s.parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite() && (*v == 0.0 || *v >= kernel::MIN_DENSITY))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_density;
+
+    #[test]
+    fn typed_densities_clear_only_when_asked() {
+        assert_eq!(parse_density(" 7850 "), Some(7850.0));
+        assert_eq!(parse_density("2700 kg/m³"), Some(2700.0));
+        assert_eq!(parse_density("0"), Some(0.0));
+        assert_eq!(parse_density(""), Some(0.0));
+        assert_eq!(parse_density("none"), Some(0.0));
+        for bad in ["steel", "0.5", "-3", "NaN", "1e400"] {
+            assert_eq!(parse_density(bad), None, "{bad}");
+        }
+    }
 }

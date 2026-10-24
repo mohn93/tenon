@@ -191,7 +191,10 @@ impl Editor {
         }
         let v = kernel::solid::instance_volume(self.doc.scene(), instance)
             .ok()
-            .and_then(|_| kernel::mass::instance_mass(self.doc.scene(), instance));
+            .and_then(|_| {
+                let inherited = kernel::mass::context_density(self.doc.scene(), self.doc.context());
+                kernel::mass::instance_mass(self.doc.scene(), instance, inherited)
+            });
         *self.volume_cache.borrow_mut() = Some((key.0, key.1, key.2, v));
         v
     }

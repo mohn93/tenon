@@ -539,12 +539,15 @@ pub fn locate(scene: &Scene, start: MeshId, path: &[EntityId]) -> Result<Located
     })
 }
 
+/// The triangles of `mesh` and the instances in it, placed by `place`; faces that cannot be
+/// triangulated go in `skipped` as paths from `path` ("i4/i7/f12").
 fn mesh_triangles(
     scene: &Scene,
     mesh: MeshId,
     place: DAffine3,
-    depth: usize,
+    (depth, path): (usize, &str),
     out: &mut Vec<Tri>,
+    skipped: &mut Vec<String>,
 ) -> Result<(), MeasureError> {
     if depth > MAX_DEPTH {
         return invalid("instances are nested too deep");
@@ -553,24 +556,30 @@ fn mesh_triangles(
         return Ok(());
     };
     for (id, _) in m.faces() {
-        for t in m.triangulate(id).unwrap_or_default() {
-            out.push(t.map(|p| place.transform_point3(p)));
+        match m.triangulate(id) {
+            Some(tris) => out.extend(
+                tris.into_iter()
+                    .map(|t| t.map(|p| place.transform_point3(p))),
+            ),
+            None => skipped.push(format!("{path}/f{}", id.0)),
         }
     }
-    for (_, inst) in m.instances() {
+    for (id, inst) in m.instances() {
         mesh_triangles(
             scene,
             MeshId::Definition(inst.definition),
             place * inst.transform,
-            depth + 1,
+            (depth + 1, &format!("{path}/i{}", id.0)),
             out,
+            skipped,
         )?;
     }
     Ok(())
 }
 
-/// The geometry of a located entity, in the starting mesh's coordinates.
-pub fn item(scene: &Scene, at: &Located) -> Result<Item, MeasureError> {
+/// The geometry of a located entity, in the starting mesh's coordinates. Faces of an instance
+/// that cannot be triangulated are left out and named in `skipped`.
+pub fn item(scene: &Scene, at: &Located, skipped: &mut Vec<String>) -> Result<Item, MeasureError> {
     let m = scene.mesh(at.mesh).ok_or(MeasureError::Missing(at.id))?;
     let w = |p: DVec3| at.place.transform_point3(p);
     Ok(match at.id {
@@ -598,8 +607,9 @@ pub fn item(scene: &Scene, at: &Located) -> Result<Item, MeasureError> {
                 scene,
                 MeshId::Definition(inst.definition),
                 at.place * inst.transform,
-                0,
+                (0, &at.id.to_string()),
                 &mut tris,
+                skipped,
             )?;
             if tris.is_empty() {
                 return invalid(format!("{} holds no faces", at.id));
@@ -631,15 +641,22 @@ fn edge_ends(m: &Model, e: EdgeId) -> Result<[DVec3; 2], MeasureError> {
     Ok([vertex(m, a)?, vertex(m, b)?])
 }
 
-/// The minimum distance between two entities.
+/// The minimum distance between two entities, and the faces of instances among them that
+/// could not be triangulated and were left out. Instances are measured between their
+/// surfaces: one inside another is the gap between the inner one's faces and the outer one's.
 pub fn measure_distance(
     scene: &Scene,
     start: MeshId,
     a: &[EntityId],
     b: &[EntityId],
-) -> Result<Closest, MeasureError> {
+) -> Result<(Closest, Vec<String>), MeasureError> {
     let (la, lb) = (locate(scene, start, a)?, locate(scene, start, b)?);
-    Ok(distance(&item(scene, &la)?, &item(scene, &lb)?))
+    let mut skipped = Vec::new();
+    let (ia, ib) = (
+        item(scene, &la, &mut skipped)?,
+        item(scene, &lb, &mut skipped)?,
+    );
+    Ok((distance(&ia, &ib), skipped))
 }
 
 /// An angle between two directions, in degrees.
@@ -680,7 +697,8 @@ pub fn measure_angle(
     let (Some(u), Some(v)) = (u.try_normalize(), v.try_normalize()) else {
         return invalid("a direction is degenerate (zero length)");
     };
-    let degrees = u.dot(v).clamp(-1.0, 1.0).acos().to_degrees();
+    // atan2 keeps small and near-straight angles precise, where acos loses digits.
+    let degrees = u.cross(v).length().atan2(u.dot(v)).to_degrees();
     Ok(Angle {
         degrees,
         acute: degrees.min(180.0 - degrees),
@@ -928,11 +946,25 @@ fn curve_circle(m: &Model, place: &DAffine3, edge: EdgeId) -> Result<Round, Meas
     if curve.polygon {
         return invalid(format!("e{} is a side of a polygon, not a circle", edge.0));
     }
-    let pts: Vec<DVec3> = curve
+    let all: Vec<DVec3> = curve
         .vertices
         .iter()
-        .map(|v| vertex(m, *v).map(|p| place.transform_point3(p)))
+        .map(|v| vertex(m, *v))
         .collect::<Result<_, _>>()?;
+    // Only the corners (and an arc's ends) lie on the circle: a vertex splitting a side, where
+    // other geometry meets it, lies on the chord.
+    let mut key = crate::curves::corners(&all, curve.closed);
+    if !curve.closed {
+        key.insert(0, 0);
+        key.push(all.len() - 1);
+    }
+    let pts: Vec<DVec3> = if key.len() >= 3 {
+        key.iter()
+            .map(|&i| place.transform_point3(all[i]))
+            .collect()
+    } else {
+        all.iter().map(|p| place.transform_point3(*p)).collect()
+    };
     fit_circle(&pts).map_err(MeasureError::Invalid)
 }
 
@@ -970,18 +1002,41 @@ pub fn measure_round(
                 f.0
             ));
         }
+        // Fit the ends of the facet generator lines: soft edges between two facets of the group
+        // that turn. Other vertices (where a cross-bore or another cut meets a facet) lie on
+        // the flat facets, inside the cylinder.
+        let members: BTreeSet<FaceId> = group.iter().copied().collect();
         let mut verts = BTreeSet::new();
+        let mut all = BTreeSet::new();
         let mut normals = Vec::new();
         for g in &group {
             let face = m
                 .face(*g)
                 .ok_or(MeasureError::Missing(EntityId::Face(*g)))?;
             for l in std::iter::once(&face.outer).chain(&face.holes) {
-                verts.extend(l.iter().copied());
+                all.extend(l.iter().copied());
             }
             if let Some(n) = (normal_map * face.normal).try_normalize() {
                 normals.push(n);
             }
+            for e in m.face_edges(*g) {
+                let Some(edge) = m.edge(e).filter(|e| e.soft) else {
+                    continue;
+                };
+                let Some([a, b]) = m.faces_beside(e) else {
+                    continue;
+                };
+                let turns = match (m.face(a), m.face(b)) {
+                    (Some(fa), Some(fb)) => fa.normal.cross(fb.normal).length() > 1e-9,
+                    _ => false,
+                };
+                if turns && members.contains(&a) && members.contains(&b) {
+                    verts.extend(edge.v);
+                }
+            }
+        }
+        if verts.len() < 3 {
+            verts = all;
         }
         let pts: Vec<DVec3> = verts
             .into_iter()

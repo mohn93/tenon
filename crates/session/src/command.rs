@@ -734,9 +734,9 @@ pub enum Command {
     /// The new id is in the outcome's `changes.materials`. `existing` says what happens when
     /// `name` is already taken: `fail` (default) is an error, `reuse` returns the existing
     /// material unchanged (no undo step), `update` gives it the color, opacity, texture,
-    /// emission, metalness and roughness passed, as `change_material` would (one undo step),
-    /// and returns it. `reuse` checks only the ranges of the opacity, emission, metalness and
-    /// roughness given.
+    /// emission, metalness, roughness and density passed, as `change_material` would (one undo
+    /// step), and returns it. `reuse` checks only the ranges of the opacity, emission,
+    /// metalness, roughness and density given.
     /// `existing` other than `fail` needs a `name`.
     AddMaterial {
         #[serde(default)]

@@ -1,26 +1,27 @@
 //! Mass properties of solids: volume, centroid and inertia of closed meshes by the divergence
-//! theorem (second moments summed over the tetrahedra spanned by each triangle and the origin),
-//! carried through instance transforms (scale and mirroring included) and summed over nested
-//! instances.
+//! theorem (second moments summed over the tetrahedra spanned by each triangle and a point of
+//! the mesh), carried through instance transforms (scale and mirroring included) and summed
+//! over nested instances. Every part keeps its moments about its own centroid and parts are
+//! combined by the parallel-axis theorem, so parts far from the origin stay precise.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use glam::{DAffine3, DMat3, DVec3};
 
-use crate::ids::{InstanceId, MaterialId};
+use crate::ids::{DefinitionId, InstanceId, MaterialId};
 use crate::model::{Instance, Model};
-use crate::scene::Scene;
-use crate::solid::{open_reason, signed_volume};
+use crate::scene::{MeshId, Scene};
+use crate::solid::open_reason;
 
 /// The deepest nesting of groups and components `mass_report` follows.
 const MAX_DEPTH: usize = 64;
 
-/// The zeroth, first and second moments of a region (or of a density over it) about the
-/// origin: `v` the volume (or mass), `m` the integral of x, `c` the integral of x x^T.
+/// The zeroth and second moments of a region (or of a density over it) and its centroid:
+/// `v` the volume (or mass), `g` the centroid, `c` the integral of (x - g)(x - g)^T.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Moments {
     v: f64,
-    m: DVec3,
+    g: DVec3,
     c: DMat3,
 }
 
@@ -29,7 +30,7 @@ impl Default for Moments {
     fn default() -> Self {
         Moments {
             v: 0.0,
-            m: DVec3::ZERO,
+            g: DVec3::ZERO,
             c: DMat3::ZERO,
         }
     }
@@ -40,16 +41,27 @@ fn outer(a: DVec3, b: DVec3) -> DMat3 {
 }
 
 impl Moments {
+    /// Adds a region by the parallel-axis theorem.
     fn add(&mut self, o: &Moments) {
-        self.v += o.v;
-        self.m += o.m;
-        self.c += o.c;
+        if o.v == 0.0 {
+            return;
+        }
+        if self.v == 0.0 {
+            *self = *o;
+            return;
+        }
+        let v = self.v + o.v;
+        let g = self.g + (o.g - self.g) * (o.v / v);
+        let (d1, d2) = (self.g - g, o.g - g);
+        self.c = self.c + o.c + outer(d1, d1) * self.v + outer(d2, d2) * o.v;
+        self.v = v;
+        self.g = g;
     }
 
     fn scaled(&self, k: f64) -> Moments {
         Moments {
             v: self.v * k,
-            m: self.m * k,
+            g: self.g,
             c: self.c * k,
         }
     }
@@ -58,32 +70,50 @@ impl Moments {
     /// volume unchanged, so every moment scales by |det L|.
     fn transformed(&self, a: &DAffine3) -> Moments {
         let l = a.matrix3;
-        let t = a.translation;
         let d = l.determinant().abs();
-        let lm = l * self.m;
         Moments {
             v: d * self.v,
-            m: d * (lm + t * self.v),
-            c: (l * self.c * l.transpose() + outer(lm, t) + outer(t, lm) + outer(t, t) * self.v)
-                * d,
+            g: a.transform_point3(self.g),
+            c: l * self.c * l.transpose() * d,
         }
     }
 }
 
-/// The moments of a closed mesh (volume positive whichever way its faces point).
-fn mesh_moments(m: &Model) -> Moments {
-    let sign = if signed_volume(m) < 0.0 { -1.0 } else { 1.0 };
-    let mut out = Moments::default();
+/// The moments of a closed mesh (volume positive whichever way its faces point) and whether
+/// its faces point inward, or the face that cannot be triangulated.
+fn mesh_moments(m: &Model) -> Result<(Moments, bool), String> {
+    let mut tris = Vec::new();
     for (id, _) in m.faces() {
-        for [a, b, c] in m.triangulate(id).unwrap_or_default() {
-            let v = a.dot(b.cross(c)) / 6.0 * sign;
-            let s = a + b + c;
-            out.v += v;
-            out.m += s * (v / 4.0);
-            out.c += (outer(a, a) + outer(b, b) + outer(c, c) + outer(s, s)) * (v / 20.0);
-        }
+        let t = m
+            .triangulate(id)
+            .ok_or_else(|| format!("face f{} cannot be triangulated", id.0))?;
+        tris.extend(t);
     }
-    out
+    // Sum about a point of the mesh, not the origin, so a mesh far away stays precise.
+    let p0 = tris.first().map_or(DVec3::ZERO, |t| t[0]);
+    let (mut v, mut s1, mut s2) = (0.0, DVec3::ZERO, DMat3::ZERO);
+    for t in &tris {
+        let [a, b, c] = t.map(|p| p - p0);
+        let w = a.dot(b.cross(c)) / 6.0;
+        let s = a + b + c;
+        v += w;
+        s1 += s * (w / 4.0);
+        s2 += (outer(a, a) + outer(b, b) + outer(c, c) + outer(s, s)) * (w / 20.0);
+    }
+    if v == 0.0 {
+        return Ok((Moments::default(), false));
+    }
+    let local = s1 / v;
+    // The signs of v, s1 and s2 flip together, so the centroid and the moments are the same.
+    let k = v.signum();
+    Ok((
+        Moments {
+            v: v * k,
+            g: p0 + local,
+            c: (s2 - outer(local, local) * v) * k,
+        },
+        v < 0.0,
+    ))
 }
 
 /// Eigenvalues (ascending) and unit eigenvectors of a symmetric 3x3 matrix, by Jacobi
@@ -208,19 +238,16 @@ impl Acc {
         }
         let volume = self.vol.v;
         let weighted = !self.unweighted && self.mass.v > 0.0;
-        let centroid_of = |m: &Moments| m.m / m.v;
         if !weighted {
             return Some(MassProps {
                 volume,
                 mass: None,
-                centroid: centroid_of(&self.vol),
+                centroid: self.vol.g,
                 inertia: None,
                 principal: None,
             });
         }
-        let mass = self.mass.v;
-        let g = centroid_of(&self.mass);
-        let cc = self.mass.c - outer(g, g) * mass;
+        let cc = self.mass.c;
         let trace = cc.x_axis.x + cc.y_axis.y + cc.z_axis.z;
         let mut inertia = DMat3::IDENTITY * trace - cc;
         // Symmetrise away rounding.
@@ -228,21 +255,22 @@ impl Acc {
         let (moments, axes) = symmetric_eigen(inertia);
         Some(MassProps {
             volume,
-            mass: Some(mass),
-            centroid: g,
+            mass: Some(self.mass.v),
+            centroid: self.mass.g,
             inertia: Some(inertia),
             principal: Some(Principal { moments, axes }),
         })
     }
 }
 
-/// The material most faces of `m` show on their front (more than half of them), if any.
-fn dominant_material(m: &Model) -> Option<MaterialId> {
+/// The material most faces of `m` show on `side` (0 front, 1 back; more than half of them),
+/// if any.
+fn dominant_material(m: &Model, side: usize) -> Option<MaterialId> {
     let mut counts: BTreeMap<MaterialId, usize> = BTreeMap::new();
     let mut faces = 0usize;
     for (_, f) in m.faces() {
         faces += 1;
-        if let Some(id) = f.paint()[0] {
+        if let Some(id) = f.paint()[side] {
             *counts.entry(id).or_default() += 1;
         }
     }
@@ -252,100 +280,168 @@ fn dominant_material(m: &Model) -> Option<MaterialId> {
         .map(|(id, _)| id)
 }
 
-fn walk(
-    scene: &Scene,
-    instance: &Instance,
-    path: &str,
-    inherited: Option<MaterialId>,
-    depth: usize,
-    skipped: &mut Vec<Skipped>,
-) -> Acc {
-    let skip = |skipped: &mut Vec<Skipped>, path: &str, reason: String| {
-        skipped.push(Skipped {
+/// What a definition's own geometry is to a mass sum, worked out once per definition.
+#[derive(Clone, Debug)]
+enum Part {
+    /// No faces: only its nested instances count.
+    Empty,
+    /// Left out, and why.
+    Skip(String),
+    /// A closed mesh of unit density, and the material most of its faces show on the outside.
+    Solid {
+        vol: Moments,
+        faces: Option<MaterialId>,
+    },
+}
+
+fn part(m: &Model) -> Part {
+    if m.faces().next().is_none() {
+        return Part::Empty;
+    }
+    if let Some(why) = open_reason(m) {
+        return Part::Skip(why);
+    }
+    match mesh_moments(m) {
+        Err(why) => Part::Skip(why),
+        Ok((vol, _)) if vol.v <= 1e-12 => Part::Skip("it encloses no volume".into()),
+        Ok((vol, inward)) => Part::Solid {
+            vol,
+            // Faces pointing inward show their back on the outside.
+            faces: dominant_material(m, usize::from(inward)),
+        },
+    }
+}
+
+fn density(scene: &Scene, m: Option<MaterialId>) -> Option<f64> {
+    m.and_then(|m| scene.material(m)).and_then(|m| m.density)
+}
+
+/// The density the instances inside the open context inherit from the instances enclosing it
+/// (`context`, from the root): the innermost one's own material with a density.
+pub fn context_density(scene: &Scene, context: &[InstanceId]) -> Option<f64> {
+    let mut mesh = MeshId::Root;
+    let mut inherited = None;
+    for id in context {
+        let Some(inst) = scene.mesh(mesh).and_then(|m| m.instance(*id)) else {
+            break;
+        };
+        inherited = density(scene, inst.material).or(inherited);
+        mesh = MeshId::Definition(inst.definition);
+    }
+    inherited
+}
+
+struct Walk<'a> {
+    scene: &'a Scene,
+    parts: BTreeMap<DefinitionId, Part>,
+    skipped: Vec<Skipped>,
+}
+
+impl Walk<'_> {
+    fn skip(&mut self, path: &str, reason: String) {
+        self.skipped.push(Skipped {
             path: path.into(),
             reason,
         });
-    };
-    let Some(d) = scene.definition(instance.definition) else {
-        skip(skipped, path, "its definition is missing".into());
-        return Acc::default();
-    };
-    if depth > MAX_DEPTH {
-        skip(skipped, path, "it is nested too deeply".into());
-        return Acc::default();
     }
-    let material = instance.material.or(inherited);
-    let mut acc = Acc::default();
-    if d.mesh.faces().next().is_some() {
-        match open_reason(&d.mesh) {
-            Some(why) => skip(skipped, path, why),
-            None => {
-                let vol = mesh_moments(&d.mesh);
-                if vol.v <= 1e-12 {
-                    skip(skipped, path, "it encloses no volume".into());
-                } else {
-                    let density = material
-                        .or_else(|| dominant_material(&d.mesh))
-                        .and_then(|m| scene.material(m))
-                        .and_then(|m| m.density);
-                    acc.any = true;
-                    match density {
-                        Some(rho) => acc.mass = vol.scaled(rho),
-                        None => acc.unweighted = true,
-                    }
-                    acc.vol = vol;
+
+    fn instance(
+        &mut self,
+        instance: &Instance,
+        path: &str,
+        inherited: Option<f64>,
+        depth: usize,
+    ) -> Acc {
+        let scene = self.scene;
+        let Some(d) = scene.definition(instance.definition) else {
+            self.skip(path, "its definition is missing".into());
+            return Acc::default();
+        };
+        if depth > MAX_DEPTH {
+            self.skip(path, "it is nested too deeply".into());
+            return Acc::default();
+        }
+        // Painted faces show their own material, then the instance's, then an enclosing
+        // instance's, as they render; materials without a density are passed over.
+        let inherited = density(scene, instance.material).or(inherited);
+        let part = self
+            .parts
+            .entry(instance.definition)
+            .or_insert_with(|| part(&d.mesh))
+            .clone();
+        let mut acc = Acc::default();
+        match part {
+            Part::Empty => {}
+            Part::Skip(why) => self.skip(path, why),
+            Part::Solid { vol, faces } => {
+                acc.any = true;
+                match density(scene, faces).or(inherited) {
+                    Some(rho) => acc.mass = vol.scaled(rho),
+                    None => acc.unweighted = true,
                 }
+                acc.vol = vol;
             }
         }
+        for (id, inner) in d.mesh.instances() {
+            let sub = self.instance(inner, &format!("{path}/i{}", id.0), inherited, depth + 1);
+            acc.add(&sub.transformed(&inner.transform));
+        }
+        acc
     }
-    for (id, inner) in d.mesh.instances() {
-        let sub = walk(
-            scene,
-            inner,
-            &format!("{path}/i{}", id.0),
-            material,
-            depth + 1,
-            skipped,
-        );
-        acc.add(&sub.transformed(&inner.transform));
-    }
-    acc
 }
 
 /// The mass properties of one `instance` alone, in the coordinates of the context holding it
-/// (None when no part of it is a solid).
-pub fn instance_mass(scene: &Scene, instance: &Instance) -> Option<MassProps> {
-    walk(scene, instance, "", None, 0, &mut Vec::new())
+/// (None when no part of it is a solid). `inherited` is the density of the instances enclosing
+/// that context (see `context_density`).
+pub fn instance_mass(
+    scene: &Scene,
+    instance: &Instance,
+    inherited: Option<f64>,
+) -> Option<MassProps> {
+    let mut walk = Walk {
+        scene,
+        parts: BTreeMap::new(),
+        skipped: Vec::new(),
+    };
+    walk.instance(instance, "", inherited, 0)
         .transformed(&instance.transform)
         .props()
 }
 
-/// The mass properties of `ids` (instances of `mesh`; empty: every instance of it), each in
-/// the coordinates of `mesh`, and their sum. A part's density is its instance's own material's,
-/// else an enclosing instance's, else the material most of its faces show on their front.
-/// Loose geometry that is not closed is skipped with the reason; unknown ids are an error.
-pub fn mass_report(scene: &Scene, mesh: &Model, ids: &[InstanceId]) -> Result<MassReport, String> {
-    let ids: Vec<InstanceId> = if ids.is_empty() {
+/// The mass properties of `ids` (instances of `mesh`, repeats counted once; empty: every
+/// instance of it), each in the coordinates of `mesh`, and their sum. `inherited` is the
+/// density of the instances enclosing `mesh` (see `context_density`). A part's density is that
+/// of the material most of its faces show on the outside, else its instance's own material's,
+/// else the nearest enclosing instance's, passing over materials without a density. Loose
+/// geometry that is not closed, or cannot be triangulated, is skipped with the reason; unknown
+/// ids are an error.
+pub fn mass_report(
+    scene: &Scene,
+    mesh: &Model,
+    ids: &[InstanceId],
+    inherited: Option<f64>,
+) -> Result<MassReport, String> {
+    let mut ids: Vec<InstanceId> = if ids.is_empty() {
         mesh.instances().map(|(id, _)| id).collect()
     } else {
         ids.to_vec()
     };
-    let mut skipped = Vec::new();
+    let mut seen = BTreeSet::new();
+    ids.retain(|id| seen.insert(*id));
+    let mut walk = Walk {
+        scene,
+        parts: BTreeMap::new(),
+        skipped: Vec::new(),
+    };
     let mut total = Acc::default();
     let mut instances = Vec::new();
     for id in ids {
         let instance = mesh
             .instance(id)
             .ok_or_else(|| format!("no instance i{}", id.0))?;
-        let acc = walk(
-            scene,
-            instance,
-            &format!("i{}", id.0),
-            None,
-            0,
-            &mut skipped,
-        )
-        .transformed(&instance.transform);
+        let acc = walk
+            .instance(instance, &format!("i{}", id.0), inherited, 0)
+            .transformed(&instance.transform);
         if let Some(p) = acc.props() {
             instances.push((id, p));
             total.add(&acc);
@@ -354,7 +450,7 @@ pub fn mass_report(scene: &Scene, mesh: &Model, ids: &[InstanceId]) -> Result<Ma
     Ok(MassReport {
         instances,
         total: total.props(),
-        skipped,
+        skipped: walk.skipped,
     })
 }
 
@@ -365,9 +461,10 @@ mod tests {
     use glam::DQuat;
 
     use super::*;
+    use crate::ids::FaceId;
     use crate::material::Material;
     use crate::primitives::Solid;
-    use crate::scene::{DefinitionKind, MeshId};
+    use crate::scene::DefinitionKind;
 
     fn steel(scene: &mut Scene, density: Option<f64>) -> MaterialId {
         scene
@@ -405,7 +502,7 @@ mod tests {
     }
 
     fn report(scene: &Scene, ids: &[InstanceId]) -> MassReport {
-        mass_report(scene, scene.mesh(MeshId::Root).unwrap(), ids).unwrap()
+        mass_report(scene, scene.mesh(MeshId::Root).unwrap(), ids, None).unwrap()
     }
 
     fn close(a: f64, b: f64) -> bool {
@@ -549,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn density_comes_from_the_instance_then_the_faces_else_none() {
+    fn density_comes_from_the_faces_then_the_instance_else_none() {
         let mut s = Scene::new();
         let light = steel(&mut s, Some(100.0));
         let heavy = steel(&mut s, Some(8000.0));
@@ -593,6 +690,171 @@ mod tests {
         let nodens = place(&mut s, &b, DAffine3::IDENTITY, None);
         let t = report(&s, &[own, nodens]).total.unwrap();
         assert!(t.mass.is_none() && t.inertia.is_none() && close(t.volume, 2.0));
+    }
+
+    fn definition_faces(s: &Scene, id: InstanceId) -> (crate::ids::DefinitionId, Vec<FaceId>) {
+        let def = s
+            .mesh(MeshId::Root)
+            .unwrap()
+            .instance(id)
+            .unwrap()
+            .definition;
+        let faces = s
+            .definition(def)
+            .unwrap()
+            .mesh
+            .faces()
+            .map(|(f, _)| f)
+            .collect();
+        (def, faces)
+    }
+
+    #[test]
+    fn painted_faces_win_over_the_instance_material() {
+        let mut s = Scene::new();
+        let steel_id = steel(&mut s, Some(7850.0));
+        let red = steel(&mut s, Some(100.0));
+        let plain = steel(&mut s, None);
+        let b = Solid::cuboid(DVec3::ONE).unwrap();
+        let id = place(&mut s, &b, DAffine3::IDENTITY, Some(red));
+        let (def, faces) = definition_faces(&s, id);
+        s.edit(MeshId::Definition(def), |m| {
+            Ok(m.paint_faces(&faces, crate::Side::Front, Some(steel_id)))
+        })
+        .unwrap();
+        assert!(close(
+            report(&s, &[id]).total.unwrap().mass.unwrap(),
+            7850.0
+        ));
+        // Faces whose material has no density fall through to the instance.
+        s.edit(MeshId::Definition(def), |m| {
+            Ok(m.paint_faces(&faces, crate::Side::Front, Some(plain)))
+        })
+        .unwrap();
+        assert!(close(report(&s, &[id]).total.unwrap().mass.unwrap(), 100.0));
+    }
+
+    #[test]
+    fn inward_facing_solids_take_the_back_material() {
+        let mut s = Scene::new();
+        let heavy = steel(&mut s, Some(8000.0));
+        let id = place(
+            &mut s,
+            &Solid::cuboid(DVec3::ONE).unwrap(),
+            DAffine3::IDENTITY,
+            None,
+        );
+        let (def, faces) = definition_faces(&s, id);
+        s.edit(MeshId::Definition(def), |m| Ok(m.reverse_faces(&faces).0))
+            .unwrap();
+        let (_, faces) = definition_faces(&s, id);
+        s.edit(MeshId::Definition(def), |m| {
+            Ok(m.paint_faces(&faces, crate::Side::Back, Some(heavy)))
+        })
+        .unwrap();
+        let p = report(&s, &[id]).total.unwrap();
+        assert!(close(p.volume, 1.0) && close(p.mass.unwrap(), 8000.0));
+    }
+
+    #[test]
+    fn enclosing_instances_and_the_open_context_pass_their_density_down() {
+        let mut s = Scene::new();
+        let heavy = steel(&mut s, Some(2000.0));
+        let plain = steel(&mut s, None);
+        let outer = place(
+            &mut s,
+            &Solid::cuboid(DVec3::ONE).unwrap(),
+            DAffine3::IDENTITY,
+            Some(heavy),
+        );
+        let (def, faces) = definition_faces(&s, outer);
+        s.edit(MeshId::Definition(def), |m| Ok(m.erase(&[], &faces)))
+            .unwrap();
+        let edges: Vec<_> = s
+            .definition(def)
+            .unwrap()
+            .mesh
+            .edges()
+            .map(|(e, _)| e)
+            .collect();
+        s.edit(MeshId::Definition(def), |m| Ok(m.erase(&edges, &[])))
+            .unwrap();
+        // An inner box painted with a material without density.
+        let inner = s
+            .add_solid(
+                MeshId::Definition(def),
+                &Solid::cuboid(DVec3::ONE).unwrap(),
+                DefinitionKind::Group,
+                "In",
+                DAffine3::IDENTITY,
+                Some(plain),
+            )
+            .unwrap()
+            .0;
+        let from_root = report(&s, &[outer]).total.unwrap();
+        assert!(close(from_root.mass.unwrap(), 2000.0));
+        let seed = context_density(&s, &[outer]);
+        assert_eq!(seed, Some(2000.0));
+        let inside = mass_report(&s, &s.definition(def).unwrap().mesh, &[inner], seed)
+            .unwrap()
+            .total
+            .unwrap();
+        assert!(close(inside.mass.unwrap(), from_root.mass.unwrap()));
+    }
+
+    #[test]
+    fn repeated_ids_count_once() {
+        let mut s = Scene::new();
+        let m = steel(&mut s, Some(1000.0));
+        let id = place(
+            &mut s,
+            &Solid::cuboid(DVec3::ONE).unwrap(),
+            DAffine3::IDENTITY,
+            Some(m),
+        );
+        let r = report(&s, &[id, id, id]);
+        assert_eq!(r.instances.len(), 1);
+        assert!(close(r.total.unwrap().mass.unwrap(), 1000.0));
+    }
+
+    #[test]
+    fn parts_far_from_the_origin_stay_precise() {
+        let mut s = Scene::new();
+        let m = steel(&mut s, Some(1000.0));
+        let far = DVec3::new(1.0e5, -2.0e5, 3.0e4);
+        let b = Solid::cuboid(DVec3::new(2.0, 3.0, 4.0)).unwrap();
+        // Placed far away by the transform, and a second one 1 m beside it.
+        let a = place(&mut s, &b, DAffine3::from_translation(far), Some(m));
+        let c = place(
+            &mut s,
+            &b,
+            DAffine3::from_translation(far + DVec3::new(0.0, 0.0, 4.0)),
+            Some(m),
+        );
+        let mass = 24000.0;
+        let p = report(&s, &[a]).total.unwrap();
+        let d = diag(&p);
+        assert!(close(d[0], mass * 25.0 / 12.0), "{d:?}");
+        assert!(close(d[2], mass * 13.0 / 12.0), "{d:?}");
+        assert!((p.centroid - (far + DVec3::new(1.0, 1.5, 2.0))).length() < 1e-9);
+        // Stacked: a 2x3x8 box.
+        let t = report(&s, &[a, c]).total.unwrap();
+        let d = diag(&t);
+        assert!(close(d[2], 2.0 * mass * 13.0 / 12.0), "{d:?}");
+        assert!(close(d[0], 2.0 * mass * (9.0 + 64.0) / 12.0), "{d:?}");
+        // Geometry that is itself far away (an identity placement).
+        let local = Solid::cuboid(DVec3::new(2.0, 3.0, 4.0)).unwrap();
+        let g = place(&mut s, &local, DAffine3::IDENTITY, Some(m));
+        let (def, _) = definition_faces(&s, g);
+        s.edit(MeshId::Definition(def), |m| {
+            let all: BTreeSet<_> = m.vertices().map(|(v, _)| v).collect();
+            m.move_vertices(&all, far)
+        })
+        .unwrap();
+        let p = report(&s, &[g]).total.unwrap();
+        let d = diag(&p);
+        assert!(close(d[0], mass * 25.0 / 12.0), "{d:?}");
+        assert!(close(d[1], mass * 20.0 / 12.0), "{d:?}");
     }
 
     #[test]

@@ -406,3 +406,85 @@ fn a_bore_in_a_subtracted_plate_is_a_cylinder() {
     assert!(point_near(&r["round"]["center"], [2.0, 2.0, 0.5]), "{r}");
     assert!(r["round"]["max_deviation"].as_f64().unwrap() < 1e-9);
 }
+
+#[test]
+fn a_split_circle_edge_does_not_bias_the_fit() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_circle", "center": [3, -2, 0], "radius": 1, "segments": 12}),
+    )
+    .unwrap();
+    let ents = entities(&d);
+    let first = ents["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e.get("curve").is_some())
+        .unwrap()
+        .clone();
+    let (a, b) = (&first["start"], &first["end"]);
+    let mid: Vec<f64> = (0..3)
+        .map(|i| (a[i].as_f64().unwrap() + b[i].as_f64().unwrap()) / 2.0)
+        .collect();
+    // An edge from the middle of a side outward splits that side in two.
+    let out = [mid[0] * 2.0 - 3.0, mid[1] * 2.0 + 2.0, 0.0];
+    edge(&mut d, [mid[0], mid[1], mid[2]], out);
+    let ents = entities(&d);
+    let rim: Vec<&Value> = ents["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e.get("curve").is_some())
+        .collect();
+    assert_eq!(rim.len(), 13, "the split side is two edges");
+    for e in rim {
+        let r = measure(&d, json!({"round": e["id"]})).unwrap();
+        assert_eq!(r["round"]["kind"], "circle");
+        assert!(near(&r["round"]["radius"], 1.0), "{r}");
+        assert!(point_near(&r["round"]["center"], [3.0, -2.0, 0.0]), "{r}");
+        assert_eq!(r["round"]["samples"], 12, "{r}");
+    }
+}
+
+#[test]
+fn a_cross_bore_does_not_bias_the_cylinder_fit() {
+    let mut d = doc();
+    let shaft = run(
+        &mut d,
+        json!({"type": "add_cylinder", "base": [0, 0, 0], "radius": 1, "height": 4,
+               "segments": 24, "as": "group"}),
+    )
+    .unwrap()["placed"][0]
+        .clone();
+    let tool = run(
+        &mut d,
+        json!({"type": "add_cylinder", "base": [-2, 0, 2], "axis": [1, 0, 0], "radius": 0.3,
+               "height": 4, "segments": 16, "as": "group"}),
+    )
+    .unwrap()["placed"][0]
+        .clone();
+    let out = run(
+        &mut d,
+        json!({"type": "solid_subtract", "target": shaft, "tools": [tool]}),
+    )
+    .unwrap();
+    let part = out["placed"][0].clone();
+    run(&mut d, json!({"type": "open_instance", "id": part})).unwrap();
+    let ents = entities(&d);
+    // A facet of the shaft's side facing along y, away from the bore.
+    let side = ents["faces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["normal"][1].as_f64().unwrap() > 0.99)
+        .expect("a side facet")["id"]
+        .clone();
+    run(&mut d, json!({"type": "close_instance"})).unwrap();
+    let r = measure(&d, json!({"round": [part, side]})).unwrap();
+    assert_eq!(r["round"]["kind"], "cylinder", "{r}");
+    assert!(near(&r["round"]["radius"], 1.0), "{r}");
+    assert!(near(&r["round"]["length"], 4.0), "{r}");
+    assert!(point_near(&r["round"]["center"], [0.0, 0.0, 2.0]), "{r}");
+    assert!(r["round"]["max_deviation"].as_f64().unwrap() < 1e-9, "{r}");
+}

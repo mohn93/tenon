@@ -527,7 +527,7 @@ fn components(edges: &[(EdgeId, [VertexId; 2])]) -> Vec<Vec<(EdgeId, [VertexId; 
 }
 
 /// Indices of the points where the polyline turns (for an open one, not counting its ends).
-fn corners(points: &[DVec3], closed: bool) -> Vec<usize> {
+pub(crate) fn corners(points: &[DVec3], closed: bool) -> Vec<usize> {
     let n = points.len();
     let range = if closed { 0..n } else { 1..n.saturating_sub(1) };
     range

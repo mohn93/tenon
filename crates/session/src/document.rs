@@ -2679,7 +2679,8 @@ impl Document {
                         }
                     }
                 }
-                let report = kernel::mass::mass_report(&self.scene, m, &instances)
+                let inherited = kernel::mass::context_density(&self.scene, &self.context);
+                let report = kernel::mass::mass_report(&self.scene, m, &instances, inherited)
                     .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e))?;
                 QueryResult::MassProperties {
                     instances: report
@@ -2737,12 +2738,13 @@ impl Document {
                     unreachable!()
                 };
                 if let Some([a, b]) = distance {
-                    let c =
+                    let (c, skipped) =
                         kernel::measure::measure_distance(&self.scene, start, &paths(a), &paths(b))
                             .map_err(err)?;
                     *od = Some(crate::query::DistanceInfo {
                         distance: c.distance,
                         points: [c.a.to_array(), c.b.to_array()],
+                        skipped,
                     });
                 }
                 if let Some([a, b]) = angle {
