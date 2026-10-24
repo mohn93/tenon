@@ -295,6 +295,42 @@ fn prism_first_corner_follows_the_direction() {
 }
 
 #[test]
+fn prism_direction_is_tested_relative_to_its_length() {
+    for len in [1e-10, 1e10] {
+        let mut d = doc();
+        run(
+            &mut d,
+            json!({"type": "add_prism", "base": [0, 0, 0], "radius": 1, "height": 1,
+                   "axis": [0, 0, 1], "direction": [len, 0, 0]}),
+        )
+        .unwrap();
+    }
+    let mut d = doc();
+    let e = run(
+        &mut d,
+        json!({"type": "add_prism", "base": [0, 0, 0], "radius": 1, "height": 1,
+               "axis": [0, 0, 1], "direction": [0, 0, 1e-10]}),
+    )
+    .unwrap_err();
+    assert_eq!(e.0, ErrorKind::InvalidInput);
+}
+
+#[test]
+fn a_name_needs_a_group_or_component() {
+    let mut d = doc();
+    let before = depth(&d);
+    let e = run(
+        &mut d,
+        json!({"type": "add_box", "corner": [0, 0, 0], "size": [1, 1, 1],
+               "as": "geometry", "name": "Crate"}),
+    )
+    .unwrap_err();
+    assert_eq!(e.0, ErrorKind::InvalidInput);
+    assert!(e.1.contains("name applies only"), "{}", e.1);
+    assert_eq!(depth(&d), before);
+}
+
+#[test]
 fn component_and_group_names() {
     let mut d = doc();
     let out = run(

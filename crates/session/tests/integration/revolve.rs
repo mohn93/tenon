@@ -440,3 +440,54 @@ fn a_profile_whose_plane_does_not_hold_the_axis_still_closes() {
         assert!(soft_edges(m) > 0);
     }
 }
+
+#[test]
+fn the_axis_is_optional_and_any_length() {
+    let mut a = doc();
+    let face = rectangle(&mut a, [1.0, 0.0, 0.0], [2.0, 0.0, 1.0], [0.0, 1.0, 0.0]);
+    let mut explicit = revolve(&face);
+    explicit["axis"] = json!([0, 0, 1]);
+    run(&mut a, explicit).unwrap();
+    let want = counts(a.model());
+    for axis in [
+        None,
+        Some(json!([0, 0, 1e-300])),
+        Some(json!([0, 0, 1e300])),
+    ] {
+        let mut d = doc();
+        let face = rectangle(&mut d, [1.0, 0.0, 0.0], [2.0, 0.0, 1.0], [0.0, 1.0, 0.0]);
+        let mut c = revolve(&face);
+        match axis {
+            None => {
+                c.as_object_mut().unwrap().remove("axis");
+            }
+            Some(v) => c["axis"] = v,
+        }
+        run(&mut d, c).unwrap();
+        assert_eq!(counts(d.model()), want);
+        assert!((volume(d.model()) - volume(a.model())).abs() < 1e-9);
+    }
+}
+
+#[test]
+fn only_face_errors_name_the_face() {
+    let mut d = doc();
+    let face = rectangle(&mut d, [1.0, 0.0, 0.0], [2.0, 0.0, 1.0], [0.0, 1.0, 0.0]);
+    let run_err = |d: &mut Document, extra: Value| {
+        let mut c = revolve(&face);
+        c.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let cmd: Command = serde_json::from_value(c).unwrap();
+        d.execute(cmd).unwrap_err()
+    };
+    for extra in [json!({"angle": 0}), json!({"segments": 0})] {
+        let e = run_err(&mut d, extra);
+        assert_eq!(e.kind, ErrorKind::InvalidInput);
+        assert!(e.ids.is_empty(), "{}", e.message);
+    }
+    // A face square to the axis is about the face.
+    let e = run_err(&mut d, json!({"axis": [0, 1, 0]}));
+    assert_eq!(e.kind, ErrorKind::InvalidInput);
+    assert!(!e.ids.is_empty(), "{}", e.message);
+}

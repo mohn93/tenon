@@ -911,7 +911,7 @@ impl Document {
                 radius: *radius,
                 pitch: *pitch,
                 turns: *turns,
-                segments: segments.unwrap_or(crate::helix::DEFAULT_HELIX_SEGMENTS),
+                segments: segments.unwrap_or(kernel::DEFAULT_SEGMENTS),
                 start_direction: start_direction.map(DVec3::from),
                 left_handed: *left_handed,
             })

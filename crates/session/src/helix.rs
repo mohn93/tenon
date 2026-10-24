@@ -3,16 +3,12 @@
 use std::f64::consts::TAU;
 
 use glam::DVec3;
-use kernel::geom::LENGTH_TOL;
+use kernel::{MAX_SEGMENTS, MIN_LENGTH, MIN_SEGMENTS};
 
 use crate::command::{CommandError, ErrorKind};
 use crate::document::unit_vector;
 use crate::rectangle::rectangle_axes;
 
-/// Edges per turn when none are asked for.
-pub const DEFAULT_HELIX_SEGMENTS: u32 = 24;
-/// Most edges per turn.
-const MAX_SEGMENTS: u32 = 360;
 /// Most turns a helix may have.
 const MAX_TURNS: f64 = 1000.0;
 /// Most points a helix may have (a curve takes no more).
@@ -43,9 +39,9 @@ pub fn helix_points(h: Helix) -> Result<Vec<DVec3>, CommandError> {
     if !h.center.is_finite() {
         return Err(invalid("center must be finite"));
     }
-    if !(3..=MAX_SEGMENTS).contains(&h.segments) {
+    if !(MIN_SEGMENTS..=MAX_SEGMENTS).contains(&h.segments) {
         return Err(invalid(&format!(
-            "segments must be between 3 and {MAX_SEGMENTS}"
+            "segments must be between {MIN_SEGMENTS} and {MAX_SEGMENTS}"
         )));
     }
     if !h.turns.is_finite() || h.turns <= 0.0 || h.turns > MAX_TURNS {
@@ -53,18 +49,12 @@ pub fn helix_points(h: Helix) -> Result<Vec<DVec3>, CommandError> {
             "turns must be above 0 and at most {MAX_TURNS}"
         )));
     }
-    if !h.radius.is_finite() || h.radius <= 0.0 {
-        return Err(invalid("radius must be a positive number"));
-    }
-    if !h.pitch.is_finite() || h.pitch <= 0.0 {
-        return Err(invalid(
-            "pitch must be a positive number (left_handed turns the other way)",
-        ));
-    }
-    if h.pitch < 10.0 * LENGTH_TOL {
-        return Err(invalid(
-            "pitch must be at least ten times the merge tolerance",
-        ));
+    for (name, v) in [("radius", h.radius), ("pitch", h.pitch)] {
+        if !(MIN_LENGTH..=1e6).contains(&v) {
+            return Err(invalid(&format!(
+                "{name} must be a finite number between 1e-5 and 1e6 m"
+            )));
+        }
     }
     let steps_f = (h.turns * h.segments as f64 - 1e-9).ceil().max(1.0);
     if steps_f + 1.0 > MAX_POINTS {
@@ -103,12 +93,12 @@ pub fn helix_points(h: Helix) -> Result<Vec<DVec3>, CommandError> {
     if !points.iter().all(|p| p.is_finite()) {
         return Err(invalid("the helix is too large"));
     }
-    // Neighbouring points must be farther apart than the merge tolerance.
+    // Neighbouring points must be at least 0.01 mm apart.
     let least = points
         .windows(2)
         .map(|w| w[0].distance(w[1]))
         .fold(f64::INFINITY, f64::min);
-    if least < 10.0 * LENGTH_TOL {
+    if least < MIN_LENGTH {
         return Err(invalid(
             "radius and pitch must be large enough for the segments",
         ));

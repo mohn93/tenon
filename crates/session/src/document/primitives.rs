@@ -123,13 +123,12 @@ impl Document {
         let first = match direction {
             None => 0.0,
             Some(d) => {
-                let d = DVec3::from(d);
-                let flat = d - axis * d.dot(axis);
-                if !d.is_finite() || flat.length() < 1e-9 * d.length().max(1.0) {
-                    return Err(invalid(
-                        "direction must be a finite vector that is not along the axis",
-                    ));
-                }
+                let flat = unit_vector(DVec3::from(d))
+                    .map(|d| d - axis * d.dot(axis))
+                    .filter(|flat| flat.length() >= 1e-9)
+                    .ok_or_else(|| {
+                        invalid("direction must be a finite vector that is not along the axis")
+                    })?;
                 let (u, v) = rectangle_axes(axis);
                 flat.dot(v).atan2(flat.dot(u))
             }
@@ -184,6 +183,9 @@ impl Document {
     ) -> Result<SceneChange, CommandError> {
         if options.name.is_some_and(|n| n.trim().is_empty()) {
             return Err(invalid("name must not be blank"));
+        }
+        if options.name.is_some() && options.placement == PrimitiveAs::Geometry {
+            return Err(invalid("name applies only to a group or component"));
         }
         if let Some(m) = options.material
             && self.scene.material(m).is_none()

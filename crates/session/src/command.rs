@@ -22,7 +22,7 @@ use crate::units::{LengthUnit, Units};
 /// open context's geometry (the outcome's `placed` and `definitions` name them). `geometry`:
 /// loose faces and edges in the open context, merging with what they touch. `name` names the
 /// group's or component's definition (a component without one is named after the shape:
-/// "Box", "Cylinder", ...); `material` paints the instance, or the faces' front sides for
+/// "Box", "Cylinder", ...); with `geometry` a `name` is `invalid_input`; `material` paints the instance, or the faces' front sides for
 /// `geometry`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -419,7 +419,7 @@ pub enum Command {
     /// face's own edges unless it is exactly the outer loop of another face.
     FollowMe { face: EntityId, path: Vec<EntityId> },
     /// Turn face `face` of the open context about the line through `center` along `axis`
-    /// (any length; zero or non-finite is `invalid_input`) into a solid, as one undo step.
+    /// (default Z; any length; zero or non-finite is `invalid_input`) into a solid, as one undo step.
     /// `angle` in degrees, above 0 and at most 360 (default 360), counter-clockwise looking
     /// down the axis; `segments` (1 to 360, default 24) is the number of steps in a full turn,
     /// scaled by angle/360 and rounded up (at least 1); a step must turn by less than 180
@@ -434,7 +434,8 @@ pub enum Command {
         face: EntityId,
         #[schemars(with = "ModelPoint")]
         center: [f64; 3],
-        axis: [f64; 3],
+        #[serde(default)]
+        axis: Option<[f64; 3]>,
         #[serde(default)]
         angle: Option<f64>,
         #[serde(default)]
@@ -1503,13 +1504,14 @@ pub struct Outcome {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purged: Option<usize>,
     /// The definitions a `make_unique` made, in order (empty when it did nothing), or the one a
-    /// `make_group` or `make_component` made; absent for other commands. Batch commands can refer to them as `$N:dI`.
+    /// `make_group`, `make_component` or `add_<primitive>` (as group or component) made; absent
+    /// for other commands. Batch commands can refer to them as `$N:dI`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definitions: Option<Vec<DefinitionId>>,
     /// The instances a command left in the open context, in creation order (instances inside
     /// new definitions are not listed): present whenever the command placed instances (`copy`,
-    /// `rotate` with copies, `make_group`, `make_component`, `explode`, `paste`,
-    /// `insert_library_item`, `place_instance`, an `import`, ...), absent otherwise. Batch
+    /// `rotate` with copies, `copy_along_path`, `make_group`, `make_component`, `add_<primitive>`,
+    /// `explode`, `paste`, `insert_library_item`, `place_instance`, an `import`, ...), absent otherwise. Batch
     /// `$N:iK` references pick from this list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placed: Option<Vec<EntityId>>,

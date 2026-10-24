@@ -315,8 +315,8 @@ impl From<Command> for BatchCommand {
     }
 }
 
-/// The top-level fields where references are recognised; `path` only in `open_path` and
-/// `follow_me`, and the anchors, edges and notes of the annotation commands only there.
+/// The top-level fields where references are recognised; `path` only in `open_path`,
+/// `follow_me` and `copy_along_path`, and the anchors, edges and notes of the annotation commands only there.
 fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
     matches!(key, "ids" | "face" | "id" | "material")
         || matches!(
