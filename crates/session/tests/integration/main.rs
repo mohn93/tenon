@@ -32,6 +32,7 @@ mod library;
 mod lights;
 mod mass;
 mod materials;
+mod measure;
 mod modeling;
 mod offset;
 mod orient;

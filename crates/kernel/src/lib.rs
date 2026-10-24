@@ -24,6 +24,7 @@ pub mod intersect;
 mod location;
 pub mod mass;
 mod material;
+pub mod measure;
 mod mesh;
 mod model;
 pub mod offset;

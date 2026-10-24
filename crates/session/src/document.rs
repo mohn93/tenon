@@ -2701,6 +2701,79 @@ impl Document {
                         .collect(),
                 }
             }
+            Query::Measure {
+                distance,
+                angle,
+                round,
+            } => {
+                let start = self.active();
+                let paths = |p: &crate::query::MeasureRef| p.path();
+                let err = |e: kernel::measure::MeasureError| match e {
+                    kernel::measure::MeasureError::Missing(id) => {
+                        self.missing_error(vec![id], format!("no entity {id}"))
+                    }
+                    kernel::measure::MeasureError::Invalid(m) => {
+                        CommandError::new(ErrorKind::InvalidInput, m)
+                    }
+                };
+                let given = [distance.is_some(), angle.is_some(), round.is_some()];
+                if given.iter().filter(|g| **g).count() != 1 {
+                    return Err(CommandError::new(
+                        ErrorKind::InvalidInput,
+                        "measure takes exactly one of distance, angle and round",
+                    ));
+                }
+                let mut out = QueryResult::Measure {
+                    distance: None,
+                    angle: None,
+                    round: None,
+                };
+                let QueryResult::Measure {
+                    distance: od,
+                    angle: oa,
+                    round: or,
+                } = &mut out
+                else {
+                    unreachable!()
+                };
+                if let Some([a, b]) = distance {
+                    let c =
+                        kernel::measure::measure_distance(&self.scene, start, &paths(a), &paths(b))
+                            .map_err(err)?;
+                    *od = Some(crate::query::DistanceInfo {
+                        distance: c.distance,
+                        points: [c.a.to_array(), c.b.to_array()],
+                    });
+                }
+                if let Some([a, b]) = angle {
+                    let r =
+                        kernel::measure::measure_angle(&self.scene, start, &paths(a), &paths(b))
+                            .map_err(err)?;
+                    *oa = Some(crate::query::AngleInfo {
+                        degrees: r.degrees,
+                        acute: r.acute,
+                    });
+                }
+                if let Some(a) = round {
+                    let r = kernel::measure::measure_round(&self.scene, start, &paths(a))
+                        .map_err(err)?;
+                    *or = Some(crate::query::RoundInfo {
+                        kind: match r.kind {
+                            kernel::measure::RoundKind::Circle => crate::query::RoundKind::Circle,
+                            kernel::measure::RoundKind::Cylinder => {
+                                crate::query::RoundKind::Cylinder
+                            }
+                        },
+                        center: r.center.to_array(),
+                        axis: r.axis.to_array(),
+                        radius: r.radius,
+                        length: r.length,
+                        max_deviation: r.max_deviation,
+                        samples: r.samples,
+                    });
+                }
+                out
+            }
             Query::Camera {} => QueryResult::Camera {
                 eye: self.camera.eye.to_array(),
                 target: self.camera.target.to_array(),

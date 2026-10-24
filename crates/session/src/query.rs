@@ -56,6 +56,24 @@ pub enum Query {
         #[serde(default)]
         ids: Vec<EntityId>,
     },
+    /// Measure the model, exactly one of `distance`, `angle` and `round`. Entities are named by
+    /// id in the open context, or by a path of instances from it ending in the entity
+    /// (`["i1", "i2", "f3"]`), in which case the placements of the instances apply and results
+    /// are in open-context coordinates. `distance`: the minimum distance between two entities
+    /// (vertices, edges, faces, instances, guides) and the closest point on each; faces are
+    /// planar polygons with holes, instances are measured between their faces. `angle`: between
+    /// two edges (directions) or two faces (normals), 0 to 180 degrees. `round`: the circle
+    /// (an edge of a circle or arc, or a flat disc face) or cylinder (a face joined by soft
+    /// edges to others around one axis) the entity lies on, fitted by least squares with the
+    /// largest deviation of its vertices from the fit.
+    Measure {
+        #[serde(default)]
+        distance: Option<[MeasureRef; 2]>,
+        #[serde(default)]
+        angle: Option<[MeasureRef; 2]>,
+        #[serde(default)]
+        round: Option<MeasureRef>,
+    },
     Camera {},
     /// Where the model stands (see `set_location`).
     Location {},
@@ -536,6 +554,69 @@ impl OutlinerTable {
     }
 }
 
+/// An entity named by id, or by a path of instances ending in the entity.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MeasureRef {
+    Id(EntityId),
+    Path(Vec<EntityId>),
+}
+
+impl MeasureRef {
+    pub fn path(&self) -> Vec<EntityId> {
+        match self {
+            MeasureRef::Id(id) => vec![*id],
+            MeasureRef::Path(p) => p.clone(),
+        }
+    }
+}
+
+/// The minimum distance between two entities (see `Query::Measure`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct DistanceInfo {
+    /// Meters; 0 when they touch or cross.
+    pub distance: f64,
+    /// The closest point on the first and on the second entity.
+    pub points: [[f64; 3]; 2],
+}
+
+/// The angle between two edges or two faces (see `Query::Measure`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AngleInfo {
+    /// 0 to 180: between the edges' directions (each from its first to its second vertex) or
+    /// the faces' normals.
+    pub degrees: f64,
+    /// 0 to 90: between the lines or planes, whichever way they point.
+    pub acute: f64,
+}
+
+/// What a round feature is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RoundKind {
+    Circle,
+    Cylinder,
+}
+
+/// A circle or cylinder fitted to a round feature (see `Query::Measure`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RoundInfo {
+    pub kind: RoundKind,
+    /// The circle's center; the middle of the cylinder's axis segment.
+    pub center: [f64; 3],
+    /// The unit axis, pointing up (positive z, else y, else x).
+    pub axis: [f64; 3],
+    pub radius: f64,
+    /// A cylinder's extent along its axis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length: Option<f64>,
+    /// The largest distance of a fitted vertex from the circle or cylinder, so the error of a
+    /// faceted surface shows.
+    pub max_deviation: f64,
+    /// Vertices fitted.
+    pub samples: usize,
+}
+
 /// Mass properties of one instance or of a sum of instances (see `Query::MassProperties`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct MassInfo {
@@ -720,6 +801,15 @@ pub enum QueryResult {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         total: Option<MassInfo>,
         skipped: Vec<SkippedInfo>,
+    },
+    /// The `measure` query: the one of `distance`, `angle` and `round` asked for.
+    Measure {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        distance: Option<DistanceInfo>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        angle: Option<AngleInfo>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        round: Option<RoundInfo>,
     },
     /// The view: `up` is the screen's up direction (+Z, except in a view straight down or
     /// up); `view_height` is the height the view spans at the target (in a parallel view, the
