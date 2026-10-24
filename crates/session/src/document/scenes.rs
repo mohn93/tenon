@@ -3,7 +3,8 @@
 use std::collections::BTreeMap;
 
 use kernel::{
-    EntityId, InstanceId, KernelError, MeshId, Page, PageId, PageView, SceneChange, TagEdit,
+    EntityId, InstanceId, KernelError, MeshId, Page, PageId, PageView, SceneChange,
+    SceneTransition, TagEdit,
 };
 
 use glam::DAffine3;
@@ -11,8 +12,9 @@ use glam::DAffine3;
 use glam::DVec3;
 
 use super::{Document, MAX_COORDINATE, unit_vector};
-use crate::camera::{Lighting, Projection};
+use crate::camera::{Camera, Lighting, Projection};
 use crate::command::{CommandError, ErrorKind, ScenePositions};
+use crate::motion::Motion;
 use crate::query::{QueryResult, SceneInfo, SceneView};
 
 impl Document {
@@ -237,9 +239,14 @@ impl Document {
     /// Goes to a scene: sets the camera, projection, lighting and color by tag it stores (not
     /// part of the returned change), and returns the tag visibility changes it makes. It
     /// becomes the selected scene. Nothing changes on failure.
-    pub(super) fn go_to_scene_changes(&mut self, id: PageId) -> Result<SceneChange, CommandError> {
-        let page = self.page(id)?.clone();
-        let view = match &page.view {
+    /// The camera a scene's stored view makes, with the view (the view's own numbers kept bit
+    /// for bit); `None` when the scene stores no view.
+    pub(super) fn scene_camera(
+        &self,
+        id: PageId,
+        page: &Page,
+    ) -> Result<Option<(Camera, PageView)>, CommandError> {
+        Ok(match &page.view {
             Some(v) => {
                 let projection = if v.parallel {
                     Projection::Parallel
@@ -269,10 +276,15 @@ impl Document {
                         unit_vector(up).unwrap_or(camera.up)
                     };
                 }
-                Some((camera, v))
+                Some((camera, *v))
             }
             None => None,
-        };
+        })
+    }
+
+    pub(super) fn go_to_scene_changes(&mut self, id: PageId) -> Result<SceneChange, CommandError> {
+        let page = self.page(id)?.clone();
+        let view = self.scene_camera(id, &page)?;
         let mut changes = Vec::new();
         if let Some(hidden) = &page.tags {
             let flips: Vec<_> = self
@@ -303,6 +315,7 @@ impl Document {
             }
         }
         if let Some((camera, v)) = view {
+            let v = &v;
             self.camera = camera;
             self.lighting = if v.night {
                 Lighting::Night
@@ -395,5 +408,75 @@ fn scene_error(e: KernelError, id: Option<PageId>) -> CommandError {
             CommandError::new(ErrorKind::NotFound, e.to_string())
         }
         (e, _) => CommandError::new(ErrorKind::InvalidInput, e.to_string()),
+    }
+}
+
+impl Document {
+    /// Sets how going to a scene animates: the given fields change, the others stay.
+    pub(super) fn set_scene_transition_changes(
+        &mut self,
+        on: Option<bool>,
+        seconds: Option<f64>,
+    ) -> Result<SceneChange, CommandError> {
+        if on.is_none() && seconds.is_none() {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "set_scene_transition needs on or seconds",
+            ));
+        }
+        let from = self.scene.scene_transition();
+        let to = SceneTransition {
+            on: on.unwrap_or(from.on),
+            seconds: seconds.unwrap_or(from.seconds),
+        };
+        self.scene
+            .set_scene_transition(to)
+            .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
+    }
+
+    /// The motion from the current state to a scene's, or, with `from`, from that scene's:
+    /// the camera of the stored view (the current camera for a scene that stores none) and
+    /// the transforms of the root instances either stores (the current transform for one
+    /// the other lacks). The document is not changed.
+    pub fn motion_between(&self, from: Option<PageId>, to: PageId) -> Result<Motion, CommandError> {
+        let end = self.page(to)?;
+        let start = from.map(|f| self.page(f)).transpose()?;
+        let camera_of = |id: PageId, page: &Page| {
+            self.scene_camera(id, page)
+                .map(|v| v.map(|(camera, _)| camera))
+        };
+        let current = &self.camera;
+        let from_camera = match (from, start) {
+            (Some(id), Some(page)) => camera_of(id, page)?,
+            _ => None,
+        }
+        .unwrap_or_else(|| current.clone());
+        let to_camera = camera_of(to, end)?.unwrap_or_else(|| current.clone());
+        let mut ids: Vec<InstanceId> = Vec::new();
+        for page in start.into_iter().chain([end]) {
+            for i in page.positions.iter().flat_map(|p| p.keys()) {
+                if !ids.contains(i) {
+                    ids.push(*i);
+                }
+            }
+        }
+        let moves = ids
+            .into_iter()
+            .filter_map(|i| {
+                let now = self.scene.root().instance(i)?.transform;
+                let at = |page: Option<&Page>| {
+                    page.and_then(|p| p.positions.as_ref())
+                        .and_then(|p| p.get(&i))
+                        .copied()
+                        .unwrap_or(now)
+                };
+                Some((i, at(start), at(Some(end))))
+            })
+            .collect();
+        Ok(Motion {
+            from_camera,
+            to_camera,
+            moves,
+        })
     }
 }

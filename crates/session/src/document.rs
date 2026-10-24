@@ -473,17 +473,22 @@ impl Document {
 
     /// Runs one command. Each modeling command is one undo step; camera commands are not recorded.
     pub fn execute(&mut self, command: Command) -> Result<Outcome, CommandError> {
-        // The undo step of a library insert reads "insert" wherever it came from.
-        let label = match command {
+        let label = self.step_label(&command);
+        self.execute_as(command, label)
+    }
+
+    /// The label of the undo step `command` makes: its name, except that a library insert reads
+    /// "insert" wherever it came from and going to a scene that stores positions (it moves
+    /// instances) says which scene.
+    pub fn step_label(&self, command: &Command) -> String {
+        match command {
             Command::InsertLibraryItem { .. } => "insert".to_string(),
-            // Going to a scene that stores positions moves instances: say which scene.
-            Command::GoToScene { scene } => match self.scene.page(scene) {
+            Command::GoToScene { scene } => match self.scene.page(*scene) {
                 Some(p) if p.positions.is_some() => format!("Go to scene {}", p.name),
                 _ => command.name(),
             },
             _ => command.name(),
-        };
-        self.execute_as(command, label)
+        }
     }
 
     /// Runs one command as `execute` does, its undo step (if it makes one) labelled `label`
@@ -806,6 +811,7 @@ impl Document {
             | Command::SetAxes { .. }
             | Command::ResetAxes {}
             | Command::SetLocation { .. }
+            | Command::SetSceneTransition { .. }
             | Command::Flip { .. }
             | Command::RenameDefinition { .. }
             | Command::PlaceInstance { .. }
@@ -1063,6 +1069,9 @@ impl Document {
                 north_angle,
                 utc_offset,
             } => self.set_location_changes(*latitude, *longitude, *north_angle, *utc_offset),
+            Command::SetSceneTransition { on, seconds } => {
+                self.set_scene_transition_changes(*on, *seconds)
+            }
             Command::MakeUnique { ids } => self.make_unique_changes(ids.as_deref()),
             Command::Flip { ids, axis, frame } => self.flip_changes(ids.as_deref(), *axis, *frame),
             Command::RenameDefinition { definition, name } => {
@@ -2660,6 +2669,13 @@ impl Document {
             },
             Query::Units {} => QueryResult::Units(self.units),
             Query::Location {} => QueryResult::Location(self.scene.location().into()),
+            Query::SceneTransition {} => {
+                let t = self.scene.scene_transition();
+                QueryResult::SceneTransition(crate::query::SceneTransitionInfo {
+                    on: t.on,
+                    seconds: t.seconds,
+                })
+            }
             Query::Sun {} => QueryResult::Sun(self.sun().into()),
             Query::Library { folder } => {
                 QueryResult::Library(crate::library::list(std::path::Path::new(folder))?)

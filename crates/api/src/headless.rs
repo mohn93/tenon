@@ -89,6 +89,7 @@ impl Host for HeadlessHost {
         lighting: Lighting,
         width: u32,
         height: u32,
+        frame: Option<&kernel::Scene>,
     ) -> Option<Vec<u8>> {
         self.check_gpu();
         let doc = &self.doc;
@@ -102,7 +103,7 @@ impl Host for HeadlessHost {
             s.set_sun(render::SunLight::of(doc));
             s.set_model_style(doc.chosen_style());
             s.capture(
-                doc.scene(),
+                frame.unwrap_or_else(|| doc.scene()),
                 doc.context(),
                 doc.selection(),
                 camera,

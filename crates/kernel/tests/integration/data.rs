@@ -195,6 +195,7 @@ fn loose_vertices(next_id: u64, vertices: &[(u64, [f64; 3])]) -> SceneData {
         styles: Vec::new(),
         axes: None,
         location: None,
+        transition: None,
     }
 }
 
@@ -432,6 +433,7 @@ fn nested(n: u64, cycle: bool) -> SceneData {
         styles: Vec::new(),
         axes: None,
         location: None,
+        transition: None,
     }
 }
 

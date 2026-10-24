@@ -212,6 +212,8 @@ impl Message {
 
 pub struct Editor {
     doc: Document,
+    /// The scene transition being drawn, if any (see `scenes::Transition`).
+    transition: Option<scenes::Transition>,
     /// For each style the Styles tab added: the style chosen before, which undoing the add
     /// goes back to (the choice is a view setting and is not itself undone).
     style_before_add: std::collections::BTreeMap<kernel::StyleId, Option<kernel::StyleId>>,
@@ -360,6 +362,7 @@ impl Editor {
         nav.set_scale_factor(scale_factor);
         Self {
             doc: Document::new(viewport),
+            transition: None,
             nav,
             touch_pivot: None,
             measure: None,
@@ -431,6 +434,7 @@ impl Editor {
         if command.changes_model() {
             self.reset_tool();
         }
+        self.transition = None;
         let replaces = replaces_document(&command);
         let result = self.doc.execute(command);
         if replaces && result.is_ok() {
@@ -449,6 +453,7 @@ impl Editor {
         if commands.iter().any(|c| c.command().changes_model()) {
             self.reset_tool();
         }
+        self.transition = None;
         // A batch that may have replaced the document counts as having done so.
         if commands.iter().any(|c| replaces_document(c.command())) {
             self.document_replaced();
@@ -2284,11 +2289,8 @@ impl Editor {
 
     /// Runs a command on the document, noting it and its result while `tool_input` runs.
     fn execute_recorded(&mut self, command: Command) -> Result<Outcome, CommandError> {
-        // A library insert's undo step reads "insert", as `Document::execute` labels it.
-        let label = match command {
-            Command::InsertLibraryItem { .. } => "insert".to_string(),
-            _ => command.name(),
-        };
+        // The undo step is labelled as `Document::execute` labels it.
+        let label = self.doc.step_label(&command);
         self.execute_recorded_as(command, label)
     }
 
@@ -2298,6 +2300,8 @@ impl Editor {
         command: Command,
         label: impl Into<String>,
     ) -> Result<Outcome, CommandError> {
+        // Whatever else happens finishes a transition at once: the document is already there.
+        self.transition = None;
         let noted = self.issued.is_some().then(|| command.clone());
         let replaces = replaces_document(&command);
         let result = self.doc.execute_as(command, label);

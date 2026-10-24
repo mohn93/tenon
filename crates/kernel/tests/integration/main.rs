@@ -33,4 +33,5 @@ mod tags;
 mod texture_placement;
 mod textures;
 mod transform;
+mod transition;
 mod triangles;

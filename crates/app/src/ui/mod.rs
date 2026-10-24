@@ -341,6 +341,8 @@ pub enum UiAction {
     SetAutosave(u32),
     /// Set the model's display units (Settings' Model tab), as an undo step.
     SetUnits(Units),
+    /// The Model tab's scene transition (on and seconds): one undo step.
+    SetSceneTransition(kernel::SceneTransition),
     /// Choose the library folder in a dialog (Settings > Files, the Library tab).
     ChooseLibraryFolder,
     /// Forget the library folder.
@@ -697,6 +699,8 @@ pub struct SettingsView {
     pub autosave_minutes: u32,
     /// The model's display units (saved with the model, not in the preferences).
     pub units: Units,
+    /// How going to a scene animates (saved with the model).
+    pub transition: kernel::SceneTransition,
 }
 
 /// What the empty-model card lists; `View::start` is None when the card is hidden.

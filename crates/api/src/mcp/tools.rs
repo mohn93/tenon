@@ -140,13 +140,17 @@ fn input_schema(tool: &str) -> Value {
             };
             let camera = hoist(&mut defs, schema::<View>());
             let lighting = hoist(&mut defs, schema::<Lighting>());
+            let scene = hoist(&mut defs, schema::<kernel::PageId>());
             json!({
                 "type": "object",
                 "properties": {
                     "width": side(DEFAULT_WIDTH),
                     "height": side(DEFAULT_HEIGHT),
                     "camera": camera,
-                    "lighting": lighting
+                    "lighting": lighting,
+                    "scene": {"description": "Render a frame of going to this scene (its camera and stored instance positions) instead of the document camera; not with camera.", "allOf": [scene.clone()]},
+                    "t": {"type": "number", "minimum": 0, "maximum": 1, "description": "With scene: how far along, 0 (the current view, or from) to 1 (the scene; default), linear."},
+                    "from": {"description": "With scene: the scene to start from (default the current view and positions).", "allOf": [scene]}
                 },
                 "additionalProperties": false,
                 "$defs": defs

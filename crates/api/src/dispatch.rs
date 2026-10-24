@@ -1,7 +1,7 @@
 //! Method dispatch: maps JSON-RPC methods onto session commands, queries and rendering.
 
 use base64::Engine;
-use kernel::ChangeSummary;
+use kernel::{ChangeSummary, PageId, Scene};
 use render::print::Printed;
 use schemars::{JsonSchema, schema_for};
 use serde::de::DeserializeOwned;
@@ -70,8 +70,16 @@ struct BatchParams {
 struct RenderParams {
     width: u32,
     height: u32,
+    /// Not allowed with `scene`.
     camera: Option<View>,
     lighting: Option<Lighting>,
+    /// Render the frame `t` of the way from `from` (default: the current view and positions)
+    /// to this scene's camera and stored positions, without changing the document.
+    scene: Option<PageId>,
+    /// 0 to 1 (default 1, linear: no easing); only with `scene`.
+    t: Option<f64>,
+    /// The scene to start from; only with `scene`.
+    from: Option<PageId>,
 }
 
 /// What the API needs from the program it runs in (the window app or headless mode).
@@ -86,12 +94,15 @@ pub trait Host {
     ) -> Result<Vec<Outcome>, BatchError>;
     /// Renders the current model from `camera`, lit by `lighting`, to tightly packed RGBA8
     /// pixels, or None when no GPU is available.
+    /// With `frame`, draws that scene (the document's with some instances moved) instead of the
+    /// document's, with the document's open context and selection.
     fn render_view(
         &mut self,
         camera: &Camera,
         lighting: Lighting,
         width: u32,
         height: u32,
+        frame: Option<&Scene>,
     ) -> Option<Vec<u8>>;
     /// The editor's state, or None for a program without an editor (a bare document).
     fn editor(&self) -> Option<EditorState> {
@@ -467,14 +478,29 @@ fn render_view(host: &mut dyn Host, params: Value) -> Result<Value, RpcError> {
             format!("width and height must be between 1 and {MAX_IMAGE_SIDE}"),
         ));
     }
+    let invalid = |why: &str| Err(RpcError::new(codes::INVALID_PARAMS, why));
+    if p.scene.is_some() && p.camera.is_some() {
+        return invalid("camera is not allowed with scene");
+    }
+    if p.scene.is_none() && (p.t.is_some() || p.from.is_some()) {
+        return invalid("t and from need scene");
+    }
+    let t = p.t.unwrap_or(1.0);
+    if !(0.0..=1.0).contains(&t) {
+        return invalid("t must be from 0 to 1");
+    }
     let doc = host.document();
-    let camera = match p.camera {
-        Some(v) => v.camera(doc).map_err(command_failed)?,
-        None => doc.camera.clone(),
+    let (camera, frame) = match (p.scene, p.camera) {
+        (Some(scene), _) => {
+            let motion = doc.motion_between(p.from, scene).map_err(command_failed)?;
+            (motion.camera_at(t), Some(motion.scene_at(doc.scene(), t)))
+        }
+        (None, Some(v)) => (v.camera(doc).map_err(command_failed)?, None),
+        (None, None) => (doc.camera.clone(), None),
     };
     let lighting = p.lighting.unwrap_or(doc.lighting);
     let rgba = host
-        .render_view(&camera, lighting, p.width, p.height)
+        .render_view(&camera, lighting, p.width, p.height, frame.as_ref())
         .ok_or_else(|| {
             RpcError::new(codes::RENDER_UNAVAILABLE, "no GPU available for rendering")
         })?;
@@ -530,9 +556,9 @@ pub fn describe() -> Value {
                 "result_schema": query_result_schema(),
             },
             "render_view": {
-                "params": "{width, height, camera?: {eye, target, fov_y_deg?, up?, projection?}, lighting?: \"day\" | \"night\"}",
+                "params": "{width, height, camera?: {eye, target, fov_y_deg?, up?, projection?}, lighting?: \"day\" | \"night\", scene?: PageId, t?: 0 to 1 (default 1), from?: PageId}",
                 "result": "{width, height, png_base64}",
-                "notes": "does not move the document camera or change its lighting",
+                "notes": "does not move the document camera or change its lighting; with scene it renders the frame t of the way (linear) from `from` (default the current view and positions) to the scene's camera and stored positions, without changing the document (not with camera; t and from need scene); the document's tags, lighting and style are kept",
                 "params_schema": schema::<RenderParams>(),
                 "result_schema": {
                     "type": "object",

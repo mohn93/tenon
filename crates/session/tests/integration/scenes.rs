@@ -995,3 +995,131 @@ fn scene_positions_are_saved_and_older_files_open() {
     assert!(stored(&old)["schema_version"].as_u64().unwrap() < 19);
     assert!(stored(&old)["model"]["pages"][0].get("positions").is_none());
 }
+
+#[test]
+fn set_scene_transition_is_validated_one_undo_step_and_no_op_when_unchanged() {
+    let mut d = doc();
+    assert_eq!(
+        ask(&d, json!({"type": "scene_transition"})),
+        json!({"type": "scene_transition", "on": true, "seconds": 1.0})
+    );
+    let steps = undo_labels(&d).as_array().unwrap().len();
+    run(
+        &mut d,
+        json!({"type": "set_scene_transition", "seconds": 2.5}),
+    )
+    .unwrap();
+    assert_eq!(ask(&d, json!({"type": "scene_transition"}))["seconds"], 2.5);
+    assert_eq!(ask(&d, json!({"type": "scene_transition"}))["on"], true);
+    let labels = undo_labels(&d);
+    assert_eq!(labels.as_array().unwrap().len(), steps + 1);
+    assert_eq!(labels[0], "set_scene_transition");
+    run(&mut d, json!({"type": "set_scene_transition", "on": false})).unwrap();
+    let revision = d.revision();
+    run(&mut d, json!({"type": "set_scene_transition", "on": false})).unwrap();
+    assert_eq!(d.revision(), revision, "nothing to change");
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    assert_eq!(ask(&d, json!({"type": "scene_transition"}))["on"], true);
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    assert_eq!(ask(&d, json!({"type": "scene_transition"}))["seconds"], 1.0);
+    for bad in [json!(-1.0), json!(10.5)] {
+        let (kind, _) = run(
+            &mut d,
+            json!({"type": "set_scene_transition", "seconds": bad}),
+        )
+        .unwrap_err();
+        assert_eq!(kind, ErrorKind::InvalidInput);
+    }
+    let (kind, _) = run(&mut d, json!({"type": "set_scene_transition"})).unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput, "needs on or seconds");
+}
+
+#[test]
+fn the_scene_transition_is_saved_and_the_schema_is_20_only_when_it_is_not_the_default() {
+    let mut d = doc();
+    two_groups(&mut d);
+    let plain = scratch("transition-default.skr");
+    run(
+        &mut d,
+        json!({"type": "save", "path": plain.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert!(stored(&plain)["schema_version"].as_u64().unwrap() < 19);
+    assert!(stored(&plain)["model"].get("transition").is_none());
+
+    run(
+        &mut d,
+        json!({"type": "set_scene_transition", "on": false, "seconds": 3.0}),
+    )
+    .unwrap();
+    let path = scratch("transition.skr");
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(
+        stored(&path)["schema_version"],
+        session::file::TRANSITION_SCHEMA_VERSION
+    );
+    assert_eq!(session::file::TRANSITION_SCHEMA_VERSION, 20);
+    assert_eq!(session::file::SCHEMA_VERSION, 20);
+    let mut e = doc();
+    run(
+        &mut e,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(
+        ask(&e, json!({"type": "scene_transition"})),
+        json!({"type": "scene_transition", "on": false, "seconds": 3.0})
+    );
+    // An older file opens with the default.
+    let mut f = doc();
+    run(
+        &mut f,
+        json!({"type": "open", "path": plain.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(ask(&f, json!({"type": "scene_transition"}))["on"], true);
+}
+
+#[test]
+fn a_motion_to_a_scene_runs_from_the_current_state_to_what_going_there_makes() {
+    let mut d = doc();
+    let (a, b) = two_groups(&mut d);
+    run(&mut d, json!({"type": "standard_view", "view": "front"})).unwrap();
+    let s = add_scene(&mut d, json!({"name": "End", "positions": [a]}));
+    shift(&mut d, &a, 4.0);
+    shift(&mut d, &b, 4.0);
+    run(&mut d, json!({"type": "standard_view", "view": "top"})).unwrap();
+    let id: kernel::PageId = serde_json::from_value(json!(s)).unwrap();
+    let revision = d.revision();
+    let before = d.camera.clone();
+    let motion = d.motion_between(None, id).unwrap();
+    assert_eq!(d.revision(), revision, "does not change the document");
+    assert_eq!(d.camera, before);
+    assert_eq!(motion.camera_at(0.0), before);
+    // Only the stored instance moves, from where it is to the stored place.
+    assert_eq!(motion.moves.len(), 1);
+    let (_, from, to) = motion.moves[0];
+    assert_eq!((from.translation.x, to.translation.x), (4.0, 0.0));
+    let half = motion.scene_at(d.scene(), 0.5);
+    let mid = half.root().instance(motion.moves[0].0).unwrap().transform;
+    assert_eq!(mid.translation.x, 2.0);
+    assert_eq!(
+        d.scene()
+            .root()
+            .instance(motion.moves[0].0)
+            .unwrap()
+            .transform
+            .translation
+            .x,
+        4.0
+    );
+    // Going there makes the camera the motion ends at.
+    run(&mut d, json!({"type": "go_to_scene", "scene": s})).unwrap();
+    let mut end = motion.camera_at(1.0);
+    end.viewport = d.camera.viewport;
+    assert_eq!(end, d.camera);
+}

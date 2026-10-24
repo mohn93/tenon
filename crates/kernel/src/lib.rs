@@ -42,6 +42,7 @@ pub mod sweep;
 mod tag;
 mod texture;
 mod transform;
+mod transition;
 mod triangles;
 mod weld;
 
@@ -55,7 +56,7 @@ pub use data::{
     AnchorData, AxesData, CircleData, DefinitionData, DimensionData, EdgeData, FaceData, GuideData,
     InstanceData, LocationData, MAX_ID, MIN_DETERMINANT, MaterialData, MeshData, NoteData,
     PageData, PagePosition, RadialAnchorData, SceneData, SectionData, StyleData, TagData,
-    TextureData, VertexData,
+    TextureData, TransitionData, VertexData,
 };
 pub use edit::KernelError;
 pub use ids::{
@@ -94,4 +95,5 @@ pub use texture::{
     MIN_TEXTURE_SCALE, MIN_TEXTURE_SIZE, PlacementEdit, Texture, TextureImage, TexturePlacement,
     back_texture_position, normal_angle, texture_axes, texture_position,
 };
+pub use transition::SceneTransition;
 pub use triangles::Triangle;

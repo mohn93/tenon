@@ -624,6 +624,24 @@ fn make_renderer(
 /// True for the input that makes a held Ctrl part of a chord rather than a tap: presses,
 /// scrolls, pinches, focus changes and keys other than modifiers (the window reports the
 /// modifier keys themselves as key events too).
+/// Whether `event` is input that ends a scene transition at once: a press (key other than a
+/// modifier, mouse button, touch), a scroll or a gesture. Moving the cursor does not.
+fn finishes_transition(event: &WindowEvent) -> bool {
+    match event {
+        WindowEvent::KeyboardInput { event, .. } => {
+            event.state == ElementState::Pressed && !is_modifier_key(&event.logical_key)
+        }
+        WindowEvent::MouseInput { state, .. } => *state == ElementState::Pressed,
+        WindowEvent::Touch(touch) => touch.phase == TouchPhase::Started,
+        _ => matches!(
+            event,
+            WindowEvent::MouseWheel { .. }
+                | WindowEvent::PinchGesture { .. }
+                | WindowEvent::PanGesture { .. }
+        ),
+    }
+}
+
 fn interrupts_ctrl_tap(event: &WindowEvent) -> bool {
     match event {
         WindowEvent::KeyboardInput { event, .. } => !is_modifier_key(&event.logical_key),
@@ -1883,6 +1901,9 @@ impl State {
             UiAction::SetUnits(units) => {
                 self.editor.set_units(units);
             }
+            UiAction::SetSceneTransition(transition) => {
+                self.editor.set_scene_transition(transition);
+            }
             UiAction::ExportFile => self.export(),
             UiAction::ExportPdf => self.open_sheet(Sheet::Print {
                 purpose: PrintPurpose::Export,
@@ -2528,6 +2549,9 @@ impl State {
 
         // Fly mode moves the eye by the time since the last frame.
         let flying_on = self.editor.fly_tick(Instant::now());
+        // A scene transition draws interpolated state; the document is already at the end.
+        let motion = self.editor.transition_frame(Instant::now());
+        let animating = motion.is_some();
         // The hover is worked out once per frame, not per event.
         self.editor.refresh_hover();
         let doc = self.editor.doc();
@@ -2739,7 +2763,9 @@ impl State {
                 self.editor.hovered().is_some(),
                 navigating,
             ),
-            camera: &self.editor.doc().camera,
+            camera: motion
+                .as_ref()
+                .map_or(&self.editor.doc().camera, |m| &m.camera),
             axes: self.editor.doc().drawing_axes_in_world().matrix3,
             start: (self.editor.untouched() && !self.start_dismissed && !self.editor.flying())
                 .then_some(StartCard {
@@ -2756,6 +2782,7 @@ impl State {
                 trackpad: self.prefs.trackpad,
                 autosave_minutes: self.prefs.autosave_minutes,
                 units: self.editor.doc().units(),
+                transition: self.editor.doc().scene().scene_transition(),
             }),
             recover: self.recover.as_ref().map(|r| RecoverView {
                 rows: &r.rows,
@@ -2799,12 +2826,17 @@ impl State {
         }
 
         let doc = self.editor.doc();
-        let update = scene_update(
-            self.drawn.as_ref(),
-            doc.revision(),
-            doc.selection(),
-            doc.context(),
-        );
+        // The frames of a transition rebuild the model, and the first one after it does too.
+        let update = if animating {
+            SceneUpdate::Model
+        } else {
+            scene_update(
+                self.drawn.as_ref(),
+                doc.revision(),
+                doc.selection(),
+                doc.context(),
+            )
+        };
         // Coloring by tag changes how faces are colored, not the revision.
         let recolored = self.renderer.set_color_by_tag(doc.color_by_tag);
         // The chosen style's edge colors do too, and its background reaches the canvas.
@@ -2816,7 +2848,8 @@ impl State {
             hidden_geometry: doc.hidden_geometry && !self.features.read_only,
         }) || recolored;
         if update == SceneUpdate::Model || recolored {
-            self.renderer.set_model(doc.scene(), doc.context());
+            let scene = motion.as_ref().map_or(doc.scene(), |m| &m.scene);
+            self.renderer.set_model(scene, doc.context());
         }
         if update != SceneUpdate::Keep || recolored {
             self.renderer.set_selection(doc.selection());
@@ -2825,6 +2858,9 @@ impl State {
                 doc.selection().clone(),
                 doc.context().to_vec(),
             ));
+            if animating {
+                self.drawn = None;
+            }
         }
         // What a click would act on, and the tool's solid: window feedback only (render_view's
         // renderer never shows them). Both are no-ops when unchanged.
@@ -2846,8 +2882,15 @@ impl State {
         self.renderer.set_lighting(doc.lighting);
         self.renderer.set_sun(render::SunLight::of(doc));
         // The tools' marker and lines are egui's (the HUD); the renderer draws no overlay.
-        self.renderer
-            .render_in(&target, size, self.view, &self.editor.doc().camera, &[]);
+        self.renderer.render_in(
+            &target,
+            size,
+            self.view,
+            motion
+                .as_ref()
+                .map_or(&self.editor.doc().camera, |m| &m.camera),
+            &[],
+        );
         // Text copied in a text field reaches a clipboard the window does not otherwise reach.
         if self.features.paste_by_event {
             for text in gui_frame.copied_texts() {
@@ -2872,7 +2915,7 @@ impl State {
             Repaint::At(t) => self.repaint_at = Some(t),
             Repaint::Idle => {}
         }
-        if flying_on {
+        if flying_on || animating {
             self.window.request_redraw();
         }
         // The ages in the open log move.
@@ -3820,6 +3863,9 @@ impl ApplicationHandler<AppEvent> for App {
         if interrupts_ctrl_tap(&event) {
             s.ctrl_tap.interrupt();
         }
+        if finishes_transition(&event) && s.editor.finish_transition() {
+            s.window.request_redraw();
+        }
         let changed = match event {
             WindowEvent::CloseRequested => {
                 s.settle_and(Then::Quit);
@@ -4405,6 +4451,34 @@ mod tests {
         assert!(!tap.modifiers(ctrl | ModifiersState::SHIFT, ModifiersState::SHIFT));
         // A release alone is no tap.
         assert!(!tap.modifiers(ctrl, none));
+    }
+
+    #[test]
+    fn presses_scrolls_and_gestures_finish_a_scene_transition_but_not_a_drifting_cursor() {
+        let id = winit::event::DeviceId::dummy();
+        let mouse = |state| WindowEvent::MouseInput {
+            device_id: id,
+            state,
+            button: MouseButton::Left,
+        };
+        assert!(finishes_transition(&mouse(ElementState::Pressed)));
+        // The release of the click that started it must not end it.
+        assert!(!finishes_transition(&mouse(ElementState::Released)));
+        assert!(finishes_transition(&WindowEvent::MouseWheel {
+            device_id: id,
+            delta: MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(0.0, 4.0)),
+            phase: TouchPhase::Moved,
+        }));
+        assert!(finishes_transition(&WindowEvent::PinchGesture {
+            device_id: id,
+            delta: 0.01,
+            phase: TouchPhase::Moved,
+        }));
+        assert!(!finishes_transition(&WindowEvent::CursorMoved {
+            device_id: id,
+            position: winit::dpi::PhysicalPosition::new(1.0, 2.0),
+        }));
+        assert!(!finishes_transition(&WindowEvent::Focused(true)));
     }
 
     #[test]

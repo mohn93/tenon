@@ -71,6 +71,7 @@ impl Offscreen {
     pub fn capture(
         &mut self,
         doc: &Document,
+        scene: Option<&kernel::Scene>,
         labels: &[HudLabel],
         camera: &Camera,
         lighting: Lighting,
@@ -99,7 +100,7 @@ impl Offscreen {
             );
         };
         snapshotter.capture_over(
-            doc.scene(),
+            scene.unwrap_or_else(|| doc.scene()),
             doc.context(),
             doc.selection(),
             camera,
@@ -300,6 +301,7 @@ impl Host for AppHost<'_> {
         lighting: Lighting,
         width: u32,
         height: u32,
+        frame: Option<&kernel::Scene>,
     ) -> Option<Vec<u8>> {
         let doc = self.editor.doc();
         let snapshotter = self.offscreen.get()?;
@@ -315,7 +317,7 @@ impl Host for AppHost<'_> {
         seen.viewport = glam::DVec2::new(f64::from(width.max(1)), f64::from(height.max(1)));
         let labels = self.editor.image_labels(&seen);
         self.offscreen
-            .capture(doc, &labels, camera, lighting, width, height)
+            .capture(doc, frame, &labels, camera, lighting, width, height)
     }
 
     fn render_pdf(&mut self, spec: &PrintSpec) -> Result<Printed, CommandError> {
@@ -1332,7 +1334,7 @@ mod tests {
             session: None,
         };
         let camera = host.editor.doc().camera.clone();
-        host.render_view(&camera, Lighting::Day, 400, 300)
+        host.render_view(&camera, Lighting::Day, 400, 300, None)
     }
 
     /// How many pixels of 400 x 300 images `a` and `b` differ in, within `r` pixels of `at`.

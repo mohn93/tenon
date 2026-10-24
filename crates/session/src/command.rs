@@ -1301,6 +1301,16 @@ pub enum Command {
         #[serde(default)]
         utc_offset: Option<f64>,
     },
+    /// Set how the window moves between scenes, as one undo step (nothing to change makes no
+    /// step): `on` (default true) animates going to a scene and `seconds` (0 to 10, default 1)
+    /// is how long. Absent fields stay as they are; at least one is needed. A model setting,
+    /// saved with the file; going to a scene over the API (`go_to_scene`) is never animated.
+    SetSceneTransition {
+        #[serde(default)]
+        on: Option<bool>,
+        #[serde(default)]
+        seconds: Option<f64>,
+    },
 }
 
 impl Command {

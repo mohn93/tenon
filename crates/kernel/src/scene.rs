@@ -18,6 +18,7 @@ use crate::model::{ChangeSet, ChangeSummary, Instance, Model};
 use crate::page::Page;
 use crate::style::Style;
 use crate::tag::Tag;
+use crate::transition::SceneTransition;
 
 /// A group has one instance, and a copy of it gets a definition of its own. A component is
 /// shared by all its instances: editing it changes them all.
@@ -111,6 +112,8 @@ pub enum Step {
     SetAxes(Axes, Axes),
     /// The model's location changed from the first to the second.
     SetLocation(Location, Location),
+    /// The scene transition changed from the first to the second.
+    SetTransition(SceneTransition, SceneTransition),
 }
 
 impl Step {
@@ -135,6 +138,7 @@ impl Step {
             Step::ChangeStyle(id, from, to) => Step::ChangeStyle(id, to, from),
             Step::SetAxes(from, to) => Step::SetAxes(to, from),
             Step::SetLocation(from, to) => Step::SetLocation(to, from),
+            Step::SetTransition(from, to) => Step::SetTransition(to, from),
         }
     }
 }
@@ -269,6 +273,8 @@ pub struct Scene {
     pub(crate) axes: Axes,
     /// Where the model stands (see [`Location`]).
     pub(crate) location: Location,
+    /// How going to a scene animates (see [`SceneTransition`]).
+    pub(crate) transition: SceneTransition,
     /// The next id to hand out, in any mesh. Never decreases, so ids are never reused.
     next_id: u64,
     /// Root instances a viewer hides for now (see [`Scene::set_view_hidden`]): not part of the
@@ -288,6 +294,7 @@ impl PartialEq for Scene {
             && self.styles == other.styles
             && self.axes == other.axes
             && self.location == other.location
+            && self.transition == other.transition
     }
 }
 
@@ -308,6 +315,7 @@ impl Scene {
             styles: BTreeMap::new(),
             axes: Axes::WORLD,
             location: Location::DEFAULT,
+            transition: SceneTransition::DEFAULT,
             view_hidden: BTreeSet::new(),
         }
     }
@@ -342,6 +350,7 @@ impl Scene {
             styles,
             axes: Axes::WORLD,
             location: Location::DEFAULT,
+            transition: SceneTransition::DEFAULT,
             next_id: used,
             view_hidden: BTreeSet::new(),
         }
@@ -697,6 +706,7 @@ impl Scene {
             }
             Step::SetAxes(_, to) => self.axes = *to,
             Step::SetLocation(_, to) => self.location = *to,
+            Step::SetTransition(_, to) => self.transition = *to,
             Step::MovePage(id, _, to) => {
                 if let Some(from) = self.page_index(*id) {
                     let page = self.pages.remove(from);

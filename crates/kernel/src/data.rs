@@ -21,6 +21,7 @@ use crate::section::SectionPlane;
 use crate::style::{Style, StyleSettings};
 use crate::tag::Tag;
 use crate::texture::{Texture, TextureImage, TexturePlacement};
+use crate::transition::SceneTransition;
 
 /// Ids in a file are below this, and its `next_id` is at most this, so every id is exact as a
 /// JSON (double) number and a scene that loads also saves and loads again.
@@ -60,6 +61,18 @@ pub struct SceneData {
     /// is the default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<LocationData>,
+    /// How going to a scene animates. Absent in files written before it existed (and when it
+    /// is the default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition: Option<TransitionData>,
+}
+
+/// How going to a scene animates: see [`crate::SceneTransition`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TransitionData {
+    pub on: bool,
+    pub seconds: f64,
 }
 
 /// Where the model stands: see [`crate::Location`].
@@ -464,6 +477,13 @@ impl Scene {
                     utc_offset: l.utc_offset,
                 }
             }),
+            transition: (!self.scene_transition().is_default()).then(|| {
+                let t = self.scene_transition();
+                TransitionData {
+                    on: t.on,
+                    seconds: t.seconds,
+                }
+            }),
             axes: (!self.axes().is_world()).then(|| {
                 let a = self.axes();
                 AxesData {
@@ -595,6 +615,14 @@ impl Scene {
             };
             location.check().map_err(|e| e.to_string())?;
             scene.location = location;
+        }
+        if let Some(t) = &data.transition {
+            let transition = SceneTransition {
+                on: t.on,
+                seconds: t.seconds,
+            };
+            transition.check().map_err(|e| e.to_string())?;
+            scene.transition = transition;
         }
         scene.validate()?;
         Ok(scene)
