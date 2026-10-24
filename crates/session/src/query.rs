@@ -47,6 +47,8 @@ pub enum Query {
     Camera {},
     /// Where the model stands (see `set_location`).
     Location {},
+    /// How going to a scene animates in the window (see `set_scene_transition`).
+    SceneTransition {},
     /// The sun at the shadow settings' date and time, whether or not shadows are on.
     Sun {},
     Stats {},
@@ -318,6 +320,13 @@ impl From<kernel::Location> for LocationInfo {
     }
 }
 
+/// How going to a scene animates (see `set_scene_transition`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SceneTransitionInfo {
+    pub on: bool,
+    pub seconds: f64,
+}
+
 /// The sun in the sky and the model (see the `sun` query).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SunInfo {
@@ -562,6 +571,9 @@ pub struct SceneInfo {
     pub camera: bool,
     /// Whether it stores which tags are hidden.
     pub tags: bool,
+    /// The instances of the root whose positions it stores (empty: none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub positions: Vec<EntityId>,
     /// Whether it is the selected scene (the one last added or gone to).
     pub selected: bool,
 }
@@ -656,6 +668,7 @@ pub enum QueryResult {
         axes: AxesInfo,
     },
     Location(LocationInfo),
+    SceneTransition(SceneTransitionInfo),
     /// The sun: `direction` the unit vector from the model towards it in the model's x, y and
     /// z, `azimuth` the degrees clockwise from true north and `elevation` the degrees above
     /// the horizon, `up` whether it is above the horizon.
@@ -714,6 +727,8 @@ pub enum QueryResult {
         name: String,
         view: Option<SceneView>,
         hidden_tags: Option<Vec<TagId>>,
+        /// The instances of the root whose positions it stores, null when it stores none.
+        positions: Option<Vec<EntityId>>,
         revision: u64,
     },
     /// `path` lists the open instances from the root; empty when the root is open.

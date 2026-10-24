@@ -80,7 +80,7 @@ pub(super) fn settings_window(
                     view.features,
                     actions,
                 ),
-                Tab::Model => model(ui, settings.units, actions),
+                Tab::Model => model(ui, settings.units, settings.transition, actions),
             }
         });
     widgets::name_title_bar(&ctx, &shown, "Settings");
@@ -322,7 +322,12 @@ fn committed_text(
 /// unit of a decimal format, the precision, the length and angle snapping and the angle
 /// precision. They are the model's, saved with it, and each change is an undo step; the tab
 /// says so.
-fn model(ui: &mut Ui, units: Units, actions: &mut Vec<UiAction>) {
+fn model(
+    ui: &mut Ui,
+    units: Units,
+    transition: kernel::SceneTransition,
+    actions: &mut Vec<UiAction>,
+) {
     let mut chosen = units;
     let format = Format::of(units.length);
     // The snapping values show every digit they have, not the display precision.
@@ -461,6 +466,48 @@ fn model(ui: &mut Ui, units: Units, actions: &mut Vec<UiAction>) {
     );
     if chosen != units {
         actions.push(UiAction::SetUnits(chosen));
+    }
+    ui.separator();
+    // Going to a scene in the window: animated or at once, and how long it takes.
+    let mut next = transition;
+    egui::Grid::new("settings-transition")
+        .num_columns(2)
+        .show(ui, |ui| {
+            ui.checkbox(&mut next.on, "Animate scene changes");
+            ui.end_row();
+            ui.label("Duration (s)");
+            if let Some(text) = committed_text(
+                ui,
+                Id::new("settings-transition-seconds"),
+                "Transition seconds",
+                &format!("{}", transition.seconds),
+                transition.on,
+            ) {
+                match text.trim().parse::<f64>() {
+                    Ok(s)
+                        if kernel::SceneTransition {
+                            on: true,
+                            seconds: s,
+                        }
+                        .check()
+                        .is_ok() =>
+                    {
+                        next.seconds = s;
+                    }
+                    _ => {}
+                }
+            }
+            ui.end_row();
+        });
+    ui.label(
+        egui::RichText::new(
+            "Going to a scene in the window moves the view and the instances the scene stores \
+             over this time (0 to 10 seconds); any input finishes it at once. Saved in the model.",
+        )
+        .weak(),
+    );
+    if next != transition {
+        actions.push(UiAction::SetSceneTransition(next));
     }
 }
 

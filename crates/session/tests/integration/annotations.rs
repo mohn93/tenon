@@ -1158,7 +1158,7 @@ fn files_with_broken_annotations_are_refused_clearly() {
     // A newer schema is refused as before.
     let newer = scratch("newer.skr");
     std::fs::copy(&path, &newer).unwrap();
-    edit_file(&newer, |doc| doc["schema_version"] = json!(23));
+    edit_file(&newer, |doc| doc["schema_version"] = json!(25));
     let (_, message, _) = open(&newer);
     assert!(message.contains("newer"), "{message}");
 }
@@ -1647,4 +1647,236 @@ fn the_api_always_reports_every_unit_field() {
     for u in with_units {
         all(&serde_json::to_value(u).unwrap());
     }
+}
+
+fn label(d: &mut Document, target: &str, extra: Value) -> Value {
+    let mut cmd = json!({"type": "add_label", "target": target, "text": "Part"});
+    for (k, v) in extra.as_object().unwrap() {
+        cmd[k] = v.clone();
+    }
+    let out = run(d, cmd).unwrap();
+    entity(d, &made(&out, 'n'))
+}
+
+fn near(p: &Value, want: [f64; 3]) {
+    for i in 0..3 {
+        let got = p[i].as_f64().unwrap();
+        assert!((got - want[i]).abs() < 1e-9, "{p} vs {want:?}");
+    }
+}
+
+#[test]
+fn a_vertex_label_anchors_to_the_vertex_and_an_edge_label_to_its_midpoint() {
+    let mut d = doc();
+    let r = rectangle(&mut d);
+    let v = vertex_at(&d, [2.0, 1.0, 0.0]);
+    let info = label(&mut d, &v, json!({"position": [3, 2, 1]}));
+    assert_eq!(info["anchor"]["vertex"], json!(v));
+    assert_eq!(info["label"], "Part");
+    assert_eq!(info["position"], json!([3.0, 2.0, 1.0]));
+    let info = label(&mut d, &r.bottom, json!({"position": [1, -1, 1]}));
+    near(&info["anchor"]["point"], [1.0, 0.0, 0.0]);
+}
+
+#[test]
+fn a_label_without_a_position_goes_outward_and_up_from_the_context_center() {
+    let mut d = doc();
+    rectangle(&mut d);
+    let v = vertex_at(&d, [2.0, 1.0, 0.0]);
+    let info = label(&mut d, &v, json!({}));
+    // Box center (1, 0.5, 0), diagonal sqrt(5): out along (2, 1) / sqrt(5).
+    let diag = 5.0_f64.sqrt();
+    let want = [
+        2.0 + 0.15 * diag * 2.0 / diag,
+        1.0 + 0.15 * diag * 1.0 / diag,
+        0.05 * diag,
+    ];
+    near(&info["position"], want);
+}
+
+#[test]
+fn a_face_label_anchors_inside_the_face_and_outside_its_holes() {
+    let mut d = doc();
+    let r = rectangle(&mut d);
+    // The centroid of a plain rectangle is inside: it is the anchor.
+    let info = label(&mut d, &r.face, json!({}));
+    near(&info["anchor"]["point"], [1.0, 0.5, 0.0]);
+
+    // A square face with a square hole: the centroid is in the hole.
+    let mut d = doc();
+    let outer = run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [4, 4, 0]}),
+    )
+    .unwrap();
+    let outer = made(&outer, 'f');
+    let inner = run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [1, 1, 0], "opposite": [3, 3, 0]}),
+    )
+    .unwrap();
+    run(&mut d, json!({"type": "erase", "ids": [made(&inner, 'f')]})).unwrap();
+    let info = label(&mut d, &outer, json!({}));
+    let p = &info["anchor"]["point"];
+    let (x, y) = (p[0].as_f64().unwrap(), p[1].as_f64().unwrap());
+    assert!((0.0..=4.0).contains(&x) && (0.0..=4.0).contains(&y), "{p}");
+    assert!(
+        !(x > 1.0 && x < 3.0 && y > 1.0 && y < 3.0),
+        "in the hole: {p}"
+    );
+    assert!(p[2].as_f64().unwrap().abs() < 1e-9);
+}
+
+#[test]
+fn an_instance_label_lands_on_the_surface_toward_the_camera_else_the_center() {
+    let mut d = doc();
+    let r = rectangle(&mut d);
+    run(
+        &mut d,
+        json!({"type": "push_pull", "face": r.face, "distance": 1.0}),
+    )
+    .unwrap();
+    let all = ask(&d, json!({"type": "entities", "kinds": ["vertex"]}));
+    let top = all["vertices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["position"][2].as_f64().unwrap())
+        .fold(f64::MIN, f64::max);
+    let bottom = all["vertices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["position"][2].as_f64().unwrap())
+        .fold(f64::MAX, f64::min);
+    let ids: Vec<String> = all_ids(&d);
+    let out = run(&mut d, json!({"type": "make_group", "ids": ids})).unwrap();
+    let group = made(&out, 'i');
+    run(&mut d, json!({"type": "standard_view", "view": "top"})).unwrap();
+    let info = label(&mut d, &group, json!({}));
+    on_face_z(&info, top);
+    run(&mut d, json!({"type": "standard_view", "view": "bottom"})).unwrap();
+    let info = label(&mut d, &group, json!({}));
+    on_face_z(&info, bottom);
+}
+
+#[test]
+fn a_label_is_one_undo_step_and_refuses_bad_targets_and_text() {
+    let mut d = doc();
+    let r = rectangle(&mut d);
+    let before = d.undo_label().map(str::to_string);
+    let info = label(&mut d, &r.face, json!({}));
+    assert_eq!(info["kind"], "leader");
+    assert_eq!(d.undo_label(), Some("add_label"));
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    assert_eq!(d.undo_label().map(str::to_string), before);
+
+    for text in ["", "   ", &"x".repeat(1025)] {
+        let e = run(
+            &mut d,
+            json!({"type": "add_label", "target": r.face, "text": text}),
+        )
+        .unwrap_err();
+        assert_eq!(e.0, ErrorKind::InvalidInput);
+    }
+    let e = run(
+        &mut d,
+        json!({"type": "add_label", "target": "n1", "text": "x"}),
+    )
+    .unwrap_err();
+    assert_eq!(e.0, ErrorKind::InvalidInput);
+    let e = run(
+        &mut d,
+        json!({"type": "add_label", "target": "f999", "text": "x"}),
+    )
+    .unwrap_err();
+    assert_eq!(e.0, ErrorKind::NotFound);
+}
+
+#[test]
+fn a_label_target_can_be_a_batch_reference() {
+    let mut d = doc();
+    let commands: Vec<BatchCommand> = [
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [2, 1, 0]}),
+        json!({"type": "add_label", "target": "$0:f0", "text": "Top"}),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, v)| BatchCommand::parse(v, i).unwrap())
+    .collect();
+    let outcomes = d.execute_batch(commands, false).unwrap();
+    let n = outcomes[1].changes.created[0].to_string();
+    assert_eq!(entity(&d, &n)["label"], "Top");
+}
+
+/// The anchor lies on the box's face at height `z`, within the box and near its center.
+fn on_face_z(info: &Value, z: f64) {
+    let p = &info["anchor"]["point"];
+    near(&json!([0.0, 0.0, p[2]]), [0.0, 0.0, z]);
+    let (x, y) = (p[0].as_f64().unwrap(), p[1].as_f64().unwrap());
+    assert!((0.0..=2.0).contains(&x) && (0.0..=1.0).contains(&y), "{p}");
+}
+
+fn all_ids(d: &Document) -> Vec<String> {
+    let all = ask(d, json!({"type": "entities", "kinds": ["edge", "face"]}));
+    ["edges", "faces"]
+        .iter()
+        .flat_map(|k| all[k].as_array().unwrap().iter())
+        .map(|e| e["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn an_instance_label_ignores_hidden_faces_and_faces_on_hidden_tags() {
+    let mut d = doc();
+    let r = rectangle(&mut d);
+    run(
+        &mut d,
+        json!({"type": "push_pull", "face": r.face, "distance": 1.0}),
+    )
+    .unwrap();
+    let ids: Vec<String> = all_ids(&d);
+    let out = run(&mut d, json!({"type": "make_group", "ids": ids})).unwrap();
+    let group = made(&out, 'i');
+    run(&mut d, json!({"type": "standard_view", "view": "top"})).unwrap();
+    // The top face: the one whose vertices are all at z = 1.
+    run(&mut d, json!({"type": "open_instance", "id": group})).unwrap();
+    let faces = ask(&d, json!({"type": "entities", "kinds": ["face"]}));
+    let top = faces["faces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["id"].as_str().unwrap().to_string())
+        .find(|id| entity(&d, id)["normal"][2].as_f64().unwrap_or(0.0) > 0.9)
+        .expect("a face looks up");
+    let center_z = 0.5;
+    let tag = run(&mut d, json!({"type": "add_tag"})).unwrap()["changes"]["tags"][0]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Hidden by its own flag: the ray goes through to nothing, so the label stays at the center.
+    run(&mut d, json!({"type": "hide", "ids": [top]})).unwrap();
+    run(&mut d, json!({"type": "close_instance"})).unwrap();
+    let info = label(&mut d, &group, json!({}));
+    near(
+        &json!([0.0, 0.0, info["anchor"]["point"][2]]),
+        [0.0, 0.0, center_z],
+    );
+
+    // Shown again, but on a hidden tag: the same.
+    run(&mut d, json!({"type": "open_instance", "id": group})).unwrap();
+    run(&mut d, json!({"type": "unhide", "ids": [top]})).unwrap();
+    run(&mut d, json!({"type": "set_tag", "ids": [top], "tag": tag})).unwrap();
+    run(
+        &mut d,
+        json!({"type": "change_tag", "tag": tag, "visible": false}),
+    )
+    .unwrap();
+    run(&mut d, json!({"type": "close_instance"})).unwrap();
+    let info = label(&mut d, &group, json!({}));
+    near(
+        &json!([0.0, 0.0, info["anchor"]["point"][2]]),
+        [0.0, 0.0, center_z],
+    );
 }

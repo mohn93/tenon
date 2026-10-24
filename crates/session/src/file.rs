@@ -34,11 +34,16 @@ pub const FORMAT: &str = "sketchup-alt";
 /// and the length and angle snapping settings of the display units, and version 18 styles
 /// and the style a view chooses, and version 19 material metalness and roughness, and version
 /// 20 studio lighting, and version 21 ambient occlusion in a style, and version 22 the material
-/// section fill and instances left whole by section planes; older files still open
+/// section fill and instances left whole by section planes, version 23 the instance positions a
+/// scene stores, and version 24 the scene transition setting; older files still open
 /// (untagged before version 10, without scenes before version 11, without annotations and in
 /// the default units before version 12, without section planes and with the default section
 /// display before version 13).
-pub const SCHEMA_VERSION: u32 = 22;
+pub const SCHEMA_VERSION: u32 = 24;
+/// The version written when the scene transition is not the default.
+pub const TRANSITION_SCHEMA_VERSION: u32 = 24;
+/// The version written when a scene stores instance positions.
+pub const SCENE_POSITIONS_SCHEMA_VERSION: u32 = 23;
 /// The version written when the section fill takes the material's color or an instance is not
 /// cut by section planes.
 pub const SECTION_CUT_SCHEMA_VERSION: u32 = 22;
@@ -316,6 +321,7 @@ pub(crate) fn write_bytes(
             .pages
             .iter()
             .any(|p| p.view.is_some_and(|v| !v.shadows.is_default()));
+    let moving_scenes = model.pages.iter().any(|p| p.positions.is_some());
     let styled = !model.styles.is_empty()
         || style.is_some()
         || model
@@ -352,7 +358,11 @@ pub(crate) fn write_bytes(
     images.dedup_by(|a, b| a.0 == b.0);
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: if section_cut {
+        schema_version: if model.transition.is_some() {
+            TRANSITION_SCHEMA_VERSION
+        } else if moving_scenes {
+            SCENE_POSITIONS_SCHEMA_VERSION
+        } else if section_cut {
             SECTION_CUT_SCHEMA_VERSION
         } else if occluded {
             AMBIENT_OCCLUSION_SCHEMA_VERSION
@@ -813,6 +823,7 @@ mod tests {
             name: "Far".into(),
             view: Some(far),
             tags: None,
+            positions: None,
         };
         scene.add_page(page).unwrap();
         let dir = std::env::temp_dir().join(format!("session-file-far-{}", std::process::id()));

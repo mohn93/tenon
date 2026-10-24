@@ -162,6 +162,130 @@ impl Document {
             .map_err(|e| invalid(&e.to_string()))
     }
 
+    pub(super) fn add_label_changes(
+        &mut self,
+        target: EntityId,
+        text: &str,
+        position: Option<[f64; 3]>,
+    ) -> Result<SceneChange, CommandError> {
+        let input = match target {
+            EntityId::Vertex(_) => {
+                self.anchor(AnchorInput::Vertex(target))?;
+                AnchorInput::Vertex(target)
+            }
+            EntityId::Edge(_) => {
+                let e = self.edge_of(target)?;
+                let [a, b] = self.model().edge(e).expect("checked").v;
+                let m = self.model();
+                AnchorInput::Point(((point_of(m, a) + point_of(m, b)) * 0.5).to_array())
+            }
+            EntityId::Face(f) => {
+                if self.model().face(f).is_none() {
+                    return Err(self.missing_error(vec![target], format!("no entity {target}")));
+                }
+                let tris = self.model().triangulate(f).unwrap_or_default();
+                let p = interior_point_near_centroid(&tris).ok_or_else(|| {
+                    invalid("the face cannot be labelled: it has no area").with_ids(vec![target])
+                })?;
+                AnchorInput::Point(p.to_array())
+            }
+            EntityId::Instance(i) => {
+                let Some(inst) = self.model().instance(i) else {
+                    return Err(self.missing_error(vec![target], format!("no entity {target}")));
+                };
+                let inst = inst.clone();
+                let Some([lo, hi]) = self.scene.instance_bounds(&inst) else {
+                    return Err(
+                        invalid("the instance is empty: nothing to label").with_ids(vec![target])
+                    );
+                };
+                let center = (lo + hi) * 0.5;
+                let eye = self
+                    .context_transform()
+                    .inverse()
+                    .transform_point3(self.camera.eye);
+                let mut tris = Vec::new();
+                let hidden_tags = self.scene.hidden_tags();
+                self.instance_triangles(&inst, 0, &hidden_tags, &mut tris);
+                let toward = eye - center;
+                let hit = (toward.length() > 1e-9)
+                    .then(|| toward.normalize())
+                    .and_then(|dir| {
+                        tris.iter()
+                            .filter_map(|t| kernel::ray_hits_triangle(center, dir, *t))
+                            .filter(|t| *t > 1e-9 && *t <= toward.length())
+                            .min_by(f64::total_cmp)
+                            .map(|t| center + dir * t)
+                    });
+                AnchorInput::Point(hit.unwrap_or(center).to_array())
+            }
+            _ => {
+                return Err(invalid(
+                    "a label target is a face, edge, vertex or instance (f..., e..., v..., i...)",
+                )
+                .with_ids(vec![target]));
+            }
+        };
+        let position = match position {
+            Some(p) => p,
+            None => {
+                let anchor = match input {
+                    AnchorInput::Vertex(EntityId::Vertex(v)) => point_of(self.model(), v),
+                    AnchorInput::Point(p) => DVec3::from(p),
+                    AnchorInput::Vertex(_) => unreachable!("checked above"),
+                };
+                self.label_position(anchor).to_array()
+            }
+        };
+        self.add_note_changes(input, position, Some(text.to_string()))
+    }
+
+    /// Where a label's note goes by default: outward from the open context's box center
+    /// through `anchor`, 15% of the box's diagonal away, raised by 5% of it.
+    fn label_position(&self, anchor: DVec3) -> DVec3 {
+        let (center, diagonal) = match self.scene.bounds(self.active()) {
+            Some([lo, hi]) => ((lo + hi) * 0.5, (hi - lo).length()),
+            None => (anchor, 0.0),
+        };
+        let diagonal = if diagonal > 1e-9 { diagonal } else { 1.0 };
+        let out = (anchor - center).try_normalize().unwrap_or(DVec3::X);
+        anchor + out * (0.15 * diagonal) + DVec3::Z * (0.05 * diagonal)
+    }
+
+    /// The triangles of an instance's geometry, nested instances included, in the open
+    /// context's coordinates.
+    /// The triangles of the faces of `inst` that are shown (not hidden, not on `hidden_tags`),
+    /// placed, including those of its shown instances.
+    fn instance_triangles(
+        &self,
+        inst: &kernel::Instance,
+        depth: usize,
+        hidden_tags: &std::collections::BTreeSet<kernel::TagId>,
+        out: &mut Vec<[DVec3; 3]>,
+    ) {
+        let Some(m) = self.scene.mesh(kernel::MeshId::Definition(inst.definition)) else {
+            return;
+        };
+        if depth > 16 {
+            return;
+        }
+        for (f, face) in m.faces() {
+            if face.hidden || !kernel::tag_shown_among(hidden_tags, face.tag) {
+                continue;
+            }
+            for t in m.triangulate(f).unwrap_or_default() {
+                out.push(t.map(|p| inst.transform.transform_point3(p)));
+            }
+        }
+        for (_, child) in m.instances() {
+            if child.hidden || !kernel::tag_shown_among(hidden_tags, child.tag) {
+                continue;
+            }
+            let placed = kernel::Instance::new(child.definition, inst.transform * child.transform);
+            self.instance_triangles(&placed, depth + 1, hidden_tags, out);
+        }
+    }
+
     pub(super) fn add_screen_note_changes(
         &mut self,
         at: [f64; 2],
@@ -442,4 +566,138 @@ fn perpendicular(v: DVec3, along: DVec3) -> DVec3 {
 
 fn invalid(message: &str) -> CommandError {
     CommandError::new(ErrorKind::InvalidInput, message)
+}
+
+fn point_of(m: &Model, v: VertexId) -> DVec3 {
+    m.position(v).expect("checked")
+}
+
+/// The point inside a triangulated face nearest its area centroid: the centroid when a
+/// triangle holds it off the face's edges, else the nearest triangle's closest point nudged toward that triangle's
+/// center, so it lies inside the face and never in a hole.
+fn interior_point_near_centroid(tris: &[[DVec3; 3]]) -> Option<DVec3> {
+    let mut area = 0.0;
+    let mut sum = DVec3::ZERO;
+    for t in tris {
+        let a = (t[1] - t[0]).cross(t[2] - t[0]).length() * 0.5;
+        area += a;
+        sum += a * (t[0] + t[1] + t[2]) / 3.0;
+    }
+    if area <= 0.0 {
+        return None;
+    }
+    let centroid = sum / area;
+    let (mut best, mut best_d) = (None, f64::INFINITY);
+    for t in tris {
+        let q = closest_on_triangle(centroid, *t);
+        let d = q.distance(centroid);
+        if d < best_d {
+            let center = (t[0] + t[1] + t[2]) / 3.0;
+            best_d = d;
+            best = Some((q, q + (center - q) * 0.1));
+        }
+    }
+    let (q, nudged) = best?;
+    // On a side shared by two triangles the centroid is inside the face; on the face's own
+    // edge (around a hole) it is nudged strictly inside too.
+    Some(
+        if q.distance(centroid) < 1e-9 && !on_face_edge(centroid, tris) {
+            centroid
+        } else {
+            nudged
+        },
+    )
+}
+
+/// Whether `p` lies on a side of `tris` that no other triangle shares: an edge of the face.
+fn on_face_edge(p: DVec3, tris: &[[DVec3; 3]]) -> bool {
+    let same = |a: DVec3, b: DVec3| a.distance_squared(b) < 1e-24;
+    let shared = |u: DVec3, v: DVec3, skip: usize| {
+        tris.iter().enumerate().any(|(j, t)| {
+            j != skip && t.iter().any(|&a| same(a, u)) && t.iter().any(|&a| same(a, v))
+        })
+    };
+    tris.iter().enumerate().any(|(i, t)| {
+        [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])]
+            .into_iter()
+            .any(|(u, v)| {
+                let along = (p - u).dot(v - u) / (v - u).length_squared().max(f64::MIN_POSITIVE);
+                let foot = u + (v - u) * along.clamp(0.0, 1.0);
+                foot.distance(p) < 1e-9 && !shared(u, v, i)
+            })
+    })
+}
+
+/// The point of triangle `t` nearest `p`.
+fn closest_on_triangle(p: DVec3, [a, b, c]: [DVec3; 3]) -> DVec3 {
+    let (ab, ac, ap) = (b - a, c - a, p - a);
+    let (d1, d2) = (ab.dot(ap), ac.dot(ap));
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return a;
+    }
+    let bp = p - b;
+    let (d3, d4) = (ab.dot(bp), ac.dot(bp));
+    if d3 >= 0.0 && d4 <= d3 {
+        return b;
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        return a + ab * (d1 / (d1 - d3));
+    }
+    let cp = p - c;
+    let (d5, d6) = (ab.dot(cp), ac.dot(cp));
+    if d6 >= 0.0 && d5 <= d6 {
+        return c;
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        return a + ac * (d2 / (d2 - d6));
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        return b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6)));
+    }
+    let denom = 1.0 / (va + vb + vc);
+    a + ab * (vb * denom) + ac * (vc * denom)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Whether `p` (in the plane of triangle `t`) lies inside it and off its sides.
+    fn strictly_inside(p: DVec3, [a, b, c]: [DVec3; 3]) -> bool {
+        let n = (b - a).cross(c - a);
+        let area = n.length_squared();
+        if area <= 0.0 {
+            return false;
+        }
+        let tolerance = 1e-9 * area;
+        [(a, b), (b, c), (c, a)]
+            .iter()
+            .all(|&(u, v)| (v - u).cross(p - u).dot(n) > tolerance)
+    }
+
+    #[test]
+    fn a_centroid_on_the_faces_edge_is_nudged_strictly_inside() {
+        // Two triangles meeting at a corner: the centroid is that corner, on both sides.
+        let t1 = [DVec3::ZERO, DVec3::X, DVec3::Y];
+        let t2 = [DVec3::ZERO, -DVec3::X, -DVec3::Y];
+        let p = interior_point_near_centroid(&[t1, t2]).unwrap();
+        assert!(p != DVec3::ZERO);
+        assert!(strictly_inside(p, t1) || strictly_inside(p, t2), "{p:?}");
+        // On the diagonal two triangles share: inside the face, kept.
+        let (a, b, c, d) = (
+            DVec3::ZERO,
+            DVec3::X * 2.0,
+            DVec3::new(2.0, 1.0, 0.0),
+            DVec3::Y,
+        );
+        let p = interior_point_near_centroid(&[[a, b, c], [a, c, d]]).unwrap();
+        assert!((p - DVec3::new(1.0, 0.5, 0.0)).length() < 1e-12, "{p:?}");
+        // A centroid well inside is kept.
+        let big = [DVec3::ZERO, DVec3::X * 3.0, DVec3::Y * 3.0];
+        let p = interior_point_near_centroid(&[big]).unwrap();
+        assert!((p - DVec3::new(1.0, 1.0, 0.0)).length() < 1e-12);
+    }
 }

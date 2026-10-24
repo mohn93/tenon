@@ -281,6 +281,7 @@ fn settings_open() -> Fixture {
             ui_scale: UiScale::P100,
             trackpad: TrackpadScroll::Orbit,
             autosave_minutes: 5,
+            transition: kernel::SceneTransition::DEFAULT,
             units: session::Units::default(),
         }),
         ..Default::default()

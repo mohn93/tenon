@@ -3,7 +3,7 @@
 
 use kernel::EntityId;
 use session::note_label;
-use tools::{Label, Owner, ToolKind};
+use tools::{Label, Owner, Scenery, ToolKind};
 
 use super::{Editor, scenery_in};
 use crate::feedback::{HudLabel, LabelAnchor, LabelLook};
@@ -35,13 +35,44 @@ impl Editor {
     /// is selected or hovered (in the danger color when Erase hovers); those outside the open
     /// instance are faded.
     pub(super) fn hud_labels(&self) -> Vec<HudLabel> {
+        self.labels_seen_by(&self.doc.camera, self.hovered(), None)
+    }
+
+    /// The labels of an image of the model rendered from `camera` (its viewport the image size,
+    /// in pixels), as the window would draw them for that view: those of `hud_labels`, with
+    /// nothing hovered. With `frame`, the labels of that scene (the document's with some
+    /// instances moved, as a scene transition draws it) instead of the document's.
+    pub fn image_labels(
+        &self,
+        camera: &session::Camera,
+        frame: Option<&kernel::Scene>,
+    ) -> Vec<HudLabel> {
+        self.labels_seen_by(camera, None, frame)
+    }
+
+    /// `hud_labels` for `camera`, with `hovered` lit, of `frame` (default: the document's
+    /// scene).
+    pub(super) fn labels_seen_by(
+        &self,
+        camera: &session::Camera,
+        hovered: Option<EntityId>,
+        frame: Option<&kernel::Scene>,
+    ) -> Vec<HudLabel> {
         let layout = self.layout();
-        let scenery = scenery_in(&layout, &self.doc);
-        let to_root = self.doc.context_transform();
-        let camera = &self.doc.camera;
+        let (scenery, to_root) = match frame {
+            Some(scene) => (
+                Scenery::of(scene, self.doc.context())
+                    .expect("the open context exists")
+                    .section_display(self.doc.section_display),
+                scene
+                    .resolve(self.doc.context())
+                    .expect("the open context exists")
+                    .1,
+            ),
+            None => (scenery_in(&layout, &self.doc), self.doc.context_transform()),
+        };
         let units = self.doc.units();
         let selection = self.doc.selection();
-        let hovered = self.hovered();
         let mut out = Vec::new();
         for &(k, id, shape) in scenery.annotations() {
             let part = scenery.part(k);

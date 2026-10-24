@@ -474,12 +474,22 @@ impl Document {
 
     /// Runs one command. Each modeling command is one undo step; camera commands are not recorded.
     pub fn execute(&mut self, command: Command) -> Result<Outcome, CommandError> {
-        // The undo step of a library insert reads "insert" wherever it came from.
-        let label = match command {
-            Command::InsertLibraryItem { .. } => "insert".to_string(),
-            _ => command.name(),
-        };
+        let label = self.step_label(&command);
         self.execute_as(command, label)
+    }
+
+    /// The label of the undo step `command` makes: its name, except that a library insert reads
+    /// "insert" wherever it came from and going to a scene that stores positions (it moves
+    /// instances) says which scene.
+    pub fn step_label(&self, command: &Command) -> String {
+        match command {
+            Command::InsertLibraryItem { .. } => "insert".to_string(),
+            Command::GoToScene { scene } => match self.scene.page(*scene) {
+                Some(p) if p.positions.is_some() => format!("Go to scene {}", p.name),
+                _ => command.name(),
+            },
+            _ => command.name(),
+        }
     }
 
     /// Runs one command as `execute` does, its undo step (if it makes one) labelled `label`
@@ -781,6 +791,7 @@ impl Document {
             | Command::AddEdgeDimension { .. }
             | Command::AddRadialDimension { .. }
             | Command::AddNote { .. }
+            | Command::AddLabel { .. }
             | Command::AddScreenNote { .. }
             | Command::ChangeNote { .. }
             | Command::AddSectionPlane { .. }
@@ -803,10 +814,12 @@ impl Document {
             | Command::MakeGroup { .. }
             | Command::MakeComponent { .. }
             | Command::Explode { .. }
+            | Command::ExplodeView { .. }
             | Command::MakeUnique { .. }
             | Command::SetAxes { .. }
             | Command::ResetAxes {}
             | Command::SetLocation { .. }
+            | Command::SetSceneTransition { .. }
             | Command::Flip { .. }
             | Command::RenameDefinition { .. }
             | Command::PlaceInstance { .. }
@@ -978,6 +991,11 @@ impl Document {
                 position,
                 text,
             } => self.add_note_changes(*anchor, *position, text.clone()),
+            Command::AddLabel {
+                target,
+                text,
+                position,
+            } => self.add_label_changes(*target, text, *position),
             Command::AddScreenNote { at, text } => self.add_screen_note_changes(*at, text),
             Command::ChangeNote { note, text } => self.change_note_changes(*note, text.clone()),
             Command::AddSectionPlane {
@@ -1049,6 +1067,11 @@ impl Document {
             Command::MakeGroup { ids, name } => self.group_changes(ids, None, name.as_deref()),
             Command::MakeComponent { ids, name } => self.group_changes(ids, Some(name), None),
             Command::Explode { ids } => self.explode_changes(ids),
+            Command::ExplodeView {
+                ids,
+                factor,
+                center,
+            } => self.explode_view_changes(ids, *factor, *center),
             Command::SetAxes {
                 origin,
                 x_axis,
@@ -1061,6 +1084,9 @@ impl Document {
                 north_angle,
                 utc_offset,
             } => self.set_location_changes(*latitude, *longitude, *north_angle, *utc_offset),
+            Command::SetSceneTransition { on, seconds } => {
+                self.set_scene_transition_changes(*on, *seconds)
+            }
             Command::MakeUnique { ids } => self.make_unique_changes(ids.as_deref()),
             Command::Flip { ids, axis, frame } => self.flip_changes(ids.as_deref(), *axis, *frame),
             Command::RenameDefinition { definition, name } => {
@@ -1232,20 +1258,31 @@ impl Document {
             ),
             Command::DeleteTag { tag, move_to } => self.delete_tag_changes(*tag, *move_to),
             Command::SetTag { ids, tag } => self.set_tag_changes(ids, *tag),
-            Command::AddScene { name, camera, tags } => {
-                self.add_scene_changes(name.as_deref(), *camera, *tags)
-            }
+            Command::AddScene {
+                name,
+                camera,
+                tags,
+                positions,
+            } => self.add_scene_changes(name.as_deref(), *camera, *tags, positions.as_ref()),
             Command::UpdateScene {
                 scene,
                 camera,
                 tags,
-            } => self.update_scene_changes(*scene, *camera, *tags),
+                positions,
+            } => self.update_scene_changes(*scene, *camera, *tags, positions.as_ref()),
             Command::ChangeScene {
                 scene,
                 name,
                 camera,
                 tags,
-            } => self.change_scene_changes(*scene, name.as_deref(), *camera, *tags),
+                positions,
+            } => self.change_scene_changes(
+                *scene,
+                name.as_deref(),
+                *camera,
+                *tags,
+                positions.as_ref(),
+            ),
             Command::MoveScene { scene, index } => self.move_scene_changes(*scene, *index),
             Command::DeleteScene { scene } => self.delete_scene_changes(*scene),
             // Its view change is made here too, outside the returned change.
@@ -1824,6 +1861,76 @@ impl Document {
             );
             c.ops
                 .extend(m.transform_sections(&parts.sections, shift).ops);
+            Ok(c)
+        })
+        .map_err(|e| self.kernel_error(e, ids))
+    }
+
+    fn explode_view_changes(
+        &mut self,
+        ids: &[EntityId],
+        factor: f64,
+        center: Option<[f64; 3]>,
+    ) -> Result<SceneChange, CommandError> {
+        let invalid = |m: &str| CommandError::new(ErrorKind::InvalidInput, m);
+        if ids.is_empty() {
+            return Err(invalid("ids must list at least one instance"));
+        }
+        if !factor.is_finite() || !(-0.99..=100.0).contains(&factor) {
+            return Err(invalid("factor must be finite, from -0.99 to 100"));
+        }
+        if let Some(c) = center {
+            check_coordinates(&[c])?;
+        }
+        self.require_existing(ids)?;
+        let mut instances: Vec<(InstanceId, DVec3)> = Vec::new();
+        let mut union: Option<[DVec3; 2]> = None;
+        for id in ids {
+            let EntityId::Instance(i) = *id else {
+                return Err(invalid("ids must all be instances").with_ids(vec![*id]));
+            };
+            let Some([lo, hi]) = self.instance_box(i) else {
+                return Err(invalid(
+                    "the instance is empty: it has no box to move from the center",
+                )
+                .with_ids(vec![*id]));
+            };
+            union = Some(match union {
+                Some([ul, uh]) => [ul.min(lo), uh.max(hi)],
+                None => [lo, hi],
+            });
+            if !instances.iter().any(|(j, _)| *j == i) {
+                instances.push((i, (lo + hi) * 0.5));
+            }
+        }
+        let center = match (center, union) {
+            (Some(c), _) => DVec3::from(c),
+            (None, Some([lo, hi])) => (lo + hi) * 0.5,
+            (None, None) => DVec3::ZERO,
+        };
+        let moves: Vec<(InstanceId, DVec3)> = instances
+            .iter()
+            .map(|(i, c)| (*i, (*c - center) * factor))
+            .filter(|(_, d)| d.length_squared() > 0.0)
+            .collect();
+        if moves.is_empty() {
+            return Ok(SceneChange::default());
+        }
+        // Every instance must stay within the coordinate limit after its own move.
+        for (i, d) in &moves {
+            let one = Parts::of(&[EntityId::Instance(*i)]);
+            self.check_placed(
+                &BTreeSet::new(),
+                &one,
+                &[DAffine3::from_translation(*d)],
+                false,
+            )?;
+        }
+        self.edit_mesh(|m| {
+            let mut c = ChangeSet::default();
+            for (i, d) in &moves {
+                c.ops.extend(m.move_instances(&[*i], *d).ops);
+            }
             Ok(c)
         })
         .map_err(|e| self.kernel_error(e, ids))
@@ -2665,6 +2772,13 @@ impl Document {
             },
             Query::Units {} => QueryResult::Units(self.units),
             Query::Location {} => QueryResult::Location(self.scene.location().into()),
+            Query::SceneTransition {} => {
+                let t = self.scene.scene_transition();
+                QueryResult::SceneTransition(crate::query::SceneTransitionInfo {
+                    on: t.on,
+                    seconds: t.seconds,
+                })
+            }
             Query::Sun {} => QueryResult::Sun(self.sun().into()),
             Query::Library { folder } => {
                 QueryResult::Library(crate::library::list(std::path::Path::new(folder))?)

@@ -1,12 +1,14 @@
 //! Pages (saved scenes): a named, ordered list of stored views and tag visibilities, each
 //! gone back to in one click. A page may store a view, tag visibility, both or neither.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+use glam::DAffine3;
 
 use serde::{Deserialize, Serialize};
 
 use crate::edit::KernelError;
-use crate::ids::{PageId, StyleId, TagId};
+use crate::ids::{InstanceId, PageId, StyleId, TagId};
 use crate::scene::{Scene, SceneChange, Step};
 
 /// The longest page name, in characters.
@@ -135,12 +137,14 @@ impl Shadows {
 
 /// A saved scene. `view: None` leaves the camera and view settings alone when the page is gone
 /// to; `tags: None` leaves tag visibility alone. `tags` holds the tags hidden on the page
-/// (every other tag is shown).
+/// (every other tag is shown). `positions: None` leaves instances where they are; otherwise it
+/// holds the transform of each stored instance of the root.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Page {
     pub name: String,
     pub view: Option<PageView>,
     pub tags: Option<BTreeSet<TagId>>,
+    pub positions: Option<BTreeMap<InstanceId, DAffine3>>,
 }
 
 /// Fails, saying why, when a page name is blank or longer than [`MAX_PAGE_NAME`] characters.
@@ -263,6 +267,35 @@ impl Scene {
         SceneChange { steps }
     }
 
+    /// The steps that drop from every page the stored positions of instances that are no longer
+    /// instances of the root (erased, grouped or exploded), applied. A page left with none
+    /// stores no positions.
+    pub(crate) fn drop_stale_positions(&mut self) -> SceneChange {
+        let stale: Vec<(PageId, Page)> = self
+            .pages()
+            .filter(|(_, p)| {
+                p.positions
+                    .as_ref()
+                    .is_some_and(|m| m.keys().any(|i| self.root().instance(*i).is_none()))
+            })
+            .map(|(id, p)| (id, p.clone()))
+            .collect();
+        let mut steps = Vec::new();
+        for (id, from) in stale {
+            let mut to = from.clone();
+            if let Some(m) = &mut to.positions {
+                m.retain(|i, _| self.root().instance(*i).is_some());
+                if m.is_empty() {
+                    to.positions = None;
+                }
+            }
+            let step = Step::ChangePage(id, from, to);
+            self.apply_step(&step);
+            steps.push(step);
+        }
+        SceneChange { steps }
+    }
+
     fn check_page(&self, page: &Page, except: Option<PageId>) -> Result<(), KernelError> {
         check_name(&page.name).map_err(KernelError::Page)?;
         let taken = self
@@ -279,6 +312,17 @@ impl Scene {
         }
         if page.tags.iter().flatten().any(|t| self.tag(*t).is_none()) {
             return Err(KernelError::TagNotFound);
+        }
+        for (id, t) in page.positions.iter().flatten() {
+            if self.root().instance(*id).is_none() {
+                return Err(KernelError::Page(format!(
+                    "i{} is not an instance of the root: a scene stores only those",
+                    id.0
+                )));
+            }
+            if !t.is_finite() {
+                return Err(KernelError::NotFinite);
+            }
         }
         if page
             .view

@@ -244,6 +244,9 @@ pub enum UiAction {
     /// Start (true: from the current visibility) or stop storing tag visibility in a scene;
     /// the camera keeps what it stores.
     StoreSceneTags(PageId, bool),
+    /// Start (true: the selected instances of the root, or all of them when none is
+    /// selected) or stop storing instance positions in a scene.
+    StoreScenePositions(PageId, bool),
     RenameScene(PageId, String),
     /// Move a scene to this place in the order (0: first).
     MoveScene(PageId, usize),
@@ -345,6 +348,8 @@ pub enum UiAction {
     SetAutosave(u32),
     /// Set the model's display units (Settings' Model tab), as an undo step.
     SetUnits(Units),
+    /// The Model tab's scene transition (on and seconds): one undo step.
+    SetSceneTransition(kernel::SceneTransition),
     /// Choose the library folder in a dialog (Settings > Files, the Library tab).
     ChooseLibraryFolder,
     /// Forget the library folder.
@@ -490,6 +495,8 @@ pub struct SceneRow {
     pub camera: bool,
     /// Whether it stores which tags are hidden.
     pub tags: bool,
+    /// Whether it stores instance positions.
+    pub positions: bool,
     /// Whether it is the scene last added or gone to.
     pub selected: bool,
 }
@@ -709,6 +716,8 @@ pub struct SettingsView {
     pub autosave_minutes: u32,
     /// The model's display units (saved with the model, not in the preferences).
     pub units: Units,
+    /// How going to a scene animates (saved with the model).
+    pub transition: kernel::SceneTransition,
 }
 
 /// What the empty-model card lists; `View::start` is None when the card is hidden.

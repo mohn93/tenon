@@ -14,11 +14,14 @@ use render::Snapshotter;
 use render::print::{Printed, render_pdf};
 use session::print::PrintSpec;
 use session::{
-    BatchCommand, BatchError, Camera, Command, CommandError, Document, ErrorKind, Origin, Outcome,
+    BatchCommand, BatchError, Camera, Command, CommandError, Document, ErrorKind, Lighting, Origin,
+    Outcome,
 };
 use tools::Phase;
 
 use crate::editor::{DriveError, Driven, Editor, Stopped};
+use crate::feedback::HudLabel;
+use crate::image_labels::ImageLabels;
 use crate::recovery::{self, Session};
 
 /// How long a quitting app waits for its last replies to be written.
@@ -29,6 +32,8 @@ pub const CLOSE_WAIT: Duration = Duration::from_secs(2);
 pub struct Offscreen {
     snapshotter: Option<Snapshotter>,
     tried: bool,
+    /// Paints the labels of dimensions and notes onto images.
+    labels: ImageLabels,
 }
 
 impl Offscreen {
@@ -37,6 +42,7 @@ impl Offscreen {
         Offscreen {
             snapshotter: Some(snapshotter),
             tried: true,
+            labels: ImageLabels::default(),
         }
     }
 
@@ -46,6 +52,7 @@ impl Offscreen {
         Offscreen {
             snapshotter: None,
             tried: false,
+            labels: ImageLabels::default(),
         }
     }
 
@@ -55,6 +62,55 @@ impl Offscreen {
             self.snapshotter = Snapshotter::new_headless();
         }
         self.snapshotter.as_mut()
+    }
+
+    /// An image of the scene as `render::Snapshotter::capture` makes it, with `labels` (the
+    /// labels of dimensions and notes) painted over it. None without a GPU or when the
+    /// read-back fails (always on the web, where reading pixels back is not possible, so the
+    /// labels pass is never reached there).
+    #[allow(clippy::too_many_arguments)]
+    pub fn capture(
+        &mut self,
+        doc: &Document,
+        scene: Option<&kernel::Scene>,
+        labels: &[HudLabel],
+        camera: &Camera,
+        lighting: Lighting,
+        (width, height): (u32, u32),
+        label_scale: f32,
+    ) -> Option<Vec<u8>> {
+        self.get()?;
+        let Offscreen {
+            snapshotter,
+            labels: painter,
+            ..
+        } = self;
+        let snapshotter = snapshotter.as_mut()?;
+        let mut overlay = |device: &wgpu::Device,
+                           queue: &wgpu::Queue,
+                           view: &wgpu::TextureView,
+                           camera: &Camera| {
+            painter.paint(
+                device,
+                queue,
+                view,
+                render::snapshot::FORMAT,
+                camera,
+                lighting,
+                label_scale,
+                labels,
+            );
+        };
+        snapshotter.capture_over(
+            scene.unwrap_or_else(|| doc.scene()),
+            doc.context(),
+            doc.selection(),
+            camera,
+            lighting,
+            width,
+            height,
+            &mut overlay,
+        )
     }
 }
 
@@ -241,7 +297,12 @@ impl Host for AppHost<'_> {
         })
     }
 
-    fn render_view(&mut self, camera: &Camera, options: &RenderOptions) -> Option<Vec<u8>> {
+    fn render_view(
+        &mut self,
+        camera: &Camera,
+        options: &RenderOptions,
+        frame: Option<&kernel::Scene>,
+    ) -> Option<Vec<u8>> {
         let doc = self.editor.doc();
         let s = self.offscreen.get()?;
         s.set_color_by_tag(doc.color_by_tag);
@@ -255,17 +316,25 @@ impl Host for AppHost<'_> {
         s.set_transparent_background(options.transparent);
         s.set_pixels_per_point(options.supersample as f32);
         let (width, height) = options.drawn();
-        let pixels = s.capture(
-            doc.scene(),
-            doc.context(),
-            doc.selection(),
+        let mut seen = camera.clone();
+        seen.viewport = glam::DVec2::new(f64::from(width.max(1)), f64::from(height.max(1)));
+        let labels = self.editor.image_labels(&seen, frame);
+        // Text keeps its size in the averaged-down image.
+        let label_scale =
+            crate::image_labels::pixels_per_point(options.width) * options.supersample as f32;
+        let pixels = self.offscreen.capture(
+            doc,
+            frame,
+            &labels,
             camera,
             options.lighting,
-            width,
-            height,
+            (width, height),
+            label_scale,
         );
-        s.set_transparent_background(false);
-        s.set_pixels_per_point(1.0);
+        if let Some(s) = self.offscreen.get() {
+            s.set_transparent_background(false);
+            s.set_pixels_per_point(1.0);
+        }
         pixels
     }
 
@@ -606,6 +675,7 @@ mod tests {
         let mut offscreen = Offscreen {
             snapshotter: None,
             tried: true,
+            labels: ImageLabels::default(),
         };
         let mut quit = false;
         let mut host = AppHost {
@@ -1268,5 +1338,204 @@ mod tests {
             dir.join("untitled-1700000000.skr")
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The image `render_view` makes of `e`'s model from its own camera, None without a GPU.
+    fn image(e: &mut Editor) -> Option<Vec<u8>> {
+        image_of(e, 400, 300, 1)
+    }
+
+    /// `image` at `width` x `height`, drawn `supersample` times larger and averaged down as
+    /// `render_view` does.
+    fn image_of(e: &mut Editor, width: u32, height: u32, supersample: u32) -> Option<Vec<u8>> {
+        let (mut offscreen, mut quit) = (Offscreen::headless(), false);
+        let mut host = AppHost {
+            editor: e,
+            offscreen: &mut offscreen,
+            quit: &mut quit,
+            roots: &ApiRoots::default(),
+            recovery: None,
+            session: None,
+        };
+        let camera = host.editor.doc().camera.clone();
+        let mut options = RenderOptions::of(host.editor.doc(), width, height);
+        options.lighting = Lighting::Day;
+        options.supersample = supersample;
+        let rgba = host.render_view(&camera, &options, None)?;
+        Some(if supersample > 1 {
+            render::snapshot::box_downsample(&rgba, width, height, supersample)
+        } else {
+            rgba
+        })
+    }
+
+    /// The height in pixels of the rows where `width`-wide images `a` and `b` differ.
+    fn differing_rows(a: &[u8], b: &[u8], width: usize) -> usize {
+        let rows: Vec<usize> = a
+            .chunks(width * 4)
+            .zip(b.chunks(width * 4))
+            .enumerate()
+            .filter(|(_, (ra, rb))| ra != rb)
+            .map(|(y, _)| y)
+            .collect();
+        match (rows.first(), rows.last()) {
+            (Some(lo), Some(hi)) => hi - lo + 1,
+            _ => 0,
+        }
+    }
+
+    /// How many pixels of 400 x 300 images `a` and `b` differ in, within `r` pixels of `at`.
+    fn differing_near(a: &[u8], b: &[u8], at: glam::DVec2, r: f64) -> usize {
+        (0..300usize)
+            .flat_map(|y| (0..400usize).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                let near = (x as f64 - at.x).abs() <= r && (y as f64 - at.y).abs() <= r;
+                near && a[(y * 400 + x) * 4..][..4] != b[(y * 400 + x) * 4..][..4]
+            })
+            .count()
+    }
+
+    fn annotated_editor() -> Editor {
+        let mut e = Editor::new(DVec2::new(400.0, 300.0), 1.0);
+        e.execute(Command::AddRectangle {
+            corner: [0.0, 0.0, 0.0],
+            opposite: [2.0, 2.0, 0.0],
+            normal: None,
+        })
+        .unwrap();
+        e
+    }
+
+    fn created(e: &mut Editor, command: Command) -> kernel::EntityId {
+        e.execute(command).unwrap().changes.created[0]
+    }
+
+    /// Where `p` is in a 400 x 300 image of `e`'s view.
+    fn projected(e: &Editor, p: [f64; 3]) -> glam::DVec2 {
+        let mut camera = e.doc().camera.clone();
+        camera.viewport = DVec2::new(400.0, 300.0);
+        camera.project(DVec3::from(p)).unwrap()
+    }
+
+    /// Adds `command`'s annotation, then hides it by putting it on a hidden tag.
+    fn check_label_shows_and_hides(command: Command, label_at: [f64; 3]) {
+        let mut e = annotated_editor();
+        let Some(bare) = image(&mut e) else { return };
+        let id = created(&mut e, command);
+        let shown = image(&mut e).unwrap();
+        let at = projected(&e, label_at);
+        assert!(
+            differing_near(&bare, &shown, at, 40.0) > 30,
+            "the label is drawn near {at}"
+        );
+        let out = e
+            .execute(Command::AddTag {
+                name: None,
+                color: None,
+            })
+            .unwrap();
+        let tag = out.changes.tags[0];
+        e.execute(Command::SetTag {
+            ids: vec![id],
+            tag: Some(tag),
+        })
+        .unwrap();
+        e.execute(Command::ChangeTag {
+            tag,
+            name: None,
+            color: None,
+            visible: Some(false),
+        })
+        .unwrap();
+        let hidden = image(&mut e).unwrap();
+        assert_eq!(hidden, bare, "a note on a hidden tag is not drawn");
+    }
+
+    #[test]
+    fn a_leader_note_is_in_rendered_images_unless_hidden() {
+        check_label_shows_and_hides(
+            Command::AddNote {
+                anchor: session::AnchorInput::Point([1.0, 1.0, 0.0]),
+                position: [1.0, -1.0, 1.0],
+                text: Some("Window".into()),
+            },
+            [1.0, -1.0, 1.0],
+        );
+    }
+
+    #[test]
+    fn a_dimension_is_in_rendered_images_unless_hidden() {
+        let point = |p: [f64; 3]| session::AnchorInput::Point(p);
+        check_label_shows_and_hides(
+            Command::AddDimension {
+                a: point([0.0, 0.0, 0.0]),
+                b: point([2.0, 0.0, 0.0]),
+                offset: [0.0, -1.0, 0.0],
+            },
+            [1.0, -1.0, 0.0],
+        );
+    }
+
+    #[test]
+    fn a_screen_note_is_in_rendered_images() {
+        let mut e = annotated_editor();
+        let Some(bare) = image(&mut e) else { return };
+        created(
+            &mut e,
+            Command::AddScreenNote {
+                at: [0.25, 0.5],
+                text: "Plan".into(),
+            },
+        );
+        let shown = image(&mut e).unwrap();
+        assert!(differing_near(&bare, &shown, glam::DVec2::new(115.0, 160.0), 40.0) > 30);
+    }
+
+    #[test]
+    fn the_label_pass_changes_only_the_pixels_near_its_labels() {
+        let mut e = annotated_editor();
+        let Some(bare) = image(&mut e) else { return };
+        created(
+            &mut e,
+            Command::AddScreenNote {
+                at: [0.25, 0.5],
+                text: "Plan".into(),
+            },
+        );
+        // A real label pass (not skipped for want of labels).
+        let shown = image(&mut e).unwrap();
+        let at = glam::DVec2::new(115.0, 160.0);
+        let near = differing_near(&bare, &shown, at, 60.0);
+        assert!(near > 30, "the label is drawn");
+        let everywhere = differing_near(&bare, &shown, at, 1000.0);
+        assert_eq!(everywhere, near, "nothing else in the image changed");
+    }
+
+    #[test]
+    fn label_text_scales_above_2000_pixels_wide_and_keeps_its_size_when_supersampled() {
+        let mut e = annotated_editor();
+        e.execute(Command::AddScreenNote {
+            at: [0.1, 0.3],
+            text: "Plan".into(),
+        })
+        .unwrap();
+        let mut bare = annotated_editor();
+        let rows = |e: &mut Editor, b: &mut Editor, w: u32, h: u32, k: u32| {
+            let shown = image_of(e, w, h, k)?;
+            let plain = image_of(b, w, h, k)?;
+            Some(differing_rows(&plain, &shown, w as usize))
+        };
+        let Some(small) = rows(&mut e, &mut bare, 400, 100, 1) else {
+            return;
+        };
+        assert!(small > 5, "the label is drawn: {small} rows");
+        // 2400 wide: 2.4 pixels per point.
+        let large = rows(&mut e, &mut bare, 2400, 100, 1).unwrap();
+        let ratio = large as f64 / small as f64;
+        assert!((2.0..2.9).contains(&ratio), "{large} vs {small} rows");
+        // Supersampled twice: drawn at twice the size, the same size once averaged down.
+        let sampled = rows(&mut e, &mut bare, 400, 100, 2).unwrap();
+        let ratio = sampled as f64 / small as f64;
+        assert!((0.8..1.25).contains(&ratio), "{sampled} vs {small} rows");
     }
 }

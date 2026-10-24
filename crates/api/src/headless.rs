@@ -81,7 +81,12 @@ impl Host for HeadlessHost {
         render_pdf(snapshotter, &self.doc, spec)
     }
 
-    fn render_view(&mut self, camera: &Camera, options: &RenderOptions) -> Option<Vec<u8>> {
+    fn render_view(
+        &mut self,
+        camera: &Camera,
+        options: &RenderOptions,
+        frame: Option<&kernel::Scene>,
+    ) -> Option<Vec<u8>> {
         self.check_gpu();
         let doc = &self.doc;
         self.snapshotter.as_mut().and_then(|s| {
@@ -97,7 +102,7 @@ impl Host for HeadlessHost {
             s.set_pixels_per_point(options.supersample as f32);
             let (width, height) = options.drawn();
             let pixels = s.capture(
-                doc.scene(),
+                frame.unwrap_or_else(|| doc.scene()),
                 doc.context(),
                 doc.selection(),
                 camera,

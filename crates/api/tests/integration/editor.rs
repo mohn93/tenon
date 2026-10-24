@@ -69,7 +69,12 @@ impl Host for Editing {
         self.inner.execute_batch(commands, atomic)
     }
 
-    fn render_view(&mut self, _: &Camera, _: &api::RenderOptions) -> Option<Vec<u8>> {
+    fn render_view(
+        &mut self,
+        _: &Camera,
+        _: &api::RenderOptions,
+        _: Option<&kernel::Scene>,
+    ) -> Option<Vec<u8>> {
         None
     }
 
