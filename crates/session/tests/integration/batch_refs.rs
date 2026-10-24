@@ -244,6 +244,7 @@ fn reference_keys_cover_every_id_field() {
                     (key.as_str(), name),
                     ("path", "open_path" | "follow_me" | "copy_along_path")
                         | ("target" | "tools", "solid_subtract" | "solid_trim")
+                        | ("instance" | "edges", "chamfer_edges")
                         | ("a" | "b", "add_dimension" | "solid_split")
                         | ("edge", "add_edge_dimension" | "add_radial_dimension")
                         | ("anchor", "add_note")

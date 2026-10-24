@@ -947,6 +947,24 @@ pub enum Command {
     /// them) are dropped. A single solid with a void inside becomes the solid without it.
     /// Placed and erased as `solid_union`.
     OuterShell { ids: Vec<EntityId> },
+    /// Chamfer straight edges of a solid, as one undo step: each edge in `edges` becomes a
+    /// flat face set back `distance` meters (more than 0.000001, measured in the edited mesh's
+    /// own coordinates) on both faces beside it. A convex edge loses material, a concave one
+    /// gains it. Without `instance`, `edges` are edges of the open context, whose own faces
+    /// (nested groups and components aside) must be a solid: open the group first. With
+    /// `instance` (a group or component of the open context, a solid), `edges` are edges of
+    /// its definition, which is edited (a component's other instances change too). Each edge
+    /// must be straight (not part of a curve), lie between two flat faces (no face on a
+    /// smoothed surface) at least 1 degree apart, and the setback line must stay inside both
+    /// faces along the whole edge. Chamfers meeting at a corner overlap and close it; at an
+    /// end with no other chosen edge the cut stops at the face there. Faces and edges the
+    /// cut does not touch keep their ids.
+    ChamferEdges {
+        #[serde(default)]
+        instance: Option<EntityId>,
+        edges: Vec<EntityId>,
+        distance: f64,
+    },
     /// Move, turn and scale the texture on faces of the open context, as one undo step: on
     /// top of the projection, `offset` [u, v] in meters, `rotation_deg` counter-clockwise
     /// seen from the face's front (or `rotate_by`: that many degrees more than each face's

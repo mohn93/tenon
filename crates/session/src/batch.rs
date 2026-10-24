@@ -316,7 +316,7 @@ impl From<Command> for BatchCommand {
 }
 
 /// The top-level fields where references are recognised; `path` only in `open_path`,
-/// `follow_me` and `copy_along_path`, `target` and `tools` only in `solid_subtract` and `solid_trim`, `a` and `b` also in `solid_split`, and the anchors, edges and notes of the annotation commands only there.
+/// `follow_me` and `copy_along_path`, `target` and `tools` only in `solid_subtract` and `solid_trim`, `a` and `b` also in `solid_split`, `instance` and `edges` only in `chamfer_edges`, and the anchors, edges and notes of the annotation commands only there.
 fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
     matches!(key, "ids" | "face" | "id" | "material")
         || matches!(
@@ -325,6 +325,7 @@ fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
                 | ("definition", Some("rename_definition" | "place_instance"))
                 | ("path", Some("open_path" | "follow_me" | "copy_along_path"))
                 | ("target" | "tools", Some("solid_subtract" | "solid_trim"))
+                | ("instance" | "edges", Some("chamfer_edges"))
                 | ("a" | "b", Some("add_dimension" | "solid_split"))
                 | ("edge", Some("add_edge_dimension" | "add_radial_dimension"))
                 | ("anchor", Some("add_note"))
@@ -456,7 +457,7 @@ impl BatchCommand {
             let result = match slot {
                 Slot::List(ids) => self.resolve_list(ids, done, context),
                 // The elements of a path are instances of nested contexts, not of the open one:
-                // `open_path` checks them.
+                // `open_path` checks them (as `chamfer_edges` checks a definition's edges).
                 Slot::Path(ids) => self.resolve_list(ids, done, &AnyContext),
                 Slot::One(id) => self.resolve_one(id, done, context),
                 Slot::Material(m) => self.resolve_material(m, done),
@@ -655,7 +656,8 @@ fn is_stand_in_ref(r: &LibraryRef) -> bool {
 /// An id field of a command.
 enum Slot<'a> {
     List(&'a mut Vec<EntityId>),
-    /// The instance path of `open_path`.
+    /// Ids outside the open context, which the command checks: the instance path of
+    /// `open_path`, the definition edges of `chamfer_edges` with `instance`.
     Path(&'a mut Vec<EntityId>),
     One(&'a mut EntityId),
     Material(&'a mut MaterialId),
@@ -738,6 +740,17 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
             f(Slot::One(a));
             f(Slot::One(b));
         }
+        Command::ChamferEdges {
+            instance, edges, ..
+        } => match instance {
+            Some(instance) => {
+                f(Slot::One(instance));
+                // Edges of the instance's definition, not of the open context: the command
+                // checks them.
+                f(Slot::Path(edges));
+            }
+            None => f(Slot::List(edges)),
+        },
         Command::CopyAlongPath { ids, path, .. } => {
             f(Slot::List(ids));
             f(Slot::List(path));

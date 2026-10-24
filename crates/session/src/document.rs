@@ -35,6 +35,7 @@ mod clip;
 mod copy_along_path;
 mod elsewhere;
 mod files;
+mod fillet;
 mod flip;
 mod follow_me;
 mod groups;
@@ -844,6 +845,7 @@ impl Document {
             | Command::SolidTrim { .. }
             | Command::SolidSplit { .. }
             | Command::OuterShell { .. }
+            | Command::ChamferEdges { .. }
             | Command::PositionTexture { .. }
             | Command::Import { .. }
             | Command::Paste { .. }
@@ -1260,6 +1262,11 @@ impl Document {
             Command::SolidTrim { target, tools } => self.solid_trim_changes(*target, tools),
             Command::SolidSplit { a, b } => self.solid_split_changes(*a, *b),
             Command::OuterShell { ids } => self.outer_shell_changes(ids),
+            Command::ChamferEdges {
+                instance,
+                edges,
+                distance,
+            } => self.chamfer_edges_changes(*instance, edges, *distance),
             Command::SolidIntersect { ids } => {
                 self.solid_all_changes(kernel::boolean::BooleanOp::Intersect, ids)
             }
