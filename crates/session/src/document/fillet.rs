@@ -1,10 +1,10 @@
-//! `chamfer_edges`: bevelling the straight edges of a solid, in the open context's own
-//! geometry or in an instance's definition.
+//! `chamfer_edges` and `fillet_edges`: bevelling or rounding the straight edges of a solid, in
+//! the open context's own geometry or in an instance's definition.
 
 use std::collections::BTreeSet;
 
 use kernel::boolean::{BooleanError, NOT_CLOSED, TOO_MUCH};
-use kernel::fillet::{BevelError, MIN_SIZE, Profile};
+use kernel::fillet::{BevelError, DEFAULT_SEGMENTS, MAX_SEGMENTS, MIN_SIZE, Profile};
 use kernel::solid::instance_volume;
 use kernel::{EdgeId, EntityId, MeshId, SceneChange};
 
@@ -27,6 +27,25 @@ impl Document {
             return Err(invalid(format!("distance must be more than {MIN_SIZE} m")));
         }
         self.bevel_changes(instance, edges, Profile::Chamfer { distance })
+    }
+
+    /// `fillet_edges`: as `chamfer_edges`, rounding with `radius` in `segments` (default 8)
+    /// faces per quarter turn.
+    pub(super) fn fillet_edges_changes(
+        &mut self,
+        instance: Option<EntityId>,
+        edges: &[EntityId],
+        radius: f64,
+        segments: Option<u32>,
+    ) -> Result<SceneChange, CommandError> {
+        if !(radius.is_finite() && radius > MIN_SIZE) {
+            return Err(invalid(format!("radius must be more than {MIN_SIZE} m")));
+        }
+        let segments = segments.unwrap_or(DEFAULT_SEGMENTS);
+        if !(1..=MAX_SEGMENTS).contains(&segments) {
+            return Err(invalid(format!("segments must be 1 to {MAX_SEGMENTS}")));
+        }
+        self.bevel_changes(instance, edges, Profile::Fillet { radius, segments })
     }
 
     /// Bevels `edges` (see `chamfer_edges`) with `profile`; on an error nothing changes.

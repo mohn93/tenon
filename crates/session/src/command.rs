@@ -965,6 +965,22 @@ pub enum Command {
         edges: Vec<EntityId>,
         distance: f64,
     },
+    /// Round straight edges of a solid, as one undo step: each edge in `edges` becomes an arc
+    /// of `radius` meters (more than 0.000001, in the edited mesh's own coordinates) tangent to
+    /// both faces beside it, made of `segments` faces per quarter turn (default 8, 1 to 90; in
+    /// proportion for other angles, at least 1) whose edges, and the edges where the round
+    /// meets the flat faces, are soft. The round touches each face `radius / tan(angle / 2)`
+    /// from the edge, `angle` the angle between the faces inside the solid (for a concave
+    /// edge, outside it). Everything else is as `chamfer_edges`, with that setback in place of
+    /// the distance.
+    FilletEdges {
+        #[serde(default)]
+        instance: Option<EntityId>,
+        edges: Vec<EntityId>,
+        radius: f64,
+        #[serde(default)]
+        segments: Option<u32>,
+    },
     /// Move, turn and scale the texture on faces of the open context, as one undo step: on
     /// top of the projection, `offset` [u, v] in meters, `rotation_deg` counter-clockwise
     /// seen from the face's front (or `rotate_by`: that many degrees more than each face's

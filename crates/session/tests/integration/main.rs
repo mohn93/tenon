@@ -16,6 +16,7 @@ mod curves;
 mod drawing;
 mod export;
 mod files;
+mod fillet;
 mod follow_me;
 mod groups;
 mod guides;

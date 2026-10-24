@@ -846,6 +846,7 @@ impl Document {
             | Command::SolidSplit { .. }
             | Command::OuterShell { .. }
             | Command::ChamferEdges { .. }
+            | Command::FilletEdges { .. }
             | Command::PositionTexture { .. }
             | Command::Import { .. }
             | Command::Paste { .. }
@@ -1267,6 +1268,12 @@ impl Document {
                 edges,
                 distance,
             } => self.chamfer_edges_changes(*instance, edges, *distance),
+            Command::FilletEdges {
+                instance,
+                edges,
+                radius,
+                segments,
+            } => self.fillet_edges_changes(*instance, edges, *radius, *segments),
             Command::SolidIntersect { ids } => {
                 self.solid_all_changes(kernel::boolean::BooleanOp::Intersect, ids)
             }

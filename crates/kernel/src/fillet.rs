@@ -1,16 +1,17 @@
-//! Chamfers of straight edges of a solid.
+//! Chamfers and fillets of straight edges of a solid.
 //!
 //! Each chosen edge lies between two flat faces. Along it a prism is built whose cross-section
-//! is the region between the two faces and the chamfer line, reaching a little past both faces
-//! so the boolean cuts them cleanly: a convex edge's prism (a cutter) is subtracted, a concave
-//! edge's (a filler) is added, with the boolean core of `boolean.rs`. At an end shared with
-//! another chosen convex edge where running on leaves the solid, a cutter runs on past the end
-//! (meeting cutters overlap and leave a closed corner); elsewhere the prism ends in the plane
-//! of the face at that end, so no neighbouring face is notched. The fillers' own regions are
-//! taken out of the cutters, so a chamfer never removes what a cove beside it adds; a cove
-//! whose two faces are both cut away at an end stops short there. The new faces take the
-//! first face's materials. The result replaces the mesh's own geometry; faces and edges the
-//! cut did not touch keep their ids.
+//! is the region between the two faces and the chamfer line or fillet arc, reaching a little
+//! past both faces so the boolean cuts them cleanly: a convex edge's prism (a cutter) is
+//! subtracted, a concave edge's (a filler) is added, with the boolean core of `boolean.rs`. At
+//! an end shared with another chosen convex edge where running on leaves the solid, a cutter
+//! runs on past the end (meeting cutters overlap and leave a closed corner); elsewhere the
+//! prism ends in the plane of the face at that end, so no neighbouring face is notched. The
+//! fillers' own regions are taken out of the cutters, so a chamfer never removes what a cove
+//! beside it adds; a cove whose two faces are both cut away at an end stops short there. The
+//! new faces take the first face's materials; the edges along a fillet (between its faces and
+//! where it meets the flat faces) are soft, so it is shaded as one smooth round. The result
+//! replaces the mesh's own geometry; faces and edges the cut did not touch keep their ids.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
@@ -24,25 +25,32 @@ use crate::model::{Face, Model};
 use crate::scene::{MeshId, Scene, SceneChange};
 use crate::solid::{open_reason, signed_volume};
 
-/// The smallest chamfer distance, in meters.
+/// The smallest chamfer distance or fillet radius, in meters.
 pub const MIN_SIZE: f64 = 1e-6;
 /// The most edges one command bevels.
 pub const MAX_EDGES: usize = 1000;
 /// Faces whose normals are closer than this (degrees) are tangent: no edge to bevel.
 pub const MIN_ANGLE_DEG: f64 = 1.0;
+/// A fillet's faces per quarter turn by default, and the most allowed.
+pub const DEFAULT_SEGMENTS: u32 = 8;
+pub const MAX_SEGMENTS: u32 = 90;
 
 /// The shape left where an edge was.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Profile {
     /// A flat face set back `distance` on both faces.
     Chamfer { distance: f64 },
+    /// A round of `radius` tangent to both faces, made of `segments` faces per quarter turn
+    /// (in proportion for other angles, at least 1).
+    Fillet { radius: f64, segments: u32 },
 }
 
 impl Profile {
-    /// How far the cut reaches into each face.
+    /// The distance or radius.
     fn size(self) -> f64 {
         match self {
             Profile::Chamfer { distance } => distance,
+            Profile::Fillet { radius, .. } => radius,
         }
     }
 
@@ -50,43 +58,76 @@ impl Profile {
     fn noun(self) -> &'static str {
         match self {
             Profile::Chamfer { .. } => "distance",
+            Profile::Fillet { .. } => "radius",
+        }
+    }
+
+    /// How far the cut reaches into each face from an edge whose faces' inward directions are
+    /// `angle` (radians) apart.
+    fn setback(self, angle: f64) -> f64 {
+        match self {
+            Profile::Chamfer { distance } => distance,
+            Profile::Fillet { radius, .. } => radius / (angle / 2.0).tan(),
+        }
+    }
+
+    /// The new surface's cross-section, from the point on the first face to the point on the
+    /// second, as offsets from a point on the edge: the chamfer line, or the fillet's arc
+    /// (tangent to both faces) as a polyline with its corners on the arc.
+    fn profile(self, cut: &EdgeCut) -> Vec<DVec3> {
+        let s = cut.setback;
+        let (p1, p2) = (cut.d1 * s, cut.d2 * s);
+        match self {
+            Profile::Chamfer { .. } => vec![p1, p2],
+            Profile::Fillet { radius, segments } => {
+                let angle = cut.d1.dot(cut.d2).clamp(-1.0, 1.0).acos();
+                let centre = (cut.d1 + cut.d2).normalize() * (radius / (angle / 2.0).sin());
+                let (w1, w2) = ((p1 - centre) / radius, (p2 - centre) / radius);
+                let turn = std::f64::consts::PI - angle;
+                let steps = arc_steps(segments, turn);
+                let across = (w2 - w1 * turn.cos()).normalize();
+                let mut points = vec![p1];
+                for k in 1..steps {
+                    let t = turn * k as f64 / steps as f64;
+                    points.push(centre + (w1 * t.cos() + across * t.sin()) * radius);
+                }
+                points.push(p2);
+                points
+            }
         }
     }
 
     /// The region between the two faces and the profile alone, as offsets from a point on the
     /// edge, in order around it: what a filler adds or a cutter removes.
     fn core(self, cut: &EdgeCut) -> Vec<DVec3> {
-        let s = self.size();
-        match self {
-            Profile::Chamfer { .. } => vec![DVec3::ZERO, cut.d1 * s, cut.d2 * s],
-        }
-    }
-
-    /// The sides of `section` (side i joins points i and i + 1) that make the new surface.
-    fn surface(self) -> std::ops::Range<usize> {
-        match self {
-            Profile::Chamfer { .. } => 0..1,
-        }
+        std::iter::once(DVec3::ZERO)
+            .chain(self.profile(cut))
+            .collect()
     }
 
     /// The prism's cross-section around `cut`, as offsets from a point on the edge (all
     /// perpendicular to it): the region between the faces and the profile, widened past both
     /// faces away from the material it does not change (outward for a cutter, inward for a
-    /// filler) so none of its faces lies in a face of the solid.
+    /// filler) so none of its faces lies in a face of the solid. Its first sides (side i joins
+    /// points i and i + 1), as many as the profile has, make the new surface.
     fn section(self, cut: &EdgeCut) -> Vec<DVec3> {
-        let s = self.size();
+        let s = cut.setback;
         let reach = if cut.convex { s } else { -s };
-        let (p1, p2) = (cut.d1 * s, cut.d2 * s);
-        match self {
-            Profile::Chamfer { .. } => vec![
-                p1,
-                p2,
-                p2 + cut.n2 * reach,
-                (cut.n1 + cut.n2) * reach,
-                p1 + cut.n1 * reach,
-            ],
-        }
+        let mut points = self.profile(cut);
+        let (p1, p2) = (points[0], points[points.len() - 1]);
+        points.extend([
+            p2 + cut.n2 * reach,
+            (cut.n1 + cut.n2) * reach,
+            p1 + cut.n1 * reach,
+        ]);
+        points
     }
+}
+
+/// The faces of a fillet of `segments` per quarter turn around `turn` radians: in
+/// proportion, at least 1.
+fn arc_steps(segments: u32, turn: f64) -> usize {
+    ((segments as f64 * turn / std::f64::consts::FRAC_PI_2).round() as usize).max(1)
 }
 
 /// Why edges could not be bevelled.
@@ -172,6 +213,8 @@ struct EdgeCut {
     d2: DVec3,
     /// The solid's angle at the edge is under 180 degrees: material is removed.
     convex: bool,
+    /// How far the cut reaches into each face.
+    setback: f64,
     ends: [End; 2],
 }
 
@@ -184,6 +227,13 @@ pub fn bevelled(m: &Model, edges: &[EdgeId], profile: Profile) -> Result<Model, 
     if !(size.is_finite() && size > MIN_SIZE) {
         return Err(BevelError::Invalid(format!(
             "{noun} must be more than {MIN_SIZE} m"
+        )));
+    }
+    if let Profile::Fillet { segments, .. } = profile
+        && !(1..=MAX_SEGMENTS).contains(&segments)
+    {
+        return Err(BevelError::Invalid(format!(
+            "segments must be 1 to {MAX_SEGMENTS}"
         )));
     }
     if edges.len() > MAX_EDGES {
@@ -216,7 +266,7 @@ pub fn bevelled(m: &Model, edges: &[EdgeId], profile: Profile) -> Result<Model, 
                 format!("e{} is not an edge of the solid", e.0),
             ));
         }
-        let cut = analyze(m, *e, outward, size, noun).map_err(|why| BevelError::Edge(*e, why))?;
+        let cut = analyze(m, *e, outward, profile).map_err(|why| BevelError::Edge(*e, why))?;
         if cut.convex {
             for v in [cut.va, cut.vb] {
                 *convex_ends.entry(v).or_default() += 1;
@@ -228,14 +278,19 @@ pub fn bevelled(m: &Model, edges: &[EdgeId], profile: Profile) -> Result<Model, 
     let mut cutters = Vec::new();
     let mut fillers = Vec::new();
     let mut cores = Vec::new();
+    let mut rounds = Vec::new();
     for (e, mut cut) in cuts {
         let at = Corner {
             run_on: &|v| convex_ends.get(&v).copied().unwrap_or(0) > 1,
             cut: &|v, f| cut_faces.get(&v).is_some_and(|fs| fs.contains(&f)),
         };
-        close_ends(m, &mut cut, e, outward, size, &at).map_err(|why| BevelError::Edge(e, why))?;
+        close_ends(m, &mut cut, e, outward, &at).map_err(|why| BevelError::Edge(e, why))?;
         let too_large = || BevelError::Edge(e, format!("{noun} too large for edge e{}", e.0));
-        let tool = prism(&cut, &profile.section(&cut), profile.surface()).ok_or_else(too_large)?;
+        let sides = profile.profile(&cut).len() - 1;
+        let tool = prism(&cut, &profile.section(&cut), 0..sides).ok_or_else(too_large)?;
+        if let Profile::Fillet { .. } = profile {
+            rounds.push(Round::of(&cut, &tool, &profile.profile(&cut)));
+        }
         if cut.convex {
             cutters.push(tool);
         } else {
@@ -267,7 +322,97 @@ pub fn bevelled(m: &Model, edges: &[EdgeId], profile: Profile) -> Result<Model, 
             acc = combine(&acc, &tool, op)?.ok_or(BooleanError::NotClosed)?;
         }
     }
+    soften_rounds(&mut acc, &rounds);
     Ok(acc)
+}
+
+/// Where a fillet's surface lies, to soften the edges along it.
+struct Round {
+    /// A point on the edge and the edge's direction.
+    a: DVec3,
+    u: DVec3,
+    /// The profile's corners, as offsets from `a`: the lines through them along `u` hold
+    /// the fillet's edges.
+    corners: Vec<DVec3>,
+    /// The prism's extent along `u` from `a`.
+    span: (f64, f64),
+    /// The largest angle (radians) between two faces meeting along the fillet: one step of
+    /// the arc.
+    step: f64,
+    /// The prism's bounds.
+    bounds: (DVec3, DVec3),
+}
+
+impl Round {
+    fn of(cut: &EdgeCut, tool: &Model, profile: &[DVec3]) -> Round {
+        let (lo, hi) =
+            tool.vertices()
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), (_, v)| {
+                    let t = (v.pos - cut.a).dot(cut.u);
+                    (lo.min(t), hi.max(t))
+                });
+        let turn = cut.n1.angle_between(cut.n2);
+        Round {
+            a: cut.a,
+            u: cut.u,
+            corners: profile.to_vec(),
+            span: (lo, hi),
+            step: turn / (profile.len() - 1) as f64,
+            bounds: bounds(tool),
+        }
+    }
+
+    /// Whether the segment p-q lies along the fillet, on one of its lines.
+    fn holds(&self, p: DVec3, q: DVec3) -> bool {
+        let (lo, hi) = self.bounds;
+        let inside = |x: DVec3| x.cmpge(lo).all() && x.cmple(hi).all();
+        if !(inside(p) && inside(q)) {
+            return false;
+        }
+        let on = |x: DVec3, c: DVec3| {
+            let r = x - self.a;
+            let t = r.dot(self.u);
+            t >= self.span.0 - LENGTH_TOL
+                && t <= self.span.1 + LENGTH_TOL
+                && (r - self.u * t - c).length() < LENGTH_TOL
+        };
+        self.corners.iter().any(|c| on(p, *c) && on(q, *c))
+    }
+}
+
+/// Softens the edges of `m` along the fillets `rounds` (between two of a fillet's faces, or
+/// where a fillet meets a flat face tangent to it), so each reads as one smooth round.
+fn soften_rounds(m: &mut Model, rounds: &[Round]) {
+    if rounds.is_empty() {
+        return;
+    }
+    let mut soft = Vec::new();
+    for (id, e) in m.edges() {
+        if e.soft {
+            continue;
+        }
+        let [a, b] = e.v;
+        let (p, q) = (m.pos(a), m.pos(b));
+        let [f, g] = m.faces_on_side(a, b)[..] else {
+            continue;
+        };
+        let (nf, ng) = (
+            m.face(f).expect("face").normal,
+            m.face(g).expect("face").normal,
+        );
+        let angle = nf.angle_between(ng);
+        if angle > 1e-9
+            && rounds
+                .iter()
+                .any(|r| angle <= r.step + 1e-6 && r.holds(p, q))
+        {
+            soft.push((id, e.curve, e.polygon));
+        }
+    }
+    for (id, curve, polygon) in soft {
+        m.set_edge(id, curve, true, polygon);
+    }
+    m.take_changes();
 }
 
 /// The bounding box of `m`'s vertices, grown by `LENGTH_TOL`.
@@ -279,10 +424,10 @@ fn bounds(m: &Model) -> (DVec3, DVec3) {
     )
 }
 
-/// The geometry of edge `id` for a cut reaching `size` into its faces, or why it cannot be
+/// The geometry of edge `id` for a cut by `profile`, or why it cannot be
 /// bevelled; its ends are left to `close_ends`. `outward` is 1 when the faces of `m` point
 /// out, -1 when in.
-fn analyze(m: &Model, id: EdgeId, outward: f64, size: f64, noun: &str) -> Result<EdgeCut, String> {
+fn analyze(m: &Model, id: EdgeId, outward: f64, profile: Profile) -> Result<EdgeCut, String> {
     let name = format!("edge e{}", id.0);
     let edge = m.edge(id).expect("checked");
     if edge.curve.is_some() && !edge.polygon {
@@ -324,7 +469,12 @@ fn analyze(m: &Model, id: EdgeId, outward: f64, size: f64, noun: &str) -> Result
     };
     let (d1, d2) = (into(face1), into(face2));
     let convex = d2.dot(n1) < 0.0;
+    let size = profile.setback(d1.angle_between(d2));
+    let noun = profile.noun();
     let too_large = || format!("{noun} too large for {name}");
+    if !size.is_finite() {
+        return Err(too_large());
+    }
     let length = a.distance(b);
     for (face, d) in [(face1, d1), (face2, d2)] {
         if !strip_clear(m, face, (va, vb), a, u, d, length, size) {
@@ -353,6 +503,7 @@ fn analyze(m: &Model, id: EdgeId, outward: f64, size: f64, noun: &str) -> Result
         d1,
         d2,
         convex,
+        setback: size,
         ends: [End::Extend(reach); 2],
     })
 }
@@ -369,17 +520,17 @@ struct Corner<'a> {
 /// where another chosen convex edge ends too and running on leaves the solid (every other
 /// face there faces along the run-on direction); any other end stops in the plane of the
 /// other faces at its vertex, which must be one plane. A concave edge whose two faces are
-/// both cut at an end by chosen convex edges stops `size` short of that plane: what it would
+/// both cut at an end by chosen convex edges stops its setback short of that plane: what it would
 /// add there would rest on nothing but the corner.
 fn close_ends(
     m: &Model,
     cut: &mut EdgeCut,
     id: EdgeId,
     outward: f64,
-    size: f64,
     at: &Corner<'_>,
 ) -> Result<(), String> {
     let name = format!("edge e{}", id.0);
+    let size = cut.setback;
     let u = cut.u;
     for (k, (v, p, along)) in [(cut.va, cut.a, -u), (cut.vb, cut.b, u)]
         .into_iter()
@@ -561,7 +712,7 @@ fn prism(cut: &EdgeCut, section: &[DVec3], surface: std::ops::Range<usize>) -> O
 
 /// Replaces the vertices, edges and faces of `m` by those of `r`, keeping the ids of faces
 /// and edges `r` has unchanged (the same loops of points, the same ends) and the curves of
-/// kept edges. Instances, guides and annotations stay.
+/// kept edges, whose softness follows `r`. Instances, guides and annotations stay.
 fn replace_geometry(m: &mut Model, r: &Model) {
     let vertices: BTreeMap<VertexId, VertexId> = r
         .vertices()
@@ -601,12 +752,16 @@ fn replace_geometry(m: &mut Model, r: &Model) {
         .collect();
     let mut curves: HashMap<CurveId, CurveId> = HashMap::new();
     let mut dropped = Vec::new();
+    let mut softened = Vec::new();
     for (id, e) in m.edges() {
         let [a, b] = e.v;
         match wanted.get(&(a.min(b), a.max(b))) {
             Some(like) => {
                 if let (Some(c), Some(own)) = (like.curve, e.curve) {
                     curves.entry(c).or_insert(own);
+                }
+                if like.soft != e.soft {
+                    softened.push((id, e.curve, like.soft, e.polygon));
                 }
             }
             None => dropped.push(id),
@@ -620,6 +775,9 @@ fn replace_geometry(m: &mut Model, r: &Model) {
     let mut touched: BTreeSet<VertexId> = BTreeSet::new();
     for e in dropped {
         touched.extend(m.remove_edge(e).v);
+    }
+    for (e, curve, soft, polygon) in softened {
+        m.set_edge(e, curve, soft, polygon);
     }
     for (&(a, b), like) in &wanted {
         if m.edge_between(a, b).is_none() {
@@ -886,6 +1044,226 @@ mod tests {
         let r = bevelled(&m, &[e], chamfer(0.5)).unwrap();
         closed(&r);
         assert!((signed_volume(&r) - 23.75).abs() < 1e-9);
+    }
+
+    fn fillet(radius: f64) -> Profile {
+        Profile::Fillet {
+            radius,
+            segments: DEFAULT_SEGMENTS,
+        }
+    }
+
+    /// What a quarter-turn fillet of `r` in `n` faces removes per meter of edge: the square of
+    /// side `r` less the polygon inscribed in its quarter circle.
+    fn quarter_loss(r: f64, n: usize) -> f64 {
+        let step = std::f64::consts::FRAC_PI_2 / n as f64;
+        r * r - n as f64 * r * r * step.sin() / 2.0
+    }
+
+    #[test]
+    fn one_box_edge_loses_a_quarter_round() {
+        let m = cuboid([2.0, 3.0, 4.0]);
+        let e = edge_at(&m, [0.0, 0.0, 4.0], [2.0, 0.0, 4.0]);
+        let r = bevelled(&m, &[e], fillet(0.5)).unwrap();
+        closed(&r);
+        let v = signed_volume(&r);
+        assert!(
+            (v - (24.0 - quarter_loss(0.5, 8) * 2.0)).abs() < 1e-9,
+            "{v}"
+        );
+        // Within the faceting error of the true round.
+        let round = 24.0 - (0.25 - std::f64::consts::PI * 0.25 / 4.0) * 2.0;
+        assert!((v - round).abs() < 0.01, "{v}");
+        // 6 faces (top and front narrowed) and 8 round ones; tangent at 0.5 on both faces.
+        assert_eq!(r.faces().count(), 14);
+        for p in [
+            [0.0, 0.5, 4.0],
+            [0.0, 0.0, 3.5],
+            [2.0, 0.5, 4.0],
+            [2.0, 0.0, 3.5],
+        ] {
+            assert!(has_vertex(&r, p), "{p:?}");
+        }
+        assert!(!has_vertex(&r, [0.0, 0.0, 4.0]));
+        // The arc's corners lie on the circle about (y, z) = (0.5, 3.5).
+        for (_, v) in r.vertices() {
+            let (y, z) = (v.pos.y, v.pos.z);
+            if y < 0.5 - 1e-9 && z > 3.5 + 1e-9 {
+                let d = DVec2::new(y - 0.5, z - 3.5).length();
+                assert!((d - 0.5).abs() < 1e-9, "{}", v.pos);
+            }
+        }
+    }
+
+    #[test]
+    fn the_edges_along_a_fillet_are_soft() {
+        let m = cuboid([2.0, 3.0, 4.0]);
+        let e = edge_at(&m, [0.0, 0.0, 4.0], [2.0, 0.0, 4.0]);
+        let r = bevelled(&m, &[e], fillet(0.5)).unwrap();
+        // 7 edges between the 8 round faces and the 2 where it meets top and front.
+        let soft: Vec<_> = r.edges().filter(|(_, e)| e.soft).collect();
+        assert_eq!(soft.len(), 9);
+        for (_, e) in &soft {
+            let (a, b) = (r.pos(e.v[0]), r.pos(e.v[1]));
+            assert!((b - a).normalize().dot(DVec3::X).abs() > 1.0 - 1e-12);
+        }
+        let tangent = r
+            .edge(edge_at(&r, [0.0, 0.5, 4.0], [2.0, 0.5, 4.0]))
+            .unwrap();
+        assert!(tangent.soft);
+        let tangent = r
+            .edge(edge_at(&r, [0.0, 0.0, 3.5], [2.0, 0.0, 3.5]))
+            .unwrap();
+        assert!(tangent.soft);
+        // The smooth normals turn across the round.
+        assert!(!r.smooth_normals().is_empty());
+        // The round's faces all face between front and top.
+        let round = r
+            .faces()
+            .filter(|(_, f)| f.normal.x.abs() < 1e-9 && f.normal.y < -1e-9 && f.normal.z > 1e-9)
+            .count();
+        assert_eq!(round, 8);
+    }
+
+    #[test]
+    fn segments_set_the_faces_of_a_quarter_turn_in_proportion() {
+        let m = cuboid([2.0, 3.0, 4.0]);
+        let e = edge_at(&m, [0.0, 0.0, 4.0], [2.0, 0.0, 4.0]);
+        for (segments, faces) in [(1, 7), (3, 9), (12, 18)] {
+            let r = bevelled(
+                &m,
+                &[e],
+                Profile::Fillet {
+                    radius: 0.5,
+                    segments,
+                },
+            )
+            .unwrap();
+            closed(&r);
+            assert_eq!(r.faces().count(), faces, "{segments}");
+            let v = signed_volume(&r);
+            assert!((v - (24.0 - quarter_loss(0.5, segments as usize) * 2.0)).abs() < 1e-9);
+        }
+        // A triangular prism's upright edges turn 120 degrees: 8 * 120 / 90, rounded, faces.
+        assert_eq!(arc_steps(8, 120f64.to_radians()), 11);
+        assert_eq!(arc_steps(1, 10f64.to_radians()), 1);
+        let p = Solid::prism(1.0, 2.0, 3, 0.0).unwrap().to_model();
+        let top = upright(&p);
+        let r = bevelled(&p, &[top], fillet(0.05)).unwrap();
+        closed(&r);
+        assert_eq!(r.faces().count(), 5 + 11);
+        assert_eq!(r.edges().filter(|(_, e)| e.soft).count(), 12);
+    }
+
+    /// An upright edge of a triangular prism, whose faces meet at 60 degrees inside.
+    fn upright(p: &Model) -> EdgeId {
+        p.edges()
+            .find(|(_, e)| {
+                let (a, b) = (p.pos(e.v[0]), p.pos(e.v[1]));
+                (a - b).truncate().length() < 1e-9
+            })
+            .map(|(id, _)| id)
+            .unwrap()
+    }
+
+    #[test]
+    fn a_slanted_edge_is_tangent_at_its_setback() {
+        // The arc touches each face r / tan(30 degrees) from the edge.
+        let p = Solid::prism(1.0, 2.0, 3, 0.0).unwrap().to_model();
+        let top = upright(&p);
+        let e = p.edge(top).unwrap();
+        let (a, b) = (p.pos(e.v[0]), p.pos(e.v[1]));
+        let r = bevelled(&p, &[top], fillet(0.05)).unwrap();
+        let setback = 0.05 / 30f64.to_radians().tan();
+        // The two new corners at each end lie in the end face, setback from the edge.
+        for end in [a, b] {
+            let found = r
+                .vertices()
+                .filter(|(_, v)| {
+                    (v.pos.z - end.z).abs() < 1e-9 && (v.pos.distance(end) - setback).abs() < 1e-9
+                })
+                .count();
+            assert_eq!(found, 2, "{end}");
+        }
+    }
+
+    #[test]
+    fn a_radius_past_a_face_is_too_large() {
+        let m = cuboid([2.0, 3.0, 4.0]);
+        let e = edge_at(&m, [0.0, 0.0, 4.0], [2.0, 0.0, 4.0]);
+        refused(&m, e, fillet(3.0), "radius too large for edge");
+        // A 60 degree edge sets back further than the radius.
+        let p = Solid::prism(1.0, 2.0, 3, 0.0).unwrap().to_model();
+        let top = upright(&p);
+        // The side is sqrt(3) wide: a setback of r * sqrt(3) fits for r just under 1.
+        refused(&p, top, fillet(1.01), "radius too large");
+        assert!(bevelled(&p, &[top], fillet(0.9)).is_ok());
+        for segments in [0, 91] {
+            assert!(matches!(
+                bevelled(&m, &[e], Profile::Fillet { radius: 0.1, segments }),
+                Err(BevelError::Invalid(why)) if why.contains("segments")
+            ));
+        }
+        assert!(matches!(
+            bevelled(&m, &[e], fillet(0.0)),
+            Err(BevelError::Invalid(why)) if why.contains("radius")
+        ));
+    }
+
+    #[test]
+    fn all_twelve_edges_of_a_box_round_off_closed() {
+        let (x, y, z, r) = (2.0, 3.0, 4.0, 0.25);
+        let m = cuboid([x, y, z]);
+        let edges: Vec<EdgeId> = m.edges().map(|(id, _)| id).collect();
+        let out = bevelled(&m, &edges, fillet(r)).unwrap();
+        closed(&out);
+        let v = signed_volume(&out);
+        // Each edge loses its faceted quarter round between the corner cubes; a sharp corner
+        // keeps the whole cube, a spherical one an eighth of the ball.
+        let loss = quarter_loss(r, 8) / (r * r);
+        let sharp = x * y * z - loss * r * r * 4.0 * (x + y + z - 6.0 * r);
+        let spherical = sharp - 8.0 * (r * r * r - std::f64::consts::PI * r * r * r / 6.0);
+        assert!(v < sharp && v > spherical, "{spherical} < {v} < {sharp}");
+        local(&m, &out, &edges, r * 1.01);
+        // Each round's 9 lines are soft along its straight run between the corners.
+        let soft = out.edges().filter(|(_, e)| e.soft).count();
+        assert_eq!(soft, 12 * 9);
+    }
+
+    #[test]
+    fn a_concave_edge_gains_a_cove() {
+        let m = l_shape();
+        let before = signed_volume(&m);
+        let e = edge_at(&m, [1.0, 0.0, 1.0], [1.0, 2.0, 1.0]);
+        let r = bevelled(&m, &[e], fillet(0.25)).unwrap();
+        closed(&r);
+        let v = signed_volume(&r);
+        assert!(
+            (v - (before + quarter_loss(0.25, 8) * 2.0)).abs() < 1e-9,
+            "{v}"
+        );
+        assert!(has_vertex(&r, [1.25, 0.0, 1.0]));
+        assert!(has_vertex(&r, [1.0, 2.0, 1.25]));
+        assert!(!has_vertex(&r, [1.0, 0.0, 1.0]));
+        // The cove's corners lie on the circle about (x, z) = (1.25, 1.25).
+        for (_, w) in r.vertices() {
+            let (x, z) = (w.pos.x, w.pos.z);
+            if x > 1.0 + 1e-9 && x < 1.25 - 1e-9 && z > 1.0 + 1e-9 && z < 1.25 - 1e-9 {
+                let d = DVec2::new(x - 1.25, z - 1.25).length();
+                assert!((d - 0.25).abs() < 1e-9, "{}", w.pos);
+            }
+        }
+        assert_eq!(r.edges().filter(|(_, e)| e.soft).count(), 9);
+    }
+
+    #[test]
+    fn all_edges_of_an_l_round_off_without_grooves() {
+        let m = l_shape();
+        let edges: Vec<EdgeId> = m.edges().map(|(id, _)| id).collect();
+        let r = bevelled(&m, &edges, fillet(0.1)).unwrap();
+        closed(&r);
+        local(&m, &r, &edges, 0.101);
+        assert!(signed_volume(&r) < signed_volume(&m));
     }
 
     fn refused(m: &Model, e: EdgeId, profile: Profile, text: &str) {

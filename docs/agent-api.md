@@ -116,7 +116,7 @@ Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_polygon`, `add_arc`, `
 `add_edge_dimension`, `add_radial_dimension`, `add_note`, `add_screen_note`, `change_note`,
 `add_3d_text`, `set_units`, `add_section_plane`, `flip_section_plane`, `activate_section_plane`,
 `deactivate_section`, `set_section_display`, `add_material`,
-`change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `add_scene`, `update_scene`, `change_scene`, `move_scene`, `delete_scene`, `go_to_scene`, `add_style`, `change_style`, `delete_style`, `position_texture`, `soften_edges`, `soften_by_angle`, `hide`, `unhide`, `unhide_last`, `unhide_all`, `reverse_faces`, `orient_faces`, `intersect_faces`, `solid_union`, `solid_subtract`, `solid_intersect`, `solid_trim`, `solid_split`, `outer_shell`, `chamfer_edges`, `paste`, `save_to_library`, `insert_library_item`, `select`, `undo`,
+`change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `add_scene`, `update_scene`, `change_scene`, `move_scene`, `delete_scene`, `go_to_scene`, `add_style`, `change_style`, `delete_style`, `position_texture`, `soften_edges`, `soften_by_angle`, `hide`, `unhide`, `unhide_last`, `unhide_all`, `reverse_faces`, `orient_faces`, `intersect_faces`, `solid_union`, `solid_subtract`, `solid_intersect`, `solid_trim`, `solid_split`, `outer_shell`, `chamfer_edges`, `fillet_edges`, `paste`, `save_to_library`, `insert_library_item`, `select`, `undo`,
 `redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`, `look_around`, `position_camera`,
 `set_lighting`, `set_color_by_tag`, `set_x_ray`, `set_hidden_geometry`, `set_shadows`, `set_style`, `set_location`, `new`, `open`, `save`, `export`, `import`.
 Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
@@ -562,6 +562,31 @@ did not touch keep their ids, so a later command can still name them. A batch ca
 `instance` and `edges`; with `instance`, references in `edges` may name edges inside its
 definition, e.g. `{"type": "chamfer_edges", "instance": "$0:i0", "edges": ["$0:e*"], "distance":
 0.01}` after an `add_box` chamfers all twelve edges of the new box.
+
+### Fillet
+
+| Command | Effect |
+|---|---|
+| `{"type": "fillet_edges", "edges": ["e12", "e15"], "radius": 0.005}` | Rounds edges of the open context's own solid, as one undo step labelled `fillet_edges`: open the group first (`open_instance`). |
+| `{"type": "fillet_edges", "instance": "i4", "edges": ["e12"], "radius": 0.005, "segments": 4}` | The same on edges of the definition of `instance`, as for `chamfer_edges`. |
+
+Each edge becomes a round of `radius` (more than 0.000001 m, in the edited mesh's own coordinates)
+tangent to both faces beside it: an arc whose corners lie on the true circle, made of `segments`
+faces per quarter turn (default 8, 1 to 90), in proportion for other angles (the faces of a box
+edge turn 90 degrees, so 8 faces; an edge whose faces meet at 60 degrees inside turns 120 degrees,
+so 11), at least 1. The round touches each face `radius / tan(angle / 2)` from the edge, `angle`
+being the angle between the faces inside the solid (outside it for a concave edge): `radius` for a
+box edge. The edges between the round's faces and the two where it meets the flat faces are soft,
+so it is shaded as one smooth surface; the round's faces are listed in `created` and take the
+first face's materials. A convex edge loses material; a concave edge gains a cove.
+
+Ends, corners and validation are as for `chamfer_edges`, with the setback above in place of
+`distance` ("radius too large for edge e12" when the round would not stay inside both faces).
+Rounds of convex edges meeting at an outside corner overlap and close it: a box with all twelve
+edges rounded has corners where the three rounds cross, not spherical patches. Since the flat
+faces beside a round get a soft edge, they count as part of a curved surface afterwards: round all
+the edges of a face in one command rather than one after another. `segments` outside 1 to 90 is
+`invalid_input`. A batch can refer to `instance` and `edges` as for `chamfer_edges`.
 
 ### Guides
 
