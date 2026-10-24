@@ -111,7 +111,8 @@ impl Scene {
             m.land(annotations, true);
             Ok(m.take_changes())
         })?;
-        let change = SceneChange::join([SceneChange::from(added), left, filled]);
+        let dropped = self.drop_stale_positions();
+        let change = SceneChange::join([SceneChange::from(added), left, filled, dropped]);
         Ok((placed.expect("instance placed"), change))
     }
 }
@@ -213,7 +214,9 @@ impl Scene {
             m.land(annotations, false);
             Ok(m.take_changes())
         })?;
-        Ok(SceneChange::join([copied, exploded, self.prune()]))
+        let pruned = self.prune();
+        let dropped = self.drop_stale_positions();
+        Ok(SceneChange::join([copied, exploded, pruned, dropped]))
     }
 
     /// Places `count` copies of instances of mesh `parent`, copy k shifted by `k * offset`.
@@ -477,7 +480,9 @@ impl Scene {
                 Ok(m.take_changes())
             })
             .expect("erasing cannot fail");
-        SceneChange::join([erased, self.prune()])
+        let pruned = self.prune();
+        let dropped = self.drop_stale_positions();
+        SceneChange::join([erased, pruned, dropped])
     }
 
     /// Removes group definitions that no instance places any more.

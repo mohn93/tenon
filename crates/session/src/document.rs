@@ -476,6 +476,11 @@ impl Document {
         // The undo step of a library insert reads "insert" wherever it came from.
         let label = match command {
             Command::InsertLibraryItem { .. } => "insert".to_string(),
+            // Going to a scene that stores positions moves instances: say which scene.
+            Command::GoToScene { scene } => match self.scene.page(scene) {
+                Some(p) if p.positions.is_some() => format!("Go to scene {}", p.name),
+                _ => command.name(),
+            },
             _ => command.name(),
         };
         self.execute_as(command, label)
@@ -1223,20 +1228,31 @@ impl Document {
             ),
             Command::DeleteTag { tag, move_to } => self.delete_tag_changes(*tag, *move_to),
             Command::SetTag { ids, tag } => self.set_tag_changes(ids, *tag),
-            Command::AddScene { name, camera, tags } => {
-                self.add_scene_changes(name.as_deref(), *camera, *tags)
-            }
+            Command::AddScene {
+                name,
+                camera,
+                tags,
+                positions,
+            } => self.add_scene_changes(name.as_deref(), *camera, *tags, positions.as_ref()),
             Command::UpdateScene {
                 scene,
                 camera,
                 tags,
-            } => self.update_scene_changes(*scene, *camera, *tags),
+                positions,
+            } => self.update_scene_changes(*scene, *camera, *tags, positions.as_ref()),
             Command::ChangeScene {
                 scene,
                 name,
                 camera,
                 tags,
-            } => self.change_scene_changes(*scene, name.as_deref(), *camera, *tags),
+                positions,
+            } => self.change_scene_changes(
+                *scene,
+                name.as_deref(),
+                *camera,
+                *tags,
+                positions.as_ref(),
+            ),
             Command::MoveScene { scene, index } => self.move_scene_changes(*scene, *index),
             Command::DeleteScene { scene } => self.delete_scene_changes(*scene),
             // Its view change is made here too, outside the returned change.

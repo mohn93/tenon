@@ -753,6 +753,19 @@ impl Scene {
             if let Some(t) = p.tags.iter().flatten().find(|t| !self.tags.contains_key(t)) {
                 return Err(format!("scene {id} hides a missing tag {t}"));
             }
+            for (i, t) in p.positions.iter().flatten() {
+                if self.root().instance(*i).is_none() {
+                    return Err(format!(
+                        "scene {id} stores i{}, not an instance of the root",
+                        i.0
+                    ));
+                }
+                if !t.is_finite() || t.matrix3.determinant().abs() < crate::data::MIN_DETERMINANT {
+                    return Err(format!(
+                        "scene {id} stores a transform that is not finite and invertible"
+                    ));
+                }
+            }
         }
         let mut style_names = BTreeSet::new();
         for (id, s) in &self.styles {

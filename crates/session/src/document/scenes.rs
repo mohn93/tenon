@@ -1,12 +1,18 @@
 //! Scenes: saved views and tag visibility, gone back to in one step.
 
-use kernel::{KernelError, Page, PageId, PageView, SceneChange, TagEdit};
+use std::collections::BTreeMap;
+
+use kernel::{
+    EntityId, InstanceId, KernelError, MeshId, Page, PageId, PageView, SceneChange, TagEdit,
+};
+
+use glam::DAffine3;
 
 use glam::DVec3;
 
 use super::{Document, MAX_COORDINATE, unit_vector};
 use crate::camera::{Lighting, Projection};
-use crate::command::{CommandError, ErrorKind};
+use crate::command::{CommandError, ErrorKind, ScenePositions};
 use crate::query::{QueryResult, SceneInfo, SceneView};
 
 impl Document {
@@ -49,6 +55,66 @@ impl Document {
         Ok(view)
     }
 
+    /// The positions a scene stores: the current transforms of the instances `ids` names (each
+    /// an instance of the root), or of every instance of the root. `None` when there are none.
+    fn current_positions(
+        &self,
+        ids: Option<&[EntityId]>,
+    ) -> Result<Option<BTreeMap<InstanceId, DAffine3>>, CommandError> {
+        let root = self.scene.root();
+        let map: BTreeMap<InstanceId, DAffine3> = match ids {
+            None => root.instances().map(|(id, i)| (id, i.transform)).collect(),
+            Some([]) => {
+                return Err(CommandError::new(
+                    ErrorKind::InvalidInput,
+                    "positions must list at least one instance (or be true or false)",
+                ));
+            }
+            Some(ids) => {
+                let mut map = BTreeMap::new();
+                let mut bad = Vec::new();
+                for e in ids {
+                    match e {
+                        EntityId::Instance(i) if root.instance(*i).is_some() => {
+                            map.insert(*i, root.instance(*i).expect("checked").transform);
+                        }
+                        _ => bad.push(*e),
+                    }
+                }
+                if !bad.is_empty() {
+                    return Err(CommandError::new(
+                        ErrorKind::InvalidInput,
+                        "positions takes only instances of the root (close any open group first)",
+                    )
+                    .with_ids(bad));
+                }
+                map
+            }
+        };
+        Ok((!map.is_empty()).then_some(map))
+    }
+
+    /// The positions a scene stores after `arg`, given what it stored (`stored`): absent keeps
+    /// them, false drops them, true stores the stored set (every instance of the root when
+    /// none) again from the current transforms, ids store those instances.
+    fn positions_after(
+        &self,
+        arg: Option<&ScenePositions>,
+        stored: Option<&BTreeMap<InstanceId, DAffine3>>,
+        keep_absent: bool,
+    ) -> Result<Option<BTreeMap<InstanceId, DAffine3>>, CommandError> {
+        match arg {
+            None if keep_absent => Ok(stored.cloned()),
+            Some(ScenePositions::Flag(false)) => Ok(None),
+            None | Some(ScenePositions::Flag(true)) => {
+                let same: Option<Vec<EntityId>> =
+                    stored.map(|m| m.keys().copied().map(EntityId::Instance).collect());
+                self.current_positions(same.as_deref())
+            }
+            Some(ScenePositions::Ids(ids)) => self.current_positions(Some(ids)),
+        }
+    }
+
     /// Adds a scene after the last one, storing the current view (`camera`) and hidden tags
     /// (`tags`); without `name` it is "Scene 1" (or the lowest free number). It becomes the
     /// selected scene.
@@ -57,11 +123,16 @@ impl Document {
         name: Option<&str>,
         camera: bool,
         tags: bool,
+        positions: Option<&ScenePositions>,
     ) -> Result<SceneChange, CommandError> {
         let page = Page {
             name: name.map_or_else(|| self.scene.free_page_name(), str::to_string),
             view: camera.then(|| self.view_to_store()).transpose()?,
             tags: tags.then(|| self.scene.hidden_tags()),
+            positions: match positions {
+                None => None,
+                p => self.positions_after(p, None, false)?,
+            },
         };
         let (id, change) = self
             .scene
@@ -78,14 +149,22 @@ impl Document {
         id: PageId,
         camera: Option<bool>,
         tags: Option<bool>,
+        positions: Option<&ScenePositions>,
     ) -> Result<SceneChange, CommandError> {
         let page = self.page(id)?;
         let camera = camera.unwrap_or(page.view.is_some());
         let tags = tags.unwrap_or(page.tags.is_some());
+        let stored = page.positions.as_ref();
+        // Absent: stored again only when the scene stores positions.
+        let positions = match positions {
+            None if stored.is_none() => None,
+            p => self.positions_after(p, stored, false)?,
+        };
         let page = Page {
             name: page.name.clone(),
             view: camera.then(|| self.view_to_store()).transpose()?,
             tags: tags.then(|| self.scene.hidden_tags()),
+            positions,
         };
         self.scene
             .change_page(id, page)
@@ -101,11 +180,12 @@ impl Document {
         name: Option<&str>,
         camera: Option<bool>,
         tags: Option<bool>,
+        positions: Option<&ScenePositions>,
     ) -> Result<SceneChange, CommandError> {
-        if name.is_none() && camera.is_none() && tags.is_none() {
+        if name.is_none() && camera.is_none() && tags.is_none() && positions.is_none() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "change_scene needs a name, camera or tags",
+                "change_scene needs a name, camera, tags or positions",
             ));
         }
         let page = self.page(id)?;
@@ -126,10 +206,12 @@ impl Document {
             ),
             None => page.tags.clone(),
         };
+        let positions = self.positions_after(positions, page.positions.as_ref(), true)?;
         let page = Page {
             name: name.map_or_else(|| page.name.clone(), str::to_string),
             view,
             tags: hidden,
+            positions,
         };
         self.scene
             .change_page(id, page)
@@ -211,6 +293,15 @@ impl Document {
                 );
             }
         }
+        for (i, t) in page.positions.iter().flatten() {
+            if self.scene.root().instance(*i).is_some() {
+                changes.push(
+                    self.scene
+                        .set_instance_transform(MeshId::Root, *i, *t)
+                        .expect("moving an instance of the root to a finite transform"),
+                );
+            }
+        }
         if let Some((camera, v)) = view {
             self.camera = camera;
             self.lighting = if v.night {
@@ -241,6 +332,11 @@ impl Document {
                 name: p.name.clone(),
                 camera: p.view.is_some(),
                 tags: p.tags.is_some(),
+                positions: p
+                    .positions
+                    .iter()
+                    .flat_map(|m| m.keys().copied().map(EntityId::Instance))
+                    .collect(),
                 selected: selected == Some(id),
             })
             .collect()
@@ -274,6 +370,10 @@ impl Document {
                 style: v.style,
             }),
             hidden_tags: page.tags.as_ref().map(|t| t.iter().copied().collect()),
+            positions: page
+                .positions
+                .as_ref()
+                .map(|m| m.keys().copied().map(EntityId::Instance).collect()),
             revision: self.revision,
         })
     }

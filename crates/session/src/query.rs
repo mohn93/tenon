@@ -546,6 +546,9 @@ pub struct SceneInfo {
     pub camera: bool,
     /// Whether it stores which tags are hidden.
     pub tags: bool,
+    /// The instances of the root whose positions it stores (empty: none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub positions: Vec<EntityId>,
     /// Whether it is the selected scene (the one last added or gone to).
     pub selected: bool,
 }
@@ -698,6 +701,8 @@ pub enum QueryResult {
         name: String,
         view: Option<SceneView>,
         hidden_tags: Option<Vec<TagId>>,
+        /// The instances of the root whose positions it stores, null when it stores none.
+        positions: Option<Vec<EntityId>>,
         revision: u64,
     },
     /// `path` lists the open instances from the root; empty when the root is open.

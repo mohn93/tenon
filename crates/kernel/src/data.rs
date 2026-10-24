@@ -93,6 +93,18 @@ pub struct PageData {
     pub view: Option<PageView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<u64>>,
+    /// The instances of the root whose positions the page stores (absent: none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub positions: Option<Vec<PagePosition>>,
+}
+
+/// An instance's stored position in a page.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PagePosition {
+    pub id: u64,
+    /// Column-major 3x4, as an instance's.
+    pub transform: [f64; 12],
 }
 
 /// A style: a name and its settings.
@@ -425,6 +437,14 @@ impl Scene {
                     name: p.name.clone(),
                     view: p.view,
                     tags: p.tags.as_ref().map(|t| t.iter().map(|t| t.0).collect()),
+                    positions: p.positions.as_ref().map(|m| {
+                        m.iter()
+                            .map(|(i, t)| PagePosition {
+                                id: i.0,
+                                transform: t.to_cols_array(),
+                            })
+                            .collect()
+                    }),
                 })
                 .collect(),
             styles: self
@@ -534,6 +554,11 @@ impl Scene {
                     .tags
                     .as_ref()
                     .map(|t| t.iter().map(|t| TagId(*t)).collect()),
+                positions: p.positions.as_ref().map(|m| {
+                    m.iter()
+                        .map(|q| (InstanceId(q.id), DAffine3::from_cols_array(&q.transform)))
+                        .collect()
+                }),
             };
             pages.push((PageId(p.id), page));
         }

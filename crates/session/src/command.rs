@@ -37,6 +37,17 @@ pub enum PrimitiveAs {
 /// commands never refer to screen positions or cursor state. Points, offsets and entity ids are
 /// those of the open context (see `OpenInstance`): the root, or the definition of the instance
 /// being edited, in its own coordinates.
+/// Which instances a scene stores the positions of: the ids of instances of the root (their
+/// current transforms are stored), `true` (add: every instance of the root; update and change:
+/// the same set again from the current transforms, every instance of the root when the scene
+/// stores none) or `false` (stop storing).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum ScenePositions {
+    Flag(bool),
+    Ids(Vec<EntityId>),
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
@@ -794,6 +805,10 @@ pub enum Command {
         camera: bool,
         #[serde(default = "yes")]
         tags: bool,
+        /// Also store the positions (transforms) of instances of the root (see
+        /// `ScenePositions`); absent or false: not stored.
+        #[serde(default)]
+        positions: Option<ScenePositions>,
     },
     /// Store the current view (`camera`) and hidden tags (`tags`) in a scene again, as one undo
     /// step; false stops storing that part. Absent parts are stored again if the scene stores
@@ -804,9 +819,12 @@ pub enum Command {
         camera: Option<bool>,
         #[serde(default)]
         tags: Option<bool>,
+        /// The instance positions (see `ScenePositions`); absent: stored again if stored.
+        #[serde(default)]
+        positions: Option<ScenePositions>,
     },
     /// Rename a scene and choose what it stores, as one undo step (none when nothing changes).
-    /// At least one of `name`, `camera` and `tags` is needed. `camera` or `tags` false stops
+    /// At least one of `name`, `camera`, `tags` and `positions` is needed. `camera` or `tags` false stops
     /// storing that part; true stores it from the current view or tag visibility only if the
     /// scene does not store it yet. A part that stays stored keeps exactly what was stored.
     ChangeScene {
@@ -817,6 +835,9 @@ pub enum Command {
         camera: Option<bool>,
         #[serde(default)]
         tags: Option<bool>,
+        /// The instance positions (see `ScenePositions`); absent: kept as stored.
+        #[serde(default)]
+        positions: Option<ScenePositions>,
     },
     /// Move a scene to `index` in the order (0: first), as one undo step. An index past the
     /// last scene is invalid input.
@@ -825,7 +846,9 @@ pub enum Command {
     DeleteScene { scene: PageId },
     /// Go to a scene: set the camera, projection, lighting and color by tag it stores (a view
     /// change like `set_camera`, not an undo step), and show and hide tags as it stores (one
-    /// undo step, only when that changes a tag). It becomes the selected scene.
+    /// undo step, only when that changes a tag). A scene that stores positions also sets those
+    /// instances' transforms in that one undo step, labelled "Go to scene <name>". It becomes
+    /// the selected scene.
     GoToScene { scene: PageId },
     /// Add a style after the last one, as one undo step: a copy of the style `from`, or the
     /// default settings (today's look: near-black edges on a light gray background, no

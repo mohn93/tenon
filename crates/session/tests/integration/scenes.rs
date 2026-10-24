@@ -779,3 +779,219 @@ fn a_camera_beyond_the_coordinate_limit_is_not_stored() {
     let view = &ask(&back, json!({"type": "scene", "scene": kept}))["view"];
     assert_eq!(view["eye"], json!([10.0, -10.0, 5.0]));
 }
+
+/// Two groups of one square each, at x = 0 and x = 5; returns their ids.
+fn two_groups(d: &mut Document) -> (String, String) {
+    let mut ids = Vec::new();
+    for x in [0.0, 5.0] {
+        run(
+            d,
+            json!({"type": "add_rectangle", "corner": [x, 0, 0], "opposite": [x + 1.0, 1, 0]}),
+        )
+        .unwrap();
+        let faces = ask(d, json!({"type": "entities", "kinds": ["face"]}))["faces"]
+            .as_array()
+            .unwrap()
+            .clone();
+        let face = faces.last().unwrap()["id"].clone();
+        run(d, json!({"type": "make_group", "ids": [face]})).unwrap();
+        ids.push(
+            ask(d, json!({"type": "selection"}))["ids"][0]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        );
+    }
+    (ids[0].clone(), ids[1].clone())
+}
+
+/// The x of an instance's translation.
+fn x_of(d: &Document, id: &str) -> f64 {
+    ask(d, json!({"type": "entity", "id": id}))["transform"][9]
+        .as_f64()
+        .unwrap_or_else(|| {
+            panic!(
+                "no transform in {}",
+                ask(d, json!({"type": "entity", "id": id}))
+            )
+        })
+}
+
+fn shift(d: &mut Document, id: &str, dx: f64) {
+    run(
+        d,
+        json!({"type": "move", "ids": [id], "offset": [dx, 0, 0]}),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_scene_stores_instance_positions_and_going_to_it_sets_them_in_one_undo_step() {
+    let mut d = doc();
+    let (a, b) = two_groups(&mut d);
+    let s = add_scene(&mut d, json!({"name": "Open", "positions": [a]}));
+    assert_eq!(scenes(&d)[0]["positions"], json!([a]));
+    assert_eq!(
+        ask(&d, json!({"type": "scene", "scene": s}))["positions"],
+        json!([a])
+    );
+    shift(&mut d, &a, 3.0);
+    shift(&mut d, &b, 3.0);
+    let steps = undo_labels(&d).as_array().unwrap().len();
+    run(&mut d, json!({"type": "go_to_scene", "scene": s})).unwrap();
+    assert_eq!(
+        (x_of(&d, &a), x_of(&d, &b)),
+        (0.0, 3.0),
+        "only the stored one goes back"
+    );
+    let labels = undo_labels(&d);
+    assert_eq!(labels.as_array().unwrap().len(), steps + 1);
+    assert_eq!(labels[0], "Go to scene Open");
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    assert_eq!((x_of(&d, &a), x_of(&d, &b)), (3.0, 3.0));
+    run(&mut d, json!({"type": "redo"})).unwrap();
+    assert_eq!(x_of(&d, &a), 0.0);
+}
+
+#[test]
+fn going_to_a_scene_without_positions_adds_no_undo_step_and_moves_nothing() {
+    let mut d = doc();
+    let (a, _) = two_groups(&mut d);
+    let s = add_scene(&mut d, json!({}));
+    shift(&mut d, &a, 3.0);
+    let before = undo_labels(&d);
+    run(&mut d, json!({"type": "go_to_scene", "scene": s})).unwrap();
+    assert_eq!(undo_labels(&d), before);
+    assert_eq!(x_of(&d, &a), 3.0);
+    assert!(scenes(&d)[0].get("positions").is_none());
+}
+
+#[test]
+fn positions_true_stores_every_root_instance_and_update_stores_them_again() {
+    let mut d = doc();
+    let (a, b) = two_groups(&mut d);
+    let s = add_scene(&mut d, json!({"positions": true}));
+    assert_eq!(scenes(&d)[0]["positions"], json!([a, b]));
+    shift(&mut d, &a, 2.0);
+    // update_scene without positions stores the same set again.
+    run(&mut d, json!({"type": "update_scene", "scene": s})).unwrap();
+    shift(&mut d, &a, 4.0);
+    run(&mut d, json!({"type": "go_to_scene", "scene": s})).unwrap();
+    assert_eq!(x_of(&d, &a), 2.0);
+    // false stops storing.
+    run(
+        &mut d,
+        json!({"type": "change_scene", "scene": s, "positions": false}),
+    )
+    .unwrap();
+    assert!(scenes(&d)[0].get("positions").is_none());
+    // change_scene true stores the set again from the current transforms.
+    run(
+        &mut d,
+        json!({"type": "change_scene", "scene": s, "positions": [b]}),
+    )
+    .unwrap();
+    assert_eq!(scenes(&d)[0]["positions"], json!([b]));
+    run(
+        &mut d,
+        json!({"type": "change_scene", "scene": s, "positions": true}),
+    )
+    .unwrap();
+    assert_eq!(scenes(&d)[0]["positions"], json!([b]));
+}
+
+#[test]
+fn positions_must_be_instances_of_the_root() {
+    let mut d = doc();
+    let (a, _) = two_groups(&mut d);
+    for bad in [json!(["i999"]), json!(["e1"]), json!([])] {
+        let (kind, _) = run(&mut d, json!({"type": "add_scene", "positions": bad})).unwrap_err();
+        assert_eq!(kind, ErrorKind::InvalidInput);
+    }
+    assert!(scenes(&d).is_empty(), "a refused command stores nothing");
+    // An instance inside a group is not an instance of the root: put one inside, then try.
+    run(&mut d, json!({"type": "open_instance", "id": a})).unwrap();
+    let inner = run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 1], "opposite": [1, 1, 1]}),
+    )
+    .unwrap();
+    let _ = inner;
+    let face = ask(&d, json!({"type": "entities", "kinds": ["face"]}))["faces"][1]["id"].clone();
+    run(&mut d, json!({"type": "make_group", "ids": [face]})).unwrap();
+    let nested = ask(&d, json!({"type": "selection"}))["ids"][0].clone();
+    run(&mut d, json!({"type": "close_instance"})).unwrap();
+    let (kind, _) = run(&mut d, json!({"type": "add_scene", "positions": [nested]})).unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput);
+}
+
+#[test]
+fn erasing_an_instance_drops_it_from_scenes_in_the_same_undo_step() {
+    let mut d = doc();
+    let (a, b) = two_groups(&mut d);
+    let both = add_scene(&mut d, json!({"name": "Both", "positions": true}));
+    add_scene(&mut d, json!({"name": "OnlyA", "positions": [a]}));
+    let steps = undo_labels(&d).as_array().unwrap().len();
+    run(&mut d, json!({"type": "erase", "ids": [a]})).unwrap();
+    assert_eq!(undo_labels(&d).as_array().unwrap().len(), steps + 1);
+    let all = scenes(&d);
+    assert_eq!(all[0]["positions"], json!([b]));
+    assert!(all[1].get("positions").is_none());
+    // Going to a scene still works and moves what is left.
+    shift(&mut d, &b, 2.0);
+    run(&mut d, json!({"type": "go_to_scene", "scene": both})).unwrap();
+    assert_eq!(x_of(&d, &b), 0.0);
+}
+
+#[test]
+fn undoing_an_erase_restores_the_stored_positions() {
+    let mut d = doc();
+    let (a, b) = two_groups(&mut d);
+    add_scene(&mut d, json!({"positions": true}));
+    run(&mut d, json!({"type": "erase", "ids": [a]})).unwrap();
+    assert_eq!(scenes(&d)[0]["positions"], json!([b]));
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    assert_eq!(scenes(&d)[0]["positions"], json!([a, b]));
+}
+
+#[test]
+fn scene_positions_are_saved_and_older_files_open() {
+    let mut d = doc();
+    let (a, b) = two_groups(&mut d);
+    add_scene(&mut d, json!({"name": "P", "positions": [b]}));
+    shift(&mut d, &b, 1.5);
+    let path = scratch("positions.skr");
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(
+        stored(&path)["schema_version"],
+        session::file::SCENE_POSITIONS_SCHEMA_VERSION
+    );
+    let mut e = doc();
+    run(
+        &mut e,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(scenes(&e)[0]["positions"], json!([b]));
+    let s = scenes(&e)[0]["id"].as_str().unwrap().to_string();
+    run(&mut e, json!({"type": "go_to_scene", "scene": s})).unwrap();
+    assert_eq!(x_of(&e, &b), 0.0);
+    let _ = a;
+
+    // A scene without positions keeps the old schema number and writes no positions.
+    let mut plain = doc();
+    two_groups(&mut plain);
+    add_scene(&mut plain, json!({}));
+    let old = scratch("no-positions.skr");
+    run(
+        &mut plain,
+        json!({"type": "save", "path": old.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert!(stored(&old)["schema_version"].as_u64().unwrap() < 19);
+    assert!(stored(&old)["model"]["pages"][0].get("positions").is_none());
+}

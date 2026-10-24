@@ -1181,7 +1181,12 @@ fn add_pages(
                 .filter_map(|l| tags.get(l).copied())
                 .collect()
         });
-        let page = Page { name, view, tags };
+        let page = Page {
+            name,
+            view,
+            tags,
+            positions: None,
+        };
         match document.scene_mut().add_page(page) {
             Ok((_, change)) => out.added.push(change),
             Err(e) => {

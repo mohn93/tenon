@@ -2172,6 +2172,9 @@ impl State {
             UiAction::UpdateScene(scene) => {
                 self.editor.update_scene(scene, None, None);
             }
+            UiAction::StoreScenePositions(scene, on) => {
+                self.editor.set_scene_positions(scene, on);
+            }
             UiAction::StoreSceneCamera(scene, on) => {
                 self.editor.set_scene_stores(scene, Some(on), None);
             }
@@ -3207,6 +3210,7 @@ fn scene_rows(doc: &session::Document) -> Vec<SceneRow> {
             name: p.name.clone(),
             camera: p.view.is_some(),
             tags: p.tags.is_some(),
+            positions: p.positions.is_some(),
             selected: selected == Some(id),
         })
         .collect()
@@ -4344,6 +4348,7 @@ mod tests {
                     name: None,
                     camera: false,
                     tags: false,
+                    positions: None,
                 },
             );
             e.doc().selected_scene().unwrap()

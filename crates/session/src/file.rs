@@ -32,11 +32,14 @@ pub const FORMAT: &str = "sketchup-alt";
 /// version 14 hidden entities and the x-ray and hidden geometry view flags, version 15 the
 /// model axes, version 16 the location and sun shadow settings, version 17 decimal feet
 /// and the length and angle snapping settings of the display units, and version 18 styles
-/// and the style a view chooses; older files still open
+/// and the style a view chooses, and version 19 the instance positions a scene stores; older
+/// files still open
 /// (untagged before version 10, without scenes before version 11, without annotations and in
 /// the default units before version 12, without section planes and with the default section
 /// display before version 13).
-pub const SCHEMA_VERSION: u32 = 18;
+pub const SCHEMA_VERSION: u32 = 19;
+/// The version written when a scene stores instance positions.
+pub const SCENE_POSITIONS_SCHEMA_VERSION: u32 = 19;
 /// The version written when the model has a style or the camera or a scene's view chooses
 /// one.
 pub const STYLES_SCHEMA_VERSION: u32 = 18;
@@ -297,6 +300,7 @@ pub(crate) fn write_bytes(
             .pages
             .iter()
             .any(|p| p.view.is_some_and(|v| !v.shadows.is_default()));
+    let moving_scenes = model.pages.iter().any(|p| p.positions.is_some());
     let styled = !model.styles.is_empty()
         || style.is_some()
         || model
@@ -319,7 +323,9 @@ pub(crate) fn write_bytes(
     images.dedup_by(|a, b| a.0 == b.0);
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: if styled {
+        schema_version: if moving_scenes {
+            SCENE_POSITIONS_SCHEMA_VERSION
+        } else if styled {
             STYLES_SCHEMA_VERSION
         } else if units.needs_snap_schema() {
             SNAP_SCHEMA_VERSION
@@ -770,6 +776,7 @@ mod tests {
             name: "Far".into(),
             view: Some(far),
             tags: None,
+            positions: None,
         };
         scene.add_page(page).unwrap();
         let dir = std::env::temp_dir().join(format!("session-file-far-{}", std::process::id()));

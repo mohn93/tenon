@@ -1,7 +1,7 @@
 //! The scene tabs and the Scenes tab: each change is the command an agent would send.
 
 use kernel::PageId;
-use session::Command;
+use session::{Command, ScenePositions};
 
 use super::{Editor, Message};
 
@@ -14,6 +14,7 @@ impl Editor {
             name: None,
             camera: true,
             tags: true,
+            positions: None,
         });
         true
     }
@@ -44,6 +45,7 @@ impl Editor {
             scene,
             camera,
             tags,
+            positions: None,
         });
         true
     }
@@ -56,6 +58,7 @@ impl Editor {
             name: Some(name),
             camera: None,
             tags: None,
+            positions: None,
         });
         true
     }
@@ -74,6 +77,37 @@ impl Editor {
             name: None,
             camera,
             tags,
+            positions: None,
+        });
+        true
+    }
+
+    /// Starts (true) or stops storing instance positions in a scene. Started, it stores the
+    /// selected instances of the root, or every instance of the root when none is selected.
+    pub fn set_scene_positions(&mut self, scene: PageId, on: bool) -> bool {
+        self.message = None;
+        let positions = if on {
+            let chosen: Vec<_> = self
+                .doc
+                .selection()
+                .iter()
+                .copied()
+                .filter(|e| matches!(e, kernel::EntityId::Instance(_)))
+                .collect();
+            if chosen.is_empty() || !self.doc.context().is_empty() {
+                ScenePositions::Flag(true)
+            } else {
+                ScenePositions::Ids(chosen)
+            }
+        } else {
+            ScenePositions::Flag(false)
+        };
+        self.run(Command::ChangeScene {
+            scene,
+            name: None,
+            camera: None,
+            tags: None,
+            positions: Some(positions),
         });
         true
     }
@@ -171,6 +205,51 @@ mod tests {
         assert_eq!(names(&e), ["Front", "Scene 2"]);
         e.undo();
         assert_eq!(names(&e), ["Scene 1", "Scene 2"]);
+    }
+
+    #[test]
+    fn the_positions_checkbox_stores_the_selected_instances_or_all_of_them() {
+        let mut e = editor();
+        let cmd = |v: serde_json::Value| serde_json::from_value::<Command>(v).unwrap();
+        for x in [0.0, 5.0] {
+            e.execute(cmd(serde_json::json!({
+                "type": "add_rectangle", "corner": [x, 0, 0], "opposite": [x + 1.0, 1, 0]
+            })))
+            .unwrap();
+            let face = e
+                .doc()
+                .scene()
+                .root()
+                .faces()
+                .map(|(id, _)| kernel::EntityId::Face(id))
+                .last()
+                .expect("the rectangle's face");
+            e.execute(cmd(
+                serde_json::json!({"type": "make_group", "ids": [face.to_string()]}),
+            ))
+            .unwrap();
+        }
+        let instances: Vec<kernel::EntityId> = e
+            .doc()
+            .scene()
+            .root()
+            .instances()
+            .map(|(id, _)| kernel::EntityId::Instance(id))
+            .collect();
+        assert_eq!(instances.len(), 2);
+        assert!(e.add_scene());
+        let scene = ids(&e)[0];
+        // The group just made is selected: only it is stored.
+        assert!(e.set_scene_positions(scene, true));
+        let stored = |e: &Editor| e.doc().scene().page(scene).unwrap().positions.clone();
+        assert_eq!(stored(&e).unwrap().len(), 1);
+        assert!(e.set_scene_positions(scene, false));
+        assert!(stored(&e).is_none());
+        // With nothing selected every instance of the root is stored.
+        e.execute(cmd(serde_json::json!({"type": "select", "ids": []})))
+            .unwrap();
+        assert!(e.set_scene_positions(scene, true));
+        assert_eq!(stored(&e).unwrap().len(), 2);
     }
 
     #[test]
