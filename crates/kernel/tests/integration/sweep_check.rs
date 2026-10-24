@@ -542,3 +542,54 @@ fn a_sweep_that_runs_too_many_booleans_stops_with_a_reason() {
     assert_eq!(why, SWEEP_TOO_COSTLY);
     assert!(r.steps < 361, "{}", r.steps);
 }
+
+#[test]
+fn parts_the_joint_does_not_move_are_checked_once() {
+    // Two fixed blocks overlapping each other beside the slider-crank: their pair stands the
+    // same at every step, so its boolean runs once and a budget of 3 does not stop the sweep.
+    let mut c = slider_crank();
+    let a = block(
+        &mut c.scene,
+        p(0.0, 0.2, 0.0),
+        p(0.02, 0.22, 0.02),
+        DAffine3::IDENTITY,
+    );
+    let b = block(
+        &mut c.scene,
+        p(0.01, 0.2, 0.0),
+        p(0.03, 0.22, 0.02),
+        DAffine3::IDENTITY,
+    );
+    let ids = [c.piston, c.stop, a, b];
+    let r = sweep_check_budget(
+        &c.scene,
+        c.joints[0],
+        0.0,
+        360f64.to_radians(),
+        73,
+        None,
+        &ids,
+        SWEEP_REPORT_WITHIN,
+        3,
+    )
+    .unwrap();
+    assert_eq!(r.stopped, None);
+    assert_eq!(r.steps, 73);
+    let q = pair_of(&r, a, b);
+    let (first, last) = q.interferes.expect("the fixed blocks overlap");
+    assert_eq!(first, 0.0);
+    assert!((last - 360f64.to_radians()).abs() < 1e-12, "{last}");
+    assert!(
+        (q.volume - 0.01 * 0.02 * 0.02).abs() < 1e-12,
+        "{}",
+        q.volume
+    );
+    assert_eq!(q.volume_at, Some(0.0));
+    assert_eq!(q.clearance, 0.0);
+    // the moving pairs are still checked at every step: the piston clears the stop by 2 mm
+    // at bottom dead centre
+    let stop = pair_of(&r, c.piston, c.stop);
+    assert!(stop.interferes.is_none());
+    assert!((stop.clearance - 0.002).abs() < 1e-9, "{}", stop.clearance);
+    assert!((stop.clearance_at.to_degrees() - 180.0).abs() < 1e-6);
+}

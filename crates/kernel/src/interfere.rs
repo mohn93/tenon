@@ -147,6 +147,7 @@ pub struct SweepReport {
 }
 
 /// How two parts stand at one step of a sweep.
+#[derive(Clone, Debug)]
 enum Probe {
     /// Their surfaces are this far apart (0 when touching), within the report distance.
     Near(f64),
@@ -164,7 +165,14 @@ pub struct Checker {
     solid: HashMap<DefinitionId, Result<(), String>>,
     /// How many boolean volume computations ran.
     pub booleans: usize,
+    /// The last probe of each pair of a sweep, with the shells it was made with: a pair
+    /// neither of whose parts moved since (two parts the joint does not move) stands as it
+    /// did, so a sweep checks it once.
+    probes: HashMap<(InstanceId, InstanceId), KeptProbe>,
 }
+
+/// A pair's probe and the shells of its two parts when it was made.
+type KeptProbe = (Vec<Shell>, Vec<Shell>, Option<Probe>);
 
 impl Checker {
     pub fn new() -> Checker {
@@ -611,7 +619,23 @@ impl Checker {
                 } else {
                     (&parts[j], &parts[i])
                 };
-                let Some(probe) = self.probe(scene, a, b, within) else {
+                let kept = self
+                    .probes
+                    .get(&(a.id, b.id))
+                    .filter(|(sa, sb, _)| *sa == a.shells && *sb == b.shells)
+                    .map(|(_, _, probe)| probe.clone());
+                let probe = match kept {
+                    Some(probe) => probe,
+                    None => {
+                        let probe = self.probe(scene, a, b, within);
+                        self.probes.insert(
+                            (a.id, b.id),
+                            (a.shells.clone(), b.shells.clone(), probe.clone()),
+                        );
+                        probe
+                    }
+                };
+                let Some(probe) = probe else {
                     continue;
                 };
                 let e = found.entry((a.id, b.id)).or_insert(SweepPair {
@@ -664,7 +688,9 @@ impl Checker {
 /// each checks every pair of the root instances `ids` (every one when empty) whose boxes
 /// come within `within` meters. Pairs that never come within `within` are left out. A value
 /// the solver cannot meet stops the sweep there. The scene is never changed. The triangle
-/// trees are built once per definition and placed anew at each step.
+/// trees are built once per definition and placed anew at each step; a pair neither of whose
+/// parts moved since the step before (two parts the joint does not move) is checked once and
+/// stands as it did.
 ///
 /// A sweep that has run more than [`MAX_SWEEP_BOOLEANS`] boolean volume computations stops
 /// after the step that passed it, with [`SWEEP_TOO_COSTLY`] as the reason.

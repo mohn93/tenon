@@ -5,7 +5,7 @@
 //! tree serves every instance of the definition in every pose (a crank turning through a
 //! sweep moves its instances, not its geometry).
 
-use glam::{DAffine3, DVec3};
+use glam::{DAffine3, DMat3, DVec3};
 
 /// Triangles per leaf at most.
 const LEAF: usize = 4;
@@ -115,6 +115,25 @@ impl Bvh {
         if self.is_empty() || other.is_empty() {
             return None;
         }
+        if let Some(rel) = relative(pa, pb) {
+            let local = self.distance_placed(&DAffine3::IDENTITY, other, &rel, bound, stop)?;
+            return Some(Closest {
+                distance: local.distance,
+                a: pa.transform_point3(local.a),
+                b: pa.transform_point3(local.b),
+            });
+        }
+        self.distance_placed(pa, other, pb, bound, stop)
+    }
+
+    fn distance_placed(
+        &self,
+        pa: &DAffine3,
+        other: &Bvh,
+        pb: &DAffine3,
+        bound: f64,
+        stop: f64,
+    ) -> Option<Closest> {
         let mut search = Search {
             a: self,
             b: other,
@@ -201,8 +220,25 @@ impl Bvh {
     /// its ends more than `tol` to either side. Surfaces that only touch (faces lying on each
     /// other, edges along faces) do not cross; a crossing shallower than `tol` may be missed.
     pub fn crosses(&self, pa: &DAffine3, other: &Bvh, pb: &DAffine3, tol: f64) -> bool {
-        !self.is_empty() && !other.is_empty() && crossing_pair(self, pa, other, pb, 0, 0, tol)
+        if self.is_empty() || other.is_empty() {
+            return false;
+        }
+        match relative(pa, pb) {
+            Some(rel) => crossing_pair(self, &DAffine3::IDENTITY, other, &rel, 0, 0, tol),
+            None => crossing_pair(self, pa, other, pb, 0, 0, tol),
+        }
     }
+}
+
+/// `pb` as seen from `pa` (`pa` inverted, then `pb`) when `pa` only turns, mirrors and moves
+/// (no scale or shear), so two trees can be compared in the first one's own coordinates,
+/// where distances are the world's. Boxes stay tight there for two parts that stand square
+/// to each other however they are turned in the world (a piston in a tilted bore), where
+/// boxes placed in the world would grow with the tilt and meet far more often.
+fn relative(pa: &DAffine3, pb: &DAffine3) -> Option<DAffine3> {
+    let m = pa.matrix3;
+    let off = (m.transpose() * m - DMat3::IDENTITY).to_cols_array();
+    (pa.is_finite() && off.iter().all(|x| x.abs() < 1e-12)).then(|| pa.inverse() * *pb)
 }
 
 fn build(tris: &mut [[DVec3; 3]], offset: usize, nodes: &mut Vec<Node>) -> usize {
@@ -721,6 +757,42 @@ mod tests {
         }
         assert!((tree.distance - brute).abs() < 1e-12, "{tree:?} vs {brute}");
         assert!((tree.a.distance(tree.b) - tree.distance).abs() < 1e-12);
+    }
+
+    #[test]
+    fn turned_and_scaled_placements_find_the_brute_force_minimum() {
+        // Both placed turned (compared in the first one's coordinates), and the first one
+        // scaled too (compared in the world's): the same minimum as triangle by triangle.
+        let a = Bvh::new(grid(6, 0.0));
+        let b = Bvh::new(grid(6, 0.0));
+        let pb =
+            DAffine3::from_rotation_x(0.6) * DAffine3::from_translation(DVec3::new(2.3, 1.1, 1.2));
+        for pa in [
+            DAffine3::from_rotation_y(0.4) * DAffine3::from_translation(DVec3::new(1.0, -2.0, 0.3)),
+            DAffine3::from_rotation_y(0.4) * DAffine3::from_scale(DVec3::new(1.0, -1.0, 1.0)),
+            DAffine3::from_rotation_y(0.4) * DAffine3::from_scale(DVec3::new(1.0, 2.0, 0.5)),
+        ] {
+            let tree = a.distance(&pa, &b, &pb, f64::INFINITY, 0.0).unwrap();
+            let mut brute = f64::INFINITY;
+            for t in a.triangles() {
+                for u in b.triangles() {
+                    let ta = t.map(|p| pa.transform_point3(p));
+                    let ub = u.map(|p| pb.transform_point3(p));
+                    brute = brute.min(triangle_distance(ta, ub).distance);
+                }
+            }
+            assert!((tree.distance - brute).abs() < 1e-12, "{tree:?} vs {brute}");
+            assert!(
+                (tree.a.distance(tree.b) - tree.distance).abs() < 1e-9,
+                "{tree:?}"
+            );
+            // b stood up as a wall across the middle of a
+            let crossing = pa
+                * DAffine3::from_translation(DVec3::new(0.25, 3.3, -2.7))
+                * DAffine3::from_rotation_x(std::f64::consts::FRAC_PI_2);
+            assert!(a.crosses(&pa, &b, &crossing, 1e-9));
+            assert!(!a.crosses(&pa, &b, &pb, 1e-9) || brute == 0.0);
+        }
     }
 
     #[test]

@@ -587,7 +587,13 @@ distinct `ids` is `invalid_input`.
 `sweep_check` checks only the pairs whose boxes come within `report_within`, by distance first:
 the overlap boolean runs only for a pair whose surfaces cross or where one part may lie inside the
 other, so parts that only touch (layers face to face) cost a distance check per step. Each solid's triangle tree is built once and placed at every step; a 60-part engine sweeps
-720 steps in well under 5 s. A sweep that has run more than 20,000 boolean volume computations
+720 steps in well under 5 s. A pair neither of whose parts moved since the step before (two parts
+the joint does not move, such as a block and its bolts) is checked at the first step only and
+stands as it did, so the parts that stay put cost nothing after it and a pair of them that
+overlaps runs its boolean once. Two parts are compared in the coordinates of the first one's
+definition, so a part drawn square to another (a bank casting drawn in its bank's frame, the
+piston in its bore) keeps tight boxes however both are turned in the model; tight fits between
+parts that are not square to each other (a long tilted bore against a piston) cost more per step. A sweep that has run more than 20,000 boolean volume computations
 stops after the step that passed that count: `stopped: {"value", "reason": "sweep stopped: too many
 overlapping steps; use fewer steps or ids"}`, with the pairs found so far. An unknown `joint` is `not_found`; a fixed or ball joint, `steps`
 outside 2 to 10000, a negative `report_within`, `slide` on a joint that is not cylindrical, or
