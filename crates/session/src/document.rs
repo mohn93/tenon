@@ -2166,7 +2166,7 @@ impl Document {
     }
 
     /// The instances `command` (just run, with net `changes`) left in the open context, in
-    /// creation order, for the commands that place instances; None for the others.
+    /// creation order; None for other commands and when it placed none.
     fn placed_instances(
         &self,
         command: &Command,
@@ -2192,7 +2192,7 @@ impl Document {
             .copied()
             .filter(|id| matches!(id, EntityId::Instance(i) if m.instance(*i).is_some()))
             .collect();
-        Some(placed)
+        (!placed.is_empty()).then_some(placed)
     }
 
     /// Whether the open context holds the entity.

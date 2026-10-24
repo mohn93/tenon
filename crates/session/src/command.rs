@@ -1264,9 +1264,9 @@ pub struct Outcome {
     /// other commands. Batch commands can refer to them as `$N:dI`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definitions: Option<Vec<DefinitionId>>,
-    /// The instances a `copy`, `rotate` or `scale` with copies, `make_group`, `make_component`,
+    /// The instances a `copy`, `rotate` with copies, `make_group`, `make_component`,
     /// `explode`, `paste` or `insert_library_item` left in the open context, in creation order
-    /// (instances inside new definitions are not listed); absent for other commands. Batch
+    /// (instances inside new definitions are not listed); absent when the command placed none. Batch
     /// `$N:iK` references pick from this list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placed: Option<Vec<EntityId>>,

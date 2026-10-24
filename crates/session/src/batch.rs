@@ -235,7 +235,7 @@ impl BatchRef {
                 if let Some(gone) = picked.iter().find(|id| !exists(**id)) {
                     return Err(CommandError::new(
                         ErrorKind::NotFound,
-                        format!("{self}: {gone} no longer exists in the open context"),
+                        format!("{self}: {gone} is not in the open context"),
                     )
                     .with_ids(vec![*gone]));
                 }
@@ -385,7 +385,9 @@ impl BatchCommand {
         let mut stand_ins = 0;
         id_slots(&mut command, &mut |slot| {
             stand_ins += match slot {
-                Slot::List(ids) => ids.iter().filter(|id| is_stand_in(id)).count(),
+                Slot::List(ids) | Slot::Path(ids) => {
+                    ids.iter().filter(|id| is_stand_in(id)).count()
+                }
                 Slot::One(id) => usize::from(is_stand_in(id)),
                 Slot::Material(m) => usize::from(m.0 >= STAND_IN_BASE),
                 Slot::Definition(d) => usize::from(d.0 >= STAND_IN_BASE),
@@ -431,6 +433,9 @@ impl BatchCommand {
             }
             let result = match slot {
                 Slot::List(ids) => self.resolve_list(ids, done, exists),
+                // The elements of a path are instances of nested contexts, not of the open one:
+                // `open_path` checks them.
+                Slot::Path(ids) => self.resolve_list(ids, done, &|_| true),
                 Slot::One(id) => self.resolve_one(id, done, exists),
                 Slot::Material(m) => self.resolve_material(m, done),
                 Slot::Definition(d) => self.resolve_definition(d, done),
@@ -628,6 +633,8 @@ fn is_stand_in_ref(r: &LibraryRef) -> bool {
 /// An id field of a command.
 enum Slot<'a> {
     List(&'a mut Vec<EntityId>),
+    /// The instance path of `open_path`.
+    Path(&'a mut Vec<EntityId>),
     One(&'a mut EntityId),
     Material(&'a mut MaterialId),
     Definition(&'a mut DefinitionId),
@@ -670,7 +677,7 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
                 f(Slot::List(ids));
             }
         }
-        Command::OpenPath { path } => f(Slot::List(path)),
+        Command::OpenPath { path } => f(Slot::Path(path)),
         Command::SaveToLibrary { item, .. } => {
             if let Some(item) = item {
                 f(Slot::Item(item));

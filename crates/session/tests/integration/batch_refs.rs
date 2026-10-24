@@ -393,9 +393,22 @@ fn rotate_copies_lists_placed_in_creation_order() {
     let placed = out.placed.unwrap();
     assert_eq!(placed.len(), 3);
     assert!(placed.windows(2).all(|w| w[0] < w[1]));
-    let roots = instance_ids(&d);
-    for p in &placed {
-        assert!(roots.contains(&p.to_string()));
+    let all = ask(&d, json!({"type": "entities", "kinds": ["instance"]}));
+    let all = all["instances"].as_array().unwrap();
+    for (k, p) in placed.iter().enumerate() {
+        let entry = all
+            .iter()
+            .find(|i| i["id"].as_str() == Some(&p.to_string()))
+            .expect("placed instance is in the open context");
+        let m: Vec<f64> = entry["transform"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_f64().unwrap())
+            .collect();
+        let angle = 30f64.to_radians() * (k + 1) as f64;
+        assert!((m[0] - angle.cos()).abs() < 1e-9, "copy {k}: {m:?}");
+        assert!((m[1] - angle.sin()).abs() < 1e-9, "copy {k}: {m:?}");
     }
 }
 
@@ -476,4 +489,41 @@ fn a_star_that_resolves_to_nothing_is_an_empty_list() {
         )
         .unwrap_err();
     assert_eq!(err.error.kind, ErrorKind::InvalidInput);
+}
+
+#[test]
+fn open_path_takes_references_to_nested_groups() {
+    for atomic in [true, false] {
+        let mut d = doc();
+        let out = d
+            .execute_batch(
+                batch(vec![
+                    rectangle(),
+                    json!({"type": "make_group", "ids": ["$0:*"]}),
+                    json!({"type": "make_group", "ids": ["$1:i0"]}),
+                    json!({"type": "open_path", "path": ["$2:i0", "$1:i0"]}),
+                ]),
+                atomic,
+            )
+            .unwrap();
+        assert_eq!(out.len(), 4, "atomic {atomic}");
+        assert_eq!(stats(&d, "faces"), 1, "the inner group is open");
+    }
+}
+
+#[test]
+fn open_path_references_work_after_an_open_instance() {
+    let mut d = doc();
+    d.execute_batch(
+        batch(vec![
+            rectangle(),
+            json!({"type": "make_group", "ids": ["$0:*"]}),
+            json!({"type": "make_group", "ids": ["$1:i0"]}),
+            json!({"type": "open_instance", "id": "$2:i0"}),
+            json!({"type": "open_path", "path": ["$2:i0", "$1:i0"]}),
+        ]),
+        false,
+    )
+    .unwrap();
+    assert_eq!(stats(&d, "faces"), 1);
 }
