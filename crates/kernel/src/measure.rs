@@ -5,10 +5,12 @@
 //! Everything is worked out in the coordinates of the mesh the measuring starts from; an entity
 //! inside nested instances is addressed by the path of instances leading to it.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use glam::{DAffine3, DMat3, DVec3};
 
+use crate::bvh::{Bvh, Closest, NONE, segment_segment_ranges, segment_triangle};
 use crate::ids::{EdgeId, EntityId, FaceId, VertexId};
 use crate::mass::symmetric_eigen;
 use crate::model::{Guide, Model};
@@ -38,8 +40,15 @@ fn invalid<T>(m: impl Into<String>) -> Result<T, MeasureError> {
 
 type Tri = [DVec3; 3];
 
+/// One definition's triangles (in its own coordinates) standing at `place`.
+#[derive(Clone, Debug)]
+pub struct Part {
+    bvh: Rc<Bvh>,
+    place: DAffine3,
+}
+
 /// What is measured: a point, a segment or an infinite line (`p + d t` for `t` in `lo..=hi`),
-/// or a set of triangles (a face, or everything in an instance).
+/// or a surface (a face, or everything in an instance) made of parts.
 #[derive(Clone, Debug)]
 pub enum Item {
     Point(DVec3),
@@ -49,7 +58,7 @@ pub enum Item {
         lo: f64,
         hi: f64,
     },
-    Tris(Vec<Tri>),
+    Surface(Vec<Part>),
 }
 
 impl Item {
@@ -61,49 +70,15 @@ impl Item {
             hi: 1.0,
         }
     }
-}
 
-/// The minimum distance and the closest point on each of the two items.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Closest {
-    pub distance: f64,
-    pub a: DVec3,
-    pub b: DVec3,
-}
-
-impl Closest {
-    fn new(a: DVec3, b: DVec3) -> Closest {
-        Closest {
-            distance: a.distance(b),
-            a,
-            b,
-        }
-    }
-
-    fn swapped(self) -> Closest {
-        Closest {
-            distance: self.distance,
-            a: self.b,
-            b: self.a,
-        }
-    }
-
-    fn min(self, other: Closest) -> Closest {
-        if other.distance < self.distance {
-            other
-        } else {
-            self
-        }
+    /// A surface of loose triangles in the measuring coordinates.
+    pub fn tris(tris: Vec<Tri>) -> Item {
+        Item::Surface(vec![Part {
+            bvh: Rc::new(Bvh::new(tris)),
+            place: DAffine3::IDENTITY,
+        }])
     }
 }
-
-const NONE: Closest = Closest {
-    distance: f64::INFINITY,
-    a: DVec3::ZERO,
-    b: DVec3::ZERO,
-};
-
-// ---- primitives ---------------------------------------------------------------------------
 
 fn seg_point(p: DVec3, d: DVec3, lo: f64, hi: f64, q: DVec3) -> DVec3 {
     let dd = d.dot(d);
@@ -115,338 +90,18 @@ fn seg_point(p: DVec3, d: DVec3, lo: f64, hi: f64, q: DVec3) -> DVec3 {
     p + d * t
 }
 
-/// The closest point of a triangle to `q`.
-fn tri_point(t: &Tri, q: DVec3) -> DVec3 {
-    let [a, b, c] = *t;
-    let ab = b - a;
-    let ac = c - a;
-    let ap = q - a;
-    let d1 = ab.dot(ap);
-    let d2 = ac.dot(ap);
-    if d1 <= 0.0 && d2 <= 0.0 {
-        return a;
-    }
-    let bp = q - b;
-    let d3 = ab.dot(bp);
-    let d4 = ac.dot(bp);
-    if d3 >= 0.0 && d4 <= d3 {
-        return b;
-    }
-    let vc = d1 * d4 - d3 * d2;
-    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
-        return a + ab * (d1 / (d1 - d3));
-    }
-    let cp = q - c;
-    let d5 = ab.dot(cp);
-    let d6 = ac.dot(cp);
-    if d6 >= 0.0 && d5 <= d6 {
-        return c;
-    }
-    let vb = d5 * d2 - d1 * d6;
-    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
-        return a + ac * (d2 / (d2 - d6));
-    }
-    let va = d3 * d6 - d5 * d4;
-    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
-        return b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6)));
-    }
-    let denom = 1.0 / (va + vb + vc);
-    a + ab * (vb * denom) + ac * (vc * denom)
-}
-
-/// Closest points of two segments or lines (`p + d t`, `t` in `lo..=hi`).
-fn seg_seg(s1: (DVec3, DVec3, f64, f64), s2: (DVec3, DVec3, f64, f64)) -> Closest {
-    let (p1, d1, lo1, hi1) = s1;
-    let (p2, d2, lo2, hi2) = s2;
-    let r = p1 - p2;
-    let a = d1.dot(d1);
-    let e = d2.dot(d2);
-    let f = d2.dot(r);
-    let (s, t);
-    if a <= 1e-300 && e <= 1e-300 {
-        s = 0.0;
-        t = 0.0;
-    } else if a <= 1e-300 {
-        s = 0.0;
-        t = (f / e).clamp(lo2, hi2);
-    } else {
-        let c = d1.dot(r);
-        if e <= 1e-300 {
-            t = 0.0;
-            s = (-c / a).clamp(lo1, hi1);
-        } else {
-            let b = d1.dot(d2);
-            let denom = a * e - b * b;
-            let mut s0 = if denom > 1e-12 * a * e {
-                ((b * f - c * e) / denom).clamp(lo1, hi1)
-            } else {
-                0.0f64.clamp(lo1, hi1)
-            };
-            let mut t0 = (b * s0 + f) / e;
-            if t0 < lo2 || t0 > hi2 {
-                t0 = t0.clamp(lo2, hi2);
-                s0 = ((b * t0 - c) / a).clamp(lo1, hi1);
-            }
-            s = s0;
-            t = t0;
-        }
-    }
-    Closest::new(p1 + d1 * s, p2 + d2 * t)
-}
-
-/// Whether `x`, in the plane of the triangle, lies inside it (within rounding).
-fn in_tri(t: &Tri, x: DVec3) -> bool {
-    let [a, b, c] = *t;
-    let n = (b - a).cross(c - a);
-    let tol = -1e-12 * n.length_squared();
-    n.dot((b - a).cross(x - a)) >= tol
-        && n.dot((c - b).cross(x - b)) >= tol
-        && n.dot((a - c).cross(x - c)) >= tol
-}
-
-/// A segment or line against a triangle.
-fn seg_tri(p: DVec3, d: DVec3, lo: f64, hi: f64, t: &Tri) -> Closest {
-    let n = (t[1] - t[0]).cross(t[2] - t[0]);
-    let dn = n.dot(d);
-    if dn.abs() > 1e-14 * n.length() * d.length() {
-        let s = n.dot(t[0] - p) / dn;
-        if s >= lo && s <= hi {
-            let x = p + d * s;
-            if in_tri(t, x) {
-                return Closest::new(x, x);
-            }
-        }
-    }
-    let mut best = NONE;
-    for (s, ok) in [(lo, lo.is_finite()), (hi, hi.is_finite())] {
-        if ok {
-            let q = p + d * s;
-            best = best.min(Closest::new(q, tri_point(t, q)));
-        }
-    }
-    for i in 0..3 {
-        let (a, b) = (t[i], t[(i + 1) % 3]);
-        best = best.min(seg_seg((p, d, lo, hi), (a, b - a, 0.0, 1.0)));
-    }
-    best
-}
-
-fn tri_tri(x: &Tri, y: &Tri) -> Closest {
-    let mut best = NONE;
-    for i in 0..3 {
-        let (a, b) = (x[i], x[(i + 1) % 3]);
-        best = best.min(seg_tri(a, b - a, 0.0, 1.0, y));
-        let (a, b) = (y[i], y[(i + 1) % 3]);
-        best = best.min(seg_tri(a, b - a, 0.0, 1.0, x).swapped());
-    }
-    best
-}
-
-// ---- bounding volume hierarchy -------------------------------------------------------------
-
-#[derive(Clone, Copy)]
-struct Bx {
-    lo: DVec3,
-    hi: DVec3,
-}
-
-impl Bx {
-    fn of(t: &Tri) -> Bx {
-        Bx {
-            lo: t[0].min(t[1]).min(t[2]),
-            hi: t[0].max(t[1]).max(t[2]),
-        }
-    }
-
-    fn union(self, o: Bx) -> Bx {
-        Bx {
-            lo: self.lo.min(o.lo),
-            hi: self.hi.max(o.hi),
-        }
-    }
-
-    fn gap(self, o: Bx) -> f64 {
-        let g = (self.lo - o.hi).max(o.lo - self.hi).max(DVec3::ZERO);
-        g.length()
-    }
-
-    fn gap_to_point(self, p: DVec3) -> f64 {
-        (self.lo - p).max(p - self.hi).max(DVec3::ZERO).length()
-    }
-}
-
-struct Node {
-    b: Bx,
-    /// Triangles `start..end` of the order when a leaf, else the two children.
-    kind: NodeKind,
-}
-
-enum NodeKind {
-    Leaf(usize, usize),
-    Inner(usize, usize),
-}
-
-struct Bvh<'a> {
-    tris: &'a [Tri],
-    order: Vec<usize>,
-    nodes: Vec<Node>,
-}
-
-const LEAF: usize = 4;
-
-impl<'a> Bvh<'a> {
-    fn new(tris: &'a [Tri]) -> Bvh<'a> {
-        let mut bvh = Bvh {
-            tris,
-            order: (0..tris.len()).collect(),
-            nodes: Vec::new(),
-        };
-        if !tris.is_empty() {
-            bvh.build(0, tris.len());
-        }
-        bvh
-    }
-
-    fn build(&mut self, start: usize, end: usize) -> usize {
-        let b = self.order[start..end]
-            .iter()
-            .map(|&i| Bx::of(&self.tris[i]))
-            .reduce(Bx::union)
-            .unwrap();
-        let at = self.nodes.len();
-        self.nodes.push(Node {
-            b,
-            kind: NodeKind::Leaf(start, end),
-        });
-        if end - start <= LEAF {
-            return at;
-        }
-        let ext = b.hi - b.lo;
-        let axis = if ext.x >= ext.y && ext.x >= ext.z {
-            0
-        } else if ext.y >= ext.z {
-            1
-        } else {
-            2
-        };
-        let tris = self.tris;
-        let centre = |i: &usize| {
-            let t = &tris[*i];
-            (t[0] + t[1] + t[2])[axis]
-        };
-        self.order[start..end].sort_by(|x, y| centre(x).total_cmp(&centre(y)));
-        let mid = (start + end) / 2;
-        let l = self.build(start, mid);
-        let r = self.build(mid, end);
-        self.nodes[at].kind = NodeKind::Inner(l, r);
-        at
-    }
-
-    fn nearest_point(&self, q: DVec3) -> Closest {
-        let mut best = NONE;
-        if !self.nodes.is_empty() {
-            self.point_rec(0, q, &mut best);
-        }
-        best
-    }
-
-    fn point_rec(&self, n: usize, q: DVec3, best: &mut Closest) {
-        let node = &self.nodes[n];
-        if node.b.gap_to_point(q) >= best.distance {
-            return;
-        }
-        match node.kind {
-            NodeKind::Leaf(s, e) => {
-                for &i in &self.order[s..e] {
-                    let c = tri_point(&self.tris[i], q);
-                    *best = (*best).min(Closest::new(q, c));
-                }
-            }
-            NodeKind::Inner(l, r) => {
-                let (gl, gr) = (
-                    self.nodes[l].b.gap_to_point(q),
-                    self.nodes[r].b.gap_to_point(q),
-                );
-                let (first, second) = if gl <= gr { (l, r) } else { (r, l) };
-                self.point_rec(first, q, best);
-                self.point_rec(second, q, best);
-            }
-        }
-    }
-
-    fn pair_rec(&self, n: usize, other: &Bvh, m: usize, best: &mut Closest) {
-        let (na, nb) = (&self.nodes[n], &other.nodes[m]);
-        if na.b.gap(nb.b) >= best.distance || best.distance == 0.0 {
-            return;
-        }
-        match (&na.kind, &nb.kind) {
-            (NodeKind::Leaf(s1, e1), NodeKind::Leaf(s2, e2)) => {
-                for &i in &self.order[*s1..*e1] {
-                    for &j in &other.order[*s2..*e2] {
-                        *best = (*best).min(tri_tri(&self.tris[i], &other.tris[j]));
-                    }
-                }
-            }
-            (NodeKind::Inner(l, r), NodeKind::Leaf(..)) => {
-                self.pair_pick(*l, *r, other, m, best, true);
-            }
-            (NodeKind::Leaf(..), NodeKind::Inner(l, r)) => {
-                self.pair_pick(*l, *r, other, n, best, false);
-            }
-            (NodeKind::Inner(l1, r1), NodeKind::Inner(l2, r2)) => {
-                // Split the node with the larger box.
-                let vol = |b: Bx| {
-                    let e = b.hi - b.lo;
-                    e.x.max(e.y).max(e.z)
-                };
-                if vol(na.b) >= vol(nb.b) {
-                    self.pair_pick(*l1, *r1, other, m, best, true);
-                } else {
-                    self.pair_pick(*l2, *r2, other, n, best, false);
-                }
-            }
-        }
-    }
-
-    /// Visits the two children of one side against the fixed node of the other, nearer first.
-    /// `split_self` says which tree the children belong to.
-    fn pair_pick(
-        &self,
-        l: usize,
-        r: usize,
-        other: &Bvh,
-        fixed: usize,
-        best: &mut Closest,
-        split_self: bool,
-    ) {
-        if split_self {
-            let (gl, gr) = (
-                self.nodes[l].b.gap(other.nodes[fixed].b),
-                self.nodes[r].b.gap(other.nodes[fixed].b),
-            );
-            let (f, s) = if gl <= gr { (l, r) } else { (r, l) };
-            self.pair_rec(f, other, fixed, best);
-            self.pair_rec(s, other, fixed, best);
-        } else {
-            let (gl, gr) = (
-                other.nodes[l].b.gap(self.nodes[fixed].b),
-                other.nodes[r].b.gap(self.nodes[fixed].b),
-            );
-            let (f, s) = if gl <= gr { (l, r) } else { (r, l) };
-            self.pair_rec(fixed, other, f, best);
-            self.pair_rec(fixed, other, s, best);
-        }
-    }
-}
-
 /// The distance between two items and the closest point on each.
 pub fn distance(a: &Item, b: &Item) -> Closest {
     use Item::*;
     match (a, b) {
         (Point(p), Point(q)) => Closest::new(*p, *q),
         (Point(p), Seg { p: sp, d, lo, hi }) => Closest::new(*p, seg_point(*sp, *d, *lo, *hi, *p)),
-        (Point(p), Tris(t)) => Bvh::new(t).nearest_point(*p),
-        (Seg { .. } | Tris(_), Point(_)) => distance(b, a).swapped(),
+        (Point(p), Surface(parts)) => parts.iter().fold(NONE, |best, part| {
+            part.bvh
+                .nearest_point(&part.place, *p)
+                .map_or(best, |c| best.min(c))
+        }),
+        (Seg { .. } | Surface(_), Point(_)) => distance(b, a).swapped(),
         (
             Seg {
                 p: p1,
@@ -460,25 +115,36 @@ pub fn distance(a: &Item, b: &Item) -> Closest {
                 lo: l2,
                 hi: h2,
             },
-        ) => seg_seg((*p1, *d1, *l1, *h1), (*p2, *d2, *l2, *h2)),
-        (Seg { p, d, lo, hi }, Tris(t)) => {
+        ) => segment_segment_ranges((*p1, *d1, *l1, *h1), (*p2, *d2, *l2, *h2)),
+        (Seg { p, d, lo, hi }, Surface(parts)) => {
+            // A plain loop: a line has no bounds to prune by.
             let mut best = NONE;
-            let bvh = Bvh::new(t);
-            // Only the bounds of finite segments prune; lines test every triangle.
-            for tri in bvh.tris {
-                if best.distance == 0.0 {
-                    break;
+            'parts: for part in parts {
+                for t in part.bvh.triangles() {
+                    if best.distance == 0.0 {
+                        break 'parts;
+                    }
+                    let t = t.map(|v| part.place.transform_point3(v));
+                    best = best.min(segment_triangle(*p, *d, *lo, *hi, t));
                 }
-                best = best.min(seg_tri(*p, *d, *lo, *hi, tri));
             }
             best
         }
-        (Tris(_), Seg { .. }) => distance(b, a).swapped(),
-        (Tris(x), Tris(y)) => {
-            let (bx, by) = (Bvh::new(x), Bvh::new(y));
+        (Surface(_), Seg { .. }) => distance(b, a).swapped(),
+        (Surface(x), Surface(y)) => {
             let mut best = NONE;
-            if !x.is_empty() && !y.is_empty() {
-                bx.pair_rec(0, &by, 0, &mut best);
+            for pa in x {
+                for pb in y {
+                    if best.distance == 0.0 {
+                        return best;
+                    }
+                    if let Some(c) =
+                        pa.bvh
+                            .distance(&pa.place, &pb.bvh, &pb.place, best.distance, 0.0)
+                    {
+                        best = c;
+                    }
+                }
             }
             best
         }
@@ -539,14 +205,16 @@ pub fn locate(scene: &Scene, start: MeshId, path: &[EntityId]) -> Result<Located
     })
 }
 
-/// The triangles of `mesh` and the instances in it, placed by `place`; faces that cannot be
-/// triangulated go in `skipped` as paths from `path` ("i4/i7/f12").
-fn mesh_triangles(
+/// The parts of `mesh` and the instances in it: one per placement of a definition, sharing a
+/// tree per definition (built in `cache`); faces that cannot be triangulated go in `skipped`
+/// as paths from `path` ("i4/i7/f12").
+fn mesh_parts(
     scene: &Scene,
     mesh: MeshId,
     place: DAffine3,
     (depth, path): (usize, &str),
-    out: &mut Vec<Tri>,
+    cache: &mut BTreeMap<MeshId, (Rc<Bvh>, Vec<FaceId>)>,
+    out: &mut Vec<Part>,
     skipped: &mut Vec<String>,
 ) -> Result<(), MeasureError> {
     if depth > MAX_DEPTH {
@@ -555,21 +223,30 @@ fn mesh_triangles(
     let Some(m) = scene.mesh(mesh) else {
         return Ok(());
     };
-    for (id, _) in m.faces() {
-        match m.triangulate(id) {
-            Some(tris) => out.extend(
-                tris.into_iter()
-                    .map(|t| t.map(|p| place.transform_point3(p))),
-            ),
-            None => skipped.push(format!("{path}/f{}", id.0)),
+    let (bvh, failed) = cache.entry(mesh).or_insert_with(|| {
+        let (mut tris, mut failed) = (Vec::new(), Vec::new());
+        for (id, _) in m.faces() {
+            match m.triangulate(id) {
+                Some(t) => tris.extend(t),
+                None => failed.push(id),
+            }
         }
+        (Rc::new(Bvh::new(tris)), failed)
+    });
+    skipped.extend(failed.iter().map(|id| format!("{path}/f{}", id.0)));
+    if !bvh.is_empty() {
+        out.push(Part {
+            bvh: Rc::clone(bvh),
+            place,
+        });
     }
     for (id, inst) in m.instances() {
-        mesh_triangles(
+        mesh_parts(
             scene,
             MeshId::Definition(inst.definition),
             place * inst.transform,
             (depth + 1, &format!("{path}/i{}", id.0)),
+            cache,
             out,
             skipped,
         )?;
@@ -598,23 +275,24 @@ pub fn item(scene: &Scene, at: &Located, skipped: &mut Vec<String>) -> Result<It
             if tris.is_empty() {
                 return invalid(format!("{} cannot be triangulated", at.id));
             }
-            Item::Tris(tris)
+            Item::tris(tris)
         }
         EntityId::Instance(i) => {
             let inst = m.instance(i).ok_or(MeasureError::Missing(at.id))?;
-            let mut tris = Vec::new();
-            mesh_triangles(
+            let mut parts = Vec::new();
+            mesh_parts(
                 scene,
                 MeshId::Definition(inst.definition),
                 at.place * inst.transform,
                 (0, &at.id.to_string()),
-                &mut tris,
+                &mut BTreeMap::new(),
+                &mut parts,
                 skipped,
             )?;
-            if tris.is_empty() {
+            if parts.is_empty() {
                 return invalid(format!("{} holds no faces", at.id));
             }
-            Item::Tris(tris)
+            Item::Surface(parts)
         }
         EntityId::Guide(g) => match *m.guide(g).ok_or(MeasureError::Missing(at.id))? {
             Guide::Point { position, .. } => Item::Point(w(position)),
@@ -1111,7 +789,7 @@ mod tests {
         assert!((c.distance - 5.0).abs() < 1e-9);
         let c = distance(&line, &seg(v(5.0, 1.0, 2.0), v(6.0, 1.0, 2.0)));
         assert!((c.distance - 5.0f64.sqrt()).abs() < 1e-12);
-        let tri = Item::Tris(vec![[v(0.0, 1.0, 1.0), v(0.0, 3.0, 1.0), v(0.0, 1.0, 4.0)]]);
+        let tri = Item::tris(vec![[v(0.0, 1.0, 1.0), v(0.0, 3.0, 1.0), v(0.0, 1.0, 4.0)]]);
         let c = distance(&line, &tri);
         assert!((c.distance - 2.0f64.sqrt()).abs() < 1e-12, "{c:?}");
     }
@@ -1119,7 +797,7 @@ mod tests {
     #[test]
     fn segment_through_a_triangle_is_zero_and_beside_is_the_rim() {
         let tri = [v(0.0, 0.0, 0.0), v(4.0, 0.0, 0.0), v(0.0, 4.0, 0.0)];
-        let t = Item::Tris(vec![tri]);
+        let t = Item::tris(vec![tri]);
         let c = distance(&seg(v(1.0, 1.0, 1.0), v(1.0, 1.0, -1.0)), &t);
         assert_eq!(c.distance, 0.0);
         let c = distance(&seg(v(5.0, 5.0, 1.0), v(6.0, 6.0, 1.0)), &t);
@@ -1142,16 +820,16 @@ mod tests {
             out
         };
         let (x, y) = (grid(0.0, 0.0, 9), grid(2.0, 0.37, 7));
-        let c = distance(&Item::Tris(x.clone()), &Item::Tris(y.clone()));
+        let c = distance(&Item::tris(x.clone()), &Item::tris(y.clone()));
         let mut brute = NONE;
         for a in &x {
             for b in &y {
-                brute = brute.min(tri_tri(a, b));
+                brute = brute.min(crate::bvh::triangle_distance(*a, *b));
             }
         }
         assert!((c.distance - brute.distance).abs() < 1e-12);
         let crossing = vec![[v(0.5, 0.5, -1.0), v(0.5, 0.5, 1.0), v(0.9, 0.5, 0.0)]];
-        let c = distance(&Item::Tris(x), &Item::Tris(crossing));
+        let c = distance(&Item::tris(x), &Item::tris(crossing));
         assert_eq!(c.distance, 0.0);
     }
 
