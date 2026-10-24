@@ -45,6 +45,7 @@ mod library;
 mod materials;
 mod orient;
 mod placement;
+mod primitives;
 mod scenes;
 mod sections;
 mod shadows;
@@ -52,6 +53,8 @@ mod soften;
 mod styles;
 mod tags;
 mod text3d;
+
+use primitives::placement_of;
 
 pub use annotations::{dimension_label, dimension_value, note_label};
 pub use axes::world_drawing_axes;
@@ -788,6 +791,11 @@ impl Document {
             | Command::RenameDefinition { .. }
             | Command::PlaceInstance { .. }
             | Command::SetTransform { .. }
+            | Command::AddBox { .. }
+            | Command::AddCylinder { .. }
+            | Command::AddTube { .. }
+            | Command::AddCone { .. }
+            | Command::AddPrism { .. }
             | Command::PurgeDefinitions {}
             | Command::AddMaterial { .. }
             | Command::ChangeMaterial { .. }
@@ -996,6 +1004,72 @@ impl Document {
                 transform,
             } => self.place_instance_changes(*definition, transform),
             Command::SetTransform { id, transform } => self.set_transform_changes(*id, transform),
+            Command::AddBox {
+                corner,
+                size,
+                placement,
+                name,
+                material,
+            } => self.add_box_changes(*corner, *size, placement_of(*placement, name, *material)),
+            Command::AddCylinder {
+                base,
+                axis,
+                radius,
+                height,
+                segments,
+                placement,
+                name,
+                material,
+            } => self.add_cylinder_changes(
+                (*base, *axis),
+                (*radius, *height, *segments),
+                placement_of(*placement, name, *material),
+            ),
+            Command::AddTube {
+                base,
+                axis,
+                radius,
+                inner_radius,
+                height,
+                segments,
+                placement,
+                name,
+                material,
+            } => self.add_tube_changes(
+                (*base, *axis),
+                (*radius, *inner_radius, *height, *segments),
+                placement_of(*placement, name, *material),
+            ),
+            Command::AddCone {
+                base,
+                axis,
+                radius,
+                top_radius,
+                height,
+                segments,
+                placement,
+                name,
+                material,
+            } => self.add_cone_changes(
+                (*base, *axis),
+                (*radius, top_radius.unwrap_or(0.0), *height, *segments),
+                placement_of(*placement, name, *material),
+            ),
+            Command::AddPrism {
+                base,
+                axis,
+                radius,
+                sides,
+                height,
+                direction,
+                placement,
+                name,
+                material,
+            } => self.add_prism_changes(
+                (*base, *axis),
+                (*radius, *height, *sides, *direction),
+                placement_of(*placement, name, *material),
+            ),
             Command::PurgeDefinitions {} => {
                 let change = self.scene.purge();
                 // Each step is one RemoveDefinition.

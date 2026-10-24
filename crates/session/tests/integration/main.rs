@@ -34,6 +34,7 @@ mod outliner;
 mod perf;
 mod place_instance;
 mod polygon;
+mod primitives;
 mod print;
 mod read_only;
 mod rotate;

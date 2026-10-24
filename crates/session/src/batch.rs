@@ -751,6 +751,15 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
                 f(Slot::Style(style));
             }
         }
+        Command::AddBox { material, .. }
+        | Command::AddCylinder { material, .. }
+        | Command::AddTube { material, .. }
+        | Command::AddCone { material, .. }
+        | Command::AddPrism { material, .. } => {
+            if let Some(material) = material {
+                f(Slot::Material(material));
+            }
+        }
         Command::AddEdge { .. }
         | Command::AddRectangle { .. }
         | Command::AddCircle { .. }

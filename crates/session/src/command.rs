@@ -17,6 +17,22 @@ use crate::schema::ModelPoint;
 use crate::text3d::Text3dReport;
 use crate::units::{LengthUnit, Units};
 
+/// Where an `add_<primitive>` command puts its solid. `group` (default): a new group holding
+/// it, `component`: a new component, one instance placed and selected, never merged with the
+/// open context's geometry (the outcome's `placed` and `definitions` name them). `geometry`:
+/// loose faces and edges in the open context, merging with what they touch. `name` names the
+/// group's or component's definition (a component without one is named after the shape:
+/// "Box", "Cylinder", ...); `material` paints the instance, or the faces' front sides for
+/// `geometry`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PrimitiveAs {
+    #[default]
+    Group,
+    Component,
+    Geometry,
+}
+
 /// Every state change a client can make. Values are explicit (meters, degrees, entity ids);
 /// commands never refer to screen positions or cursor state. Points, offsets and entity ids are
 /// those of the open context (see `OpenInstance`): the root, or the definition of the instance
@@ -445,6 +461,103 @@ pub enum Command {
     /// Replace the transform of an instance of the open context, as one undo step (the
     /// outcome's `changes.modified` names it). Same transform rules as `place_instance`.
     SetTransform { id: EntityId, transform: Transform },
+    /// Make a closed box solid with one corner at `corner` and sides `size` (`[sx, sy, sz]`,
+    /// each at least 0.01 mm) along the open context's axes. See `PrimitiveAs` for `as`,
+    /// `name` and `material`, shared by every `add_<primitive>` command.
+    AddBox {
+        #[schemars(with = "ModelPoint")]
+        corner: [f64; 3],
+        size: [f64; 3],
+        #[serde(default, rename = "as")]
+        placement: PrimitiveAs,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        material: Option<MaterialId>,
+    },
+    /// Make a closed cylinder of `segments` sides (default 24, 3 to 360) standing on the circle
+    /// of `radius` around `base`, `height` along `axis` (default Z; its direction, any length).
+    /// The first base corner lies along the plane's u axis (see `add_circle`); the edges between
+    /// the sides are soft. See `PrimitiveAs`.
+    AddCylinder {
+        #[schemars(with = "ModelPoint")]
+        base: [f64; 3],
+        #[serde(default)]
+        axis: Option<[f64; 3]>,
+        radius: f64,
+        height: f64,
+        #[serde(default)]
+        segments: Option<u32>,
+        #[serde(default, rename = "as")]
+        placement: PrimitiveAs,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        material: Option<MaterialId>,
+    },
+    /// Make a closed tube: a cylinder with a bore of `inner_radius` (0 < inner_radius < radius),
+    /// an outer and an inner wall and two ring caps. Frame and options as `add_cylinder`.
+    AddTube {
+        #[schemars(with = "ModelPoint")]
+        base: [f64; 3],
+        #[serde(default)]
+        axis: Option<[f64; 3]>,
+        radius: f64,
+        inner_radius: f64,
+        height: f64,
+        #[serde(default)]
+        segments: Option<u32>,
+        #[serde(default, rename = "as")]
+        placement: PrimitiveAs,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        material: Option<MaterialId>,
+    },
+    /// Make a closed cone on the circle of `radius` around `base`, `height` along `axis`,
+    /// narrowing to `top_radius` (default 0: a point where triangle sides meet; above 0 a
+    /// frustum with a top cap, which may be wider than the base). Frame and options as
+    /// `add_cylinder`; the sloping edges are soft.
+    AddCone {
+        #[schemars(with = "ModelPoint")]
+        base: [f64; 3],
+        #[serde(default)]
+        axis: Option<[f64; 3]>,
+        radius: f64,
+        #[serde(default)]
+        top_radius: Option<f64>,
+        height: f64,
+        #[serde(default)]
+        segments: Option<u32>,
+        #[serde(default, rename = "as")]
+        placement: PrimitiveAs,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        material: Option<MaterialId>,
+    },
+    /// Make a closed prism: a regular polygon of `sides` corners (default 6, 3 to 360) inscribed
+    /// in `radius` around `base`, pulled `height` along `axis`. The first corner lies along
+    /// `direction` projected into the plane (default the plane's u axis). All edges are hard.
+    /// Frame and options as `add_cylinder`.
+    AddPrism {
+        #[schemars(with = "ModelPoint")]
+        base: [f64; 3],
+        #[serde(default)]
+        axis: Option<[f64; 3]>,
+        radius: f64,
+        #[serde(default)]
+        sides: Option<u32>,
+        height: f64,
+        #[serde(default)]
+        direction: Option<[f64; 3]>,
+        #[serde(default, rename = "as")]
+        placement: PrimitiveAs,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        material: Option<MaterialId>,
+    },
     /// Remove every definition that no instance places (components left after their last
     /// instance was erased or exploded), and what only they placed.
     PurgeDefinitions {},

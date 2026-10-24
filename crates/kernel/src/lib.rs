@@ -26,6 +26,7 @@ mod model;
 pub mod offset;
 mod orient;
 mod page;
+mod primitives;
 mod push_pull;
 mod regions;
 mod scene;
@@ -70,6 +71,9 @@ pub use material::{MAX_EMISSION, MAX_MATERIAL_NAME, Material, MaterialEdit, Side
 pub use model::{ChangeSet, ChangeSummary, Edge, Face, Guide, Instance, Model, Op, Vertex};
 pub use orient::OrientReport;
 pub use page::{MAX_PAGE_NAME, PAGE_NAME_BASE, Page, PageView, SHADOW_YEARS, Shadows};
+pub use primitives::{
+    DEFAULT_SEGMENTS, DEFAULT_SIDES, MAX_SEGMENTS, MIN_LENGTH, MIN_SEGMENTS, PrimitiveError, Solid,
+};
 pub use scene::{Definition, DefinitionKind, MeshId, Parts, Scene, SceneChange, Step};
 pub use section::SectionPlane;
 pub use section_loops::{SectionLoops, section_loops, triangulate_section};
