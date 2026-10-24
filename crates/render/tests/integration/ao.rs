@@ -118,18 +118,22 @@ fn a_crease_is_darker_with_it_on_and_open_faces_are_not() {
     for lighting in [Lighting::Day, Lighting::Studio] {
         let off = shoot(&mut snap, &d, &style(false, 0.5, 1.0), lighting);
         let on = shoot(&mut snap, &d, &style(true, 0.5, 1.0), lighting);
+        let mut least_crease = f64::MAX;
         for crease in [FLOOR_CREASE, WALL_CREASE] {
             let (a, b) = (off.at(crease), on.at(crease));
             assert!(
                 b < a * 0.9,
                 "{lighting:?} crease {crease}: {b} with, {a} without"
             );
+            least_crease = least_crease.min(a - b);
         }
+        // Open faces barely change: software rasterizers (lavapipe on CI) leave a few levels of
+        // darkening from depth precision, so allow a little, and far less than at the creases.
         for open in OPEN_FLOOR.into_iter().chain([OPEN_WALL]) {
             let (a, b) = (off.at(open), on.at(open));
             assert!(
-                (a - b).abs() <= 2.0,
-                "{lighting:?} open face {open}: {b} with, {a} without"
+                (a - b).abs() <= 6.0 && (a - b).abs() < least_crease / 4.0,
+                "{lighting:?} open face {open}: {b} with, {a} without (crease {least_crease})"
             );
         }
     }
