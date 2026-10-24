@@ -205,13 +205,16 @@ impl Scene {
         })
     }
 
-    /// Checks the parts of `material` other than its name as `add_material_from` does: the
-    /// opacity, the emission and the texture.
-    pub fn check_material_parts(&self, material: &Material) -> Result<(), KernelError> {
-        check_opacity(material.opacity).map_err(KernelError::MaterialOpacity)?;
-        check_emission(material.emission).map_err(KernelError::MaterialEmission)?;
-        if let Some(t) = &material.texture {
-            self.check_new_texture(t, None)?;
+    /// Checks the ranges of the opacity and emission given, as `add_material_from` does.
+    pub fn check_material_ranges(
+        opacity: Option<f32>,
+        emission: Option<f32>,
+    ) -> Result<(), KernelError> {
+        if let Some(o) = opacity {
+            check_opacity(o).map_err(KernelError::MaterialOpacity)?;
+        }
+        if let Some(e) = emission {
+            check_emission(e).map_err(KernelError::MaterialEmission)?;
         }
         Ok(())
     }

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use kernel::{
     EntityId, KernelError, MAX_TEXTURE_SIZE, MIN_TEXTURE_SIZE, Material, MaterialEdit, MaterialId,
-    SceneChange, Side, Texture,
+    Scene, SceneChange, Side, Texture,
 };
 
 use super::Document;
@@ -60,6 +60,12 @@ impl Document {
             self.existing_material = Some(id);
             return Ok(change);
         }
+        if let (Some(id), ExistingMaterial::Reuse) = (found, existing) {
+            // Only the ranges of what is given are checked; a texture is not read.
+            Scene::check_material_ranges(opacity, emission).map_err(|e| material_error(e, None))?;
+            self.existing_material = Some(id);
+            return Ok(SceneChange::default());
+        }
         if texture.is_some_and(|t| t.path.is_none()) {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
@@ -86,14 +92,6 @@ impl Document {
             texture,
             emission: emission.unwrap_or(0.0),
         };
-        if let Some(id) = found {
-            // Reuse: the same checks as for a new material, then nothing changes.
-            self.scene
-                .check_material_parts(&material)
-                .map_err(|e| material_error(e, None))?;
-            self.existing_material = Some(id);
-            return Ok(SceneChange::default());
-        }
         self.scene
             .add_material_from(material)
             .map(|(_, change)| change)

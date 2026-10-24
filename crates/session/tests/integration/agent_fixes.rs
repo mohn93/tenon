@@ -469,11 +469,11 @@ fn a_failed_update_leaves_nothing_for_the_next_command() {
 }
 
 #[test]
-fn reuse_validates_the_other_fields() {
+fn reuse_checks_ranges_when_the_name_exists_and_everything_when_it_does_not() {
     let mut d = doc();
-    run(&mut d, material("Brick", [200, 0, 0], None)).unwrap();
-    for name in ["Brick", "Fresh"] {
-        for bad in [json!({"opacity": 5}), json!({"emission": 99})] {
+    let first = run(&mut d, material("Brick", [200, 0, 0], None)).unwrap();
+    for bad in [json!({"opacity": 5}), json!({"emission": 99})] {
+        for name in ["Brick", "Fresh"] {
             let mut c = material(name, [1, 2, 3], Some("reuse"));
             for (k, v) in bad.as_object().unwrap() {
                 c[k] = v.clone();
@@ -482,6 +482,44 @@ fn reuse_validates_the_other_fields() {
             assert_eq!(kind, ErrorKind::InvalidInput, "{name} {bad}");
         }
     }
+    // A name alone reuses the existing one; a texture is not read.
+    let steps = depth(&d);
+    for extra in [json!({}), json!({"texture": {"path": "/no/such/file.png"}})] {
+        let mut c = json!({"type": "add_material", "name": "Brick", "existing": "reuse"});
+        for (k, v) in extra.as_object().unwrap() {
+            c[k] = v.clone();
+        }
+        let out = run(&mut d, c).unwrap();
+        assert_eq!(out["changes"]["materials"], first["changes"]["materials"]);
+    }
+    assert_eq!(depth(&d), steps);
+    // A new name needs a color or texture.
+    let (kind, _) = run(
+        &mut d,
+        json!({"type": "add_material", "name": "Fresh", "existing": "reuse"}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput);
+}
+
+#[test]
+fn a_rectangle_drawn_around_another_is_a_ring_facing_the_normal() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0.1, 0.1, 0], "opposite": [2.9, 2.9, 0]}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [3, 3, 0], "normal": [0, 0, -1]}),
+    )
+    .unwrap();
+    let mut n = face_normals(&d);
+    n.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    assert_eq!(n.len(), 2, "{n:?}");
+    assert_eq!(n[0].0, -1.0, "the ring (the smaller area) faces down");
+    assert_eq!(n[1].0, 1.0, "the inner face keeps its orientation");
 }
 
 #[test]

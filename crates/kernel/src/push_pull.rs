@@ -629,15 +629,21 @@ impl Model {
             if !in_plane(self, f) {
                 continue;
             }
-            let outer = project(self, &f.outer);
-            let holes: Vec<Vec<DVec2>> = f.holes.iter().map(|h| project(self, h)).collect();
-            let inside_face = |p: DVec2, o: &[DVec2], hs: &[Vec<DVec2>]| {
-                point_in_polygon(p, o) && !hs.iter().any(|h| point_in_polygon(p, h))
-            };
-            let Some(p) = interior_point(&outer, |p| inside_face(p, &outer, &holes)) else {
-                continue;
-            };
-            if before.iter().any(|(o, hs)| inside_face(p, o, hs)) {
+            // The centroid of the face's largest triangle lies inside its area; a face that
+            // cannot be triangulated is taken as new.
+            let inside = self.triangulate(*id).and_then(|tris| {
+                tris.into_iter()
+                    .max_by(|a, b| {
+                        let area = |t: &[DVec3; 3]| (t[1] - t[0]).cross(t[2] - t[0]).length();
+                        area(a).total_cmp(&area(b))
+                    })
+                    .map(|t| plane.project((t[0] + t[1] + t[2]) / 3.0))
+            });
+            if let Some(p) = inside
+                && before.iter().any(|(o, hs)| {
+                    point_in_polygon(p, o) && !hs.iter().any(|h| point_in_polygon(p, h))
+                })
+            {
                 continue;
             }
             self.orient(*id, normal);
@@ -757,14 +763,4 @@ fn in_swept(p: DVec3, a: DVec3, b: DVec3, offset: DVec3) -> bool {
 
 fn side(a: VertexId, b: VertexId) -> (VertexId, VertexId) {
     (a.min(b), a.max(b))
-}
-
-/// A point inside a polygon (and accepted by `ok`): the centroid of three consecutive corners
-/// for some corner, or the centroid of the corners.
-fn interior_point(poly: &[DVec2], ok: impl Fn(DVec2) -> bool) -> Option<DVec2> {
-    let n = poly.len();
-    let whole = poly.iter().copied().sum::<DVec2>() / n.max(1) as f64;
-    std::iter::once(whole)
-        .chain((0..n).map(|i| (poly[i] + poly[(i + 1) % n] + poly[(i + 2) % n]) / 3.0))
-        .find(|p| ok(*p))
 }
