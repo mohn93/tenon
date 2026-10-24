@@ -5,3 +5,7 @@
 # Built when testing the vendored egui-winit on its own
 /vendor/egui-winit/target
 /vendor/egui-winit/Cargo.lock
+
+# Python client
+clients/python/**/__pycache__/
+clients/python/*.egg-info/

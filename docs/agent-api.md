@@ -42,6 +42,16 @@ receive what the agent sends.
 `app --mcp` serves this API as an MCP server on stdin/stdout, headless or forwarding to a running
 app with `--live SOCKET` (a pipe name on Windows). Setup for Claude Code and Claude Desktop is in [mcp.md](mcp.md).
 
+## Python client
+
+`clients/python` is a small Python package (standard library only) over this API: a `Client`
+for the socket or pipe, a batch builder whose methods are generated from `describe` and return
+batch references (`$0:f0`), `Model` helpers for primitives, solids, sweeps, components,
+section cuts, labels, scenes and renders, and a launcher for a headless app. Its README
+([clients/python/README.md](../clients/python/README.md)) covers installing by path,
+connecting, batches and references; `clients/python/examples` has a cutaway V6 engine and a
+city grid.
+
 ## Methods
 
 Call `describe` first: it returns every method, notification, error code and the JSON Schemas of

@@ -82,6 +82,12 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked --no-fail-fast
 
+      # The Python client against the debug app, headless; renders run on lavapipe.
+      - name: Python client
+        run: |
+          cargo build --locked -p app
+          SKETCHUP_ALT_APP="$PWD/target/debug/app" python3 -m unittest discover -v clients/python/tests
+
       # Renders tests write (golden diffs, debug images) under target/tmp; kept when tests fail.
       - name: Upload test images
         if: failure()
