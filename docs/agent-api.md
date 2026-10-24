@@ -61,7 +61,7 @@ all commands and results.
 
 | Method | Params | Result |
 |---|---|---|
-| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, `changed` (the ids changed) for `hide`, `unhide`, `unhide_last`, `unhide_all`, `reverse_faces` and `flip` (see Hide and unhide and Reverse and orient faces below), `orient` for `orient_faces`, `intersect` for `intersect_faces` (see Intersect Faces below), `positioned` for `position_texture`, `purged` for `purge_definitions`, `definitions` for `make_unique` (see Make Unique and Flip Along below), `text_3d` for `add_3d_text` (see 3D text below), and `units` (the display units now) for `set_units` and an `undo` or `redo` of a `set_units` step |
+| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, `changed` (the ids changed) for `hide`, `unhide`, `unhide_last`, `unhide_all`, `reverse_faces` and `flip` (see Hide and unhide and Reverse and orient faces below), `orient` for `orient_faces`, `intersect` for `intersect_faces` (see Intersect Faces below), `positioned` for `position_texture`, `purged` for `purge_definitions`, `definitions` for `make_unique` (see Make Unique and Flip Along below), `placed` (the instances left in the open context, in creation order) for `copy`, `rotate` with `copies`, `make_group`, `make_component`, `explode`, `paste` and `insert_library_item`, `text_3d` for `add_3d_text` (see 3D text below), and `units` (the display units now) for `set_units` and an `undo` or `redo` of a `set_units` step |
 | `batch` | `{"commands": [...], "atomic": true}` | `{outcomes, changes, revision}`; `changes` is the net effect of the whole batch (made then erased is absent); atomic = one undo step, all or nothing. Steps made through the API are `agent` steps |
 | `query` | a Query, see the table below | the QueryResult |
 | `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does; `lighting`, `day` or `night`, is optional and defaults to the document's) | `{width, height, png_base64}` |
@@ -286,10 +286,17 @@ A reference is a whole string matching `^\$(0|[1-9][0-9]*):(([vefigrnsmdy])(0|[1
 - `"$N:KI"` is the I-th id (from 0) of kind K that command N made: `v` vertex, `e` edge, `f`
   face, `i` instance, `g` guide, `r` dimension, `n` note, `s` section plane from its `changes.created` (lowest id
   first, which is the order they were made), `m` material from its `changes.materials`, `y` style from its `changes.styles` (an `add_style` outcome), or `d` definition from its `definitions` (a `make_unique` outcome). Style ids (`style`, and `from` of `add_style`) take a `y` reference, which must name one style.
+- Instances count only top-level ones: `$N:iK`, `$N:i*` and the instances of `$N:*` pick from the
+  instances command N left in the open context (its outcome's `placed`), not from instances inside
+  definitions it made or copied (a copied group's nested groups), though `changes.created` lists
+  those too.
 - `"$N:K*"` is all ids of that kind command N made, `"$N:*"` every edge, face, instance, guide,
   dimension, note and section plane it created (not vertices, which most commands refuse; `"$N:v*"` gives those; not materials).
   `*` references are allowed only in id lists (`ids`, and `path` of `open_path` and `follow_me`), where they
-  expand in place, keeping order; one that expands to nothing leaves nothing in its place.
+  expand in place, keeping order; one that expands to nothing leaves nothing in its place. A `*`
+  drops ids that no longer exist in the open context at resolution time (erased or merged away by
+  a later command, or made inside a definition); an indexed reference such as `$0:f0` to an id
+  that no longer exists is `not_found`, naming the reference.
 - N counts commands of the batch from 0 and must be lower than the referring command's own
   position.
 

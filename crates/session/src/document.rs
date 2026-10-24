@@ -491,6 +491,7 @@ impl Document {
             outcome.positioned = self.positioned.take();
             outcome.purged = self.purged.take();
             outcome.definitions = self.made_definitions.take();
+            outcome.placed = self.placed_instances(&command, &outcome.changes);
             outcome.text_3d = self.text_report.take();
             outcome.material = self.library_material.take();
             if let Some(m) = self.existing_material.take()
@@ -1191,7 +1192,7 @@ impl Document {
         if !atomic {
             for (index, command) in commands.iter().enumerate() {
                 match command
-                    .resolve(&outcomes)
+                    .resolve(&outcomes, &|id| self.exists(id))
                     .and_then(|command| self.execute(command))
                 {
                     Ok(o) => outcomes.push(o),
@@ -1224,7 +1225,7 @@ impl Document {
         let mut names: Vec<String> = Vec::new();
         for (index, command) in commands.iter().enumerate() {
             let units_then = self.units;
-            let result = match command.resolve(&outcomes) {
+            let result = match command.resolve(&outcomes, &|id| self.exists(id)) {
                 Err(error) => Err(error),
                 Ok(command) => match self.edit(&command) {
                     Some(changes) => changes.map(|c| {
@@ -1236,6 +1237,7 @@ impl Document {
                         }
                         applied.push(c);
                         names.push(command.name());
+                        let placed = self.placed_instances(&command, &summary);
                         Outcome {
                             changes: summary,
                             import: self.import_report.take(),
@@ -1247,6 +1249,7 @@ impl Document {
                             positioned: self.positioned.take(),
                             purged: self.purged.take(),
                             definitions: self.made_definitions.take(),
+                            placed,
                             text_3d: self.text_report.take(),
                             material: self.library_material.take(),
                             units: (self.units != units_then).then_some(self.units),
@@ -2162,8 +2165,38 @@ impl Document {
         Ok(Parts::of(ids))
     }
 
+    /// The instances `command` (just run, with net `changes`) left in the open context, in
+    /// creation order, for the commands that place instances; None for the others.
+    fn placed_instances(
+        &self,
+        command: &Command,
+        changes: &kernel::ChangeSummary,
+    ) -> Option<Vec<EntityId>> {
+        let places = match command {
+            Command::Copy { .. }
+            | Command::MakeGroup { .. }
+            | Command::MakeComponent { .. }
+            | Command::Explode { .. }
+            | Command::Paste { .. }
+            | Command::InsertLibraryItem { .. } => true,
+            Command::Rotate { copies, .. } => copies.is_some(),
+            _ => false,
+        };
+        if !places {
+            return None;
+        }
+        let m = self.model();
+        let placed: Vec<EntityId> = changes
+            .created
+            .iter()
+            .copied()
+            .filter(|id| matches!(id, EntityId::Instance(i) if m.instance(*i).is_some()))
+            .collect();
+        Some(placed)
+    }
+
     /// Whether the open context holds the entity.
-    fn exists(&self, id: EntityId) -> bool {
+    pub fn exists(&self, id: EntityId) -> bool {
         let m = self.model();
         match id {
             EntityId::Vertex(v) => m.vertex(v).is_some(),

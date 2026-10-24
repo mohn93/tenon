@@ -324,3 +324,156 @@ fn a_command_without_references_comes_back_as_written() {
     let e = doc().execute_batch(vec![command], false).unwrap_err();
     assert_eq!(e.error.kind, ErrorKind::NotFound);
 }
+
+/// A group holding a group, in the root: returns the document and the outer group's id.
+fn nested_groups() -> (Document, String) {
+    let mut d = doc();
+    let out = d
+        .execute_batch(
+            batch(vec![
+                rectangle(),
+                json!({"type": "make_group", "ids": ["$0:*"]}),
+                json!({"type": "add_rectangle", "corner": [5, 0, 0], "opposite": [7, 1, 0]}),
+                json!({"type": "make_group", "ids": ["$1:i0", "$2:*"]}),
+            ]),
+            true,
+        )
+        .unwrap();
+    let outer = out[3].placed.as_ref().unwrap()[0].to_string();
+    (d, outer)
+}
+
+fn instance_ids(d: &Document) -> Vec<String> {
+    ask(d, json!({"type": "entities", "kinds": ["instance"]}))["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn copy_of_a_group_with_groups_refers_to_the_copy_not_nested_instances() {
+    for atomic in [true, false] {
+        let (mut d, outer) = nested_groups();
+        let out = d
+            .execute_batch(
+                batch(vec![
+                    json!({"type": "copy", "ids": [outer], "offset": [0, 10, 0]}),
+                    json!({"type": "move", "ids": ["$0:i0"], "offset": [0, 0, 1]}),
+                ]),
+                atomic,
+            )
+            .unwrap();
+        let instances = out[0]
+            .changes
+            .created
+            .iter()
+            .filter(|id| matches!(id, kernel::EntityId::Instance(_)))
+            .count();
+        assert!(instances > 1, "the copy deep-copies the inner group");
+        let placed = out[0].placed.as_ref().unwrap();
+        assert_eq!(placed.len(), 1, "atomic {atomic}");
+        assert!(instance_ids(&d).contains(&placed[0].to_string()));
+        assert_eq!(out[1].changes.modified, vec![placed[0]]);
+    }
+}
+
+#[test]
+fn rotate_copies_lists_placed_in_creation_order() {
+    let (mut d, outer) = nested_groups();
+    let out = d
+        .execute(
+            serde_json::from_value(json!({
+                "type": "rotate", "ids": [outer], "center": [0, 0, 0], "angle": 30, "copies": 3
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    let placed = out.placed.unwrap();
+    assert_eq!(placed.len(), 3);
+    assert!(placed.windows(2).all(|w| w[0] < w[1]));
+    let roots = instance_ids(&d);
+    for p in &placed {
+        assert!(roots.contains(&p.to_string()));
+    }
+}
+
+#[test]
+fn placed_is_absent_for_commands_that_place_nothing() {
+    let mut d = doc();
+    let out = d
+        .execute(serde_json::from_value(rectangle()).unwrap())
+        .unwrap();
+    assert!(out.placed.is_none());
+    let v = serde_json::to_value(&out).unwrap();
+    assert!(v.get("placed").is_none());
+}
+
+#[test]
+fn star_skips_ids_a_later_command_erased() {
+    let mut d = doc();
+    let out = d
+        .execute_batch(
+            batch(vec![
+                rectangle(),
+                json!({"type": "erase", "ids": ["$0:f0"]}),
+                json!({"type": "erase", "ids": ["$0:*"]}),
+            ]),
+            true,
+        )
+        .unwrap();
+    assert_eq!(out.len(), 3);
+    assert_eq!(stats(&d, "edges"), 0);
+}
+
+#[test]
+fn star_after_an_erase_in_non_atomic_batches_too() {
+    let mut d = doc();
+    d.execute_batch(
+        batch(vec![
+            rectangle(),
+            json!({"type": "erase", "ids": ["$0:f0"]}),
+            json!({"type": "erase", "ids": ["$0:*"]}),
+        ]),
+        false,
+    )
+    .unwrap();
+    assert_eq!(stats(&d, "edges"), 0);
+}
+
+#[test]
+fn an_indexed_reference_to_an_erased_id_is_not_found() {
+    for atomic in [true, false] {
+        let mut d = doc();
+        let err = d
+            .execute_batch(
+                batch(vec![
+                    rectangle(),
+                    json!({"type": "erase", "ids": ["$0:f0"]}),
+                    json!({"type": "erase", "ids": ["$0:f0"]}),
+                ]),
+                atomic,
+            )
+            .unwrap_err();
+        assert_eq!(err.index, 2);
+        assert_eq!(err.error.kind, ErrorKind::NotFound);
+        assert!(err.error.message.contains("$0:f0"), "{}", err.error.message);
+    }
+}
+
+#[test]
+fn a_star_that_resolves_to_nothing_is_an_empty_list() {
+    let mut d = doc();
+    let err = d
+        .execute_batch(
+            batch(vec![
+                rectangle(),
+                json!({"type": "erase", "ids": ["$0:f*"]}),
+                json!({"type": "make_group", "ids": ["$0:f*"]}),
+            ]),
+            true,
+        )
+        .unwrap_err();
+    assert_eq!(err.error.kind, ErrorKind::InvalidInput);
+}

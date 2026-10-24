@@ -200,23 +200,48 @@ impl BatchRef {
         }
     }
 
-    /// The entity ids this reference stands for, in order.
-    fn entities(&self, done: &[Outcome]) -> Result<Vec<EntityId>, CommandError> {
-        let created = &self.outcome(done)?.changes.created;
-        match self.kind {
-            None => Ok(created
-                .iter()
-                .filter(|id| !matches!(id, EntityId::Vertex(_)))
-                .copied()
-                .collect()),
-            Some(kind) => {
-                let of_kind: Vec<EntityId> = created
-                    .iter()
-                    .filter(|id| kind.matches(id))
-                    .copied()
-                    .collect();
-                self.pick(&of_kind, kind)
+    /// The ids command N made that a reference of this kind picks from: instances are the ones
+    /// it left in the open context (`placed`, when the command reports it).
+    fn candidates(&self, outcome: &Outcome, kind: Option<RefKind>) -> Vec<EntityId> {
+        let top_level = |id: &EntityId| match (&outcome.placed, id) {
+            (Some(placed), EntityId::Instance(_)) => placed.contains(id),
+            _ => true,
+        };
+        outcome
+            .changes
+            .created
+            .iter()
+            .filter(|id| match kind {
+                None => !matches!(id, EntityId::Vertex(_)),
+                Some(kind) => kind.matches(id),
+            })
+            .filter(|id| top_level(id))
+            .copied()
+            .collect()
+    }
+
+    /// The entity ids this reference stands for, in order. `exists` says whether the open
+    /// context still holds an id: `*` drops the ones it does not, an indexed reference to one
+    /// is `not_found`.
+    fn entities(
+        &self,
+        done: &[Outcome],
+        exists: &dyn Fn(EntityId) -> bool,
+    ) -> Result<Vec<EntityId>, CommandError> {
+        let found = self.candidates(self.outcome(done)?, self.kind);
+        match (self.kind, self.index) {
+            (Some(kind), Some(_)) => {
+                let picked = self.pick(&found, kind)?;
+                if let Some(gone) = picked.iter().find(|id| !exists(**id)) {
+                    return Err(CommandError::new(
+                        ErrorKind::NotFound,
+                        format!("{self}: {gone} no longer exists in the open context"),
+                    )
+                    .with_ids(vec![*gone]));
+                }
+                Ok(picked)
             }
+            _ => Ok(found.into_iter().filter(|id| exists(*id)).collect()),
         }
     }
 
@@ -390,7 +415,11 @@ impl BatchCommand {
 
     /// The command to run, its references replaced by the ids they stand for. `done[n]` is
     /// command n's outcome.
-    pub fn resolve(&self, done: &[Outcome]) -> Result<Command, CommandError> {
+    pub fn resolve(
+        &self,
+        done: &[Outcome],
+        exists: &dyn Fn(EntityId) -> bool,
+    ) -> Result<Command, CommandError> {
         let mut command = self.command.clone();
         if self.refs.is_empty() {
             return Ok(command);
@@ -401,12 +430,12 @@ impl BatchCommand {
                 return;
             }
             let result = match slot {
-                Slot::List(ids) => self.resolve_list(ids, done),
-                Slot::One(id) => self.resolve_one(id, done),
+                Slot::List(ids) => self.resolve_list(ids, done, exists),
+                Slot::One(id) => self.resolve_one(id, done, exists),
                 Slot::Material(m) => self.resolve_material(m, done),
                 Slot::Definition(d) => self.resolve_definition(d, done),
                 Slot::Style(s) => self.resolve_style(s, done),
-                Slot::Item(r) => self.resolve_item(r, done),
+                Slot::Item(r) => self.resolve_item(r, done, exists),
             };
             if let Err(e) = result {
                 error = Some(e);
@@ -422,11 +451,16 @@ impl BatchCommand {
         &self.refs[(number - STAND_IN_BASE) as usize]
     }
 
-    fn resolve_list(&self, ids: &mut Vec<EntityId>, done: &[Outcome]) -> Result<(), CommandError> {
+    fn resolve_list(
+        &self,
+        ids: &mut Vec<EntityId>,
+        done: &[Outcome],
+        exists: &dyn Fn(EntityId) -> bool,
+    ) -> Result<(), CommandError> {
         let mut resolved = Vec::with_capacity(ids.len());
         for id in ids.iter() {
             if is_stand_in(id) {
-                resolved.extend(self.reference(number(id)).entities(done)?);
+                resolved.extend(self.reference(number(id)).entities(done, exists)?);
             } else {
                 resolved.push(*id);
             }
@@ -435,17 +469,27 @@ impl BatchCommand {
         Ok(())
     }
 
-    fn resolve_one(&self, id: &mut EntityId, done: &[Outcome]) -> Result<(), CommandError> {
+    fn resolve_one(
+        &self,
+        id: &mut EntityId,
+        done: &[Outcome],
+        exists: &dyn Fn(EntityId) -> bool,
+    ) -> Result<(), CommandError> {
         if is_stand_in(id) {
             // Scalar fields hold only single-id references, which resolve to one id or fail.
-            *id = self.reference(number(id)).entities(done)?[0];
+            *id = self.reference(number(id)).entities(done, exists)?[0];
         }
         Ok(())
     }
 
-    fn resolve_item(&self, r: &mut LibraryRef, done: &[Outcome]) -> Result<(), CommandError> {
+    fn resolve_item(
+        &self,
+        r: &mut LibraryRef,
+        done: &[Outcome],
+        exists: &dyn Fn(EntityId) -> bool,
+    ) -> Result<(), CommandError> {
         match r {
-            LibraryRef::Entity(id) => self.resolve_one(id, done),
+            LibraryRef::Entity(id) => self.resolve_one(id, done, exists),
             LibraryRef::Material(m) => self.resolve_material(m, done),
         }
     }
