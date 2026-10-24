@@ -295,6 +295,8 @@ pub enum UiAction {
     Harden,
     /// Edit > Intersect Faces: cross the selected faces and groups with the scope.
     IntersectFaces(IntersectScope),
+    /// Tools > Solid Tools: combine or cut the selected solid groups and components.
+    SolidTool(crate::editor::SolidOp),
     /// Make the selected edges soft or hard (Entity Info's Soft checkbox).
     SetSoft(bool),
     /// Set the texture offset of the faces (those selected when the field was edited), in
@@ -522,6 +524,8 @@ pub struct View<'a> {
     pub can_make_unique: bool,
     /// Exactly one instance is selected: Flip Along its own axes works.
     pub can_flip_own: bool,
+    /// The Tools > Solid Tools items' state for the selection (`Editor::solid_tools`).
+    pub solid_tools: crate::editor::SolidTools,
     /// Whether a group or component is open for editing.
     pub inside_instance: bool,
     /// Whether the open context has guides to delete.

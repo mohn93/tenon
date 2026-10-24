@@ -2314,6 +2314,9 @@ impl State {
             UiAction::IntersectFaces(scope) => {
                 self.editor.intersect_faces(scope);
             }
+            UiAction::SolidTool(op) => {
+                self.editor.solid_tool(op);
+            }
             UiAction::Harden => {
                 self.editor.harden_selection();
             }
@@ -2684,6 +2687,7 @@ impl State {
                 .any(|id| matches!(id, EntityId::Instance(_))),
             can_make_unique: self.editor.can_make_unique(),
             can_flip_own: self.editor.can_flip_own(),
+            solid_tools: self.editor.solid_tools(),
             inside_instance: !self.editor.doc().context().is_empty(),
             has_guides: self.editor.doc().model().guides().next().is_some(),
             projection: self.editor.doc().camera.projection,

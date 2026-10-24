@@ -1256,3 +1256,90 @@ fn field_of_view_needs_perspective() {
     );
     assert_eq!(click(&mut h, "Field of View..."), []);
 }
+
+fn solid_tools_fixture(enabled: bool) -> Fixture {
+    use crate::editor::SolidTools;
+    Fixture {
+        // As `Editor::solid_tools` reports two solid groups selected.
+        solid_tools: if enabled {
+            SolidTools::all_enabled()
+        } else {
+            SolidTools::default()
+        },
+        ..Fixture::default()
+    }
+}
+
+const SOLID_TOOLS: &str = "Solid Tools \u{23F5}";
+
+#[test]
+fn tools_solid_tools_lists_its_items_and_runs_them_when_enabled() {
+    use crate::editor::SolidOp;
+    for op in SolidOp::ALL {
+        let mut h = harness(solid_tools_fixture(true));
+        assert_eq!(
+            click_menu(&mut h, &["Tools", SOLID_TOOLS, op.label()]),
+            [UiAction::SolidTool(op)],
+            "{op:?}"
+        );
+        // Disabled without suitable solids: nothing runs.
+        let mut h = harness(solid_tools_fixture(false));
+        click(&mut h, "Tools");
+        click(&mut h, SOLID_TOOLS);
+        assert!(
+            h.get_by_label(op.label()).accesskit_node().is_disabled(),
+            "{op:?}"
+        );
+        h.get_by_label(op.label()).click();
+        h.run_ok();
+        assert_eq!(h.state_mut().take(), [], "{op:?}");
+    }
+}
+
+#[test]
+fn solid_tools_items_carry_the_tooltip_reason_and_stable_native_ids() {
+    use crate::editor::SolidOp;
+    use crate::menus::{Entry, item_id, menu_bar};
+    let f = Fixture {
+        solid_tools: crate::editor::SolidTools::refused("Select two or more solids"),
+        ..Fixture::default()
+    };
+    let bar = menu_bar(&f.view(), true);
+    let tools = &bar.iter().find(|m| m.title == "Tools").unwrap().entries;
+    let Some(Entry::Submenu { entries, .. }) = tools
+        .iter()
+        .find(|e| matches!(e, Entry::Submenu { label, .. } if *label == "Solid Tools"))
+    else {
+        panic!("no Solid Tools submenu");
+    };
+    let labels: Vec<_> = entries
+        .iter()
+        .map(|e| match e {
+            Entry::Item(i) => {
+                assert!(!i.enabled);
+                assert_eq!(i.tooltip.as_deref(), Some("Select two or more solids"));
+                i.label.as_str()
+            }
+            _ => panic!("only items"),
+        })
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "Union",
+            "Subtract",
+            "Intersect",
+            "Trim",
+            "Split",
+            "Outer Shell"
+        ]
+    );
+    assert_eq!(
+        item_id(&UiAction::SolidTool(SolidOp::OuterShell)),
+        "SolidTool(OuterShell)"
+    );
+    // The ids of items that were already there did not change.
+    assert_eq!(item_id(&UiAction::Show3dText), "Show3dText");
+    assert_eq!(item_id(&UiAction::MakeGroup), "MakeGroup");
+    assert_eq!(item_id(&UiAction::Tool(ToolKind::Select)), "Tool(Select)");
+}

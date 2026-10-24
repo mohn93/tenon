@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use session::{FlipAxis, FlipFrame, IntersectScope, Lighting, Projection, StandardView};
 use tools::ToolKind;
 
+use crate::editor::SolidOp;
 use crate::shortcuts::Bound;
 use crate::ui::theme::ThemeChoice;
 use crate::ui::{EdgeEffect, FLY_HELP, LibrarySave, UiAction, View, step_name};
@@ -272,6 +273,21 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
     .chain([
         Entry::Separator,
         Item::new("3D Text...", UiAction::Show3dText).entry(),
+        Entry::Submenu {
+            label: "Solid Tools",
+            entries: SolidOp::ALL
+                .map(|op| {
+                    let state = view.solid_tools.get(op);
+                    let item =
+                        Item::new(op.label(), UiAction::SolidTool(op)).enabled(state.enabled);
+                    match &state.tooltip {
+                        Some(tip) => item.tooltip(tip.clone()),
+                        None => item,
+                    }
+                    .entry()
+                })
+                .into(),
+        },
     ])
     .collect();
 

@@ -48,6 +48,7 @@ pub use print::{PaperChoice, PrintJob, PrintOptions, PrintPurpose, PrintQueue};
 mod scenes;
 mod sections;
 mod soften;
+mod solids;
 mod styles;
 mod tags;
 mod texture_position;
@@ -56,6 +57,7 @@ pub use viewer::PartCard;
 mod visibility;
 
 use soften::SoftenWindow;
+pub use solids::{SolidOp, SolidTools};
 pub use tags::SelectionTag;
 
 /// How the window imports OBJ and STL files: the `import` command's `scale`, `up`, `as` and
@@ -268,6 +270,8 @@ pub struct Editor {
     /// How many selected instances Make Unique would give a definition of their own, by
     /// revision, open context and selection.
     unique_cache: RefCell<Option<UniqueCache>>,
+    /// The Solid Tools items' state for the revision, context and selection (`solid_tools`).
+    solid_cache: RefCell<Option<solids::SolidCache>>,
     /// Text typed into the measurements box, not yet submitted.
     typed: String,
     /// Feedback from the last tool action or failed command.
@@ -381,6 +385,7 @@ impl Editor {
             layout: RefCell::new(None),
             hidden_cache: RefCell::new(None),
             unique_cache: RefCell::new(None),
+            solid_cache: RefCell::new(None),
             typed: String::new(),
             style_before_add: Default::default(),
             message: None,
