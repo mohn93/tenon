@@ -34,7 +34,8 @@ pub enum Command {
     /// Draw a rectangle from one corner to the opposite one, as one undo step. Its sides follow
     /// the drawing axes on axis planes (the model axes at the root, the open group's or
     /// component's own axes inside it; the world axes unless moved). `normal` picks the plane;
-    /// without it the corners must differ in exactly two coordinates along the drawing axes.
+    /// without it the corners must differ in exactly two coordinates along the drawing axes. With
+    /// `normal`, the new faces are turned to face along it (without, canonical orientation).
     AddRectangle {
         #[schemars(with = "ModelPoint")]
         corner: [f64; 3],
@@ -44,7 +45,8 @@ pub enum Command {
         normal: Option<[f64; 3]>,
     },
     /// Draw a circle as a regular polygon of `segments` sides (default 24, at most 360) around
-    /// `center` with `radius`, in the plane with `normal` (default Z), as one undo step. The
+    /// `center` with `radius`, in the plane with `normal` (default Z), as one undo step; with an explicit `normal` the
+    /// new faces face along it. The
     /// first corner lies along the plane's u axis (see `add_rectangle`).
     AddCircle {
         #[schemars(with = "ModelPoint")]
@@ -56,7 +58,8 @@ pub enum Command {
         segments: Option<u32>,
     },
     /// Draw a regular polygon of `sides` sides (default 6, 3 to 360) around `center`, in the
-    /// plane with `normal` (default Z), as one undo step. Inscribed, `radius` reaches the
+    /// plane with `normal` (default Z), as one undo step; with an explicit `normal` the new faces
+    /// face along it. Inscribed, `radius` reaches the
     /// corners and the first corner lies along `direction`; with `circumscribed`, `radius`
     /// reaches the middles of the sides and the middle of the side ending at the first corner
     /// lies along `direction`. `direction` (default the plane's u axis, see `add_rectangle`)
@@ -301,7 +304,8 @@ pub enum Command {
     /// Rotate vertices, edges, faces (their vertices), instances, guides, annotations and section
     /// planes (as `move` moves them) by `angle` degrees
     /// about the line through `center` along `axis` (default Z), counter-clockwise looking
-    /// down the axis, as one undo step. Faces that share some of the turned vertices stretch
+    /// down the axis, as one undo step (a whole number of turns changes nothing: an empty
+    /// outcome, no undo step). Faces that share some of the turned vertices stretch
     /// and may tilt, but must stay flat. With `copies`, the originals stay and that many copies
     /// are made instead, copy k turned by `k * angle`, under the rules of `Copy`.
     Rotate {
@@ -317,7 +321,8 @@ pub enum Command {
     /// Scale vertices, edges, faces (their vertices), instances, guides, annotations and section
     /// planes (as `move` moves them; a fixed circle keeps its area) by `factors` along
     /// model x, y and z about `origin`, as one undo step. Each factor is finite, non-zero and
-    /// between 1e-4 and 1e4 in size; a negative factor mirrors (faces stay facing out). Faces
+    /// between 1e-4 and 1e4 in size; a negative factor mirrors (faces stay facing out). All
+    /// factors exactly 1 change nothing (an empty outcome, no undo step). Faces
     /// that share some of the scaled vertices stretch and may tilt, but must stay flat.
     Scale {
         ids: Vec<EntityId>,
@@ -1278,9 +1283,10 @@ pub struct Outcome {
     /// `make_group` or `make_component` made; absent for other commands. Batch commands can refer to them as `$N:dI`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definitions: Option<Vec<DefinitionId>>,
-    /// The instances a `copy`, `rotate` with copies, `make_group`, `make_component`,
-    /// `explode`, `paste` or `insert_library_item` left in the open context, in creation order
-    /// (instances inside new definitions are not listed); absent when the command placed none. Batch
+    /// The instances a command left in the open context, in creation order (instances inside
+    /// new definitions are not listed): present whenever the command placed instances (`copy`,
+    /// `rotate` with copies, `make_group`, `make_component`, `explode`, `paste`,
+    /// `insert_library_item`, `place_instance`, an `import`, ...), absent otherwise. Batch
     /// `$N:iK` references pick from this list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placed: Option<Vec<EntityId>>,

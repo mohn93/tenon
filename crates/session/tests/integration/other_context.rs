@@ -282,3 +282,38 @@ fn many_ids_elsewhere_are_capped() {
     assert_eq!(msg.matches("is inside").count(), 3, "{msg}");
     assert!(msg.ends_with(". and 2 more"), "{msg}");
 }
+
+#[test]
+fn import_reports_placed_and_make_unique_has_no_instance_references() {
+    let mut d = doc();
+    let dir = std::env::temp_dir().join(format!("m17a-placed-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("quad.obj");
+    std::fs::write(&path, "v 0 0 0\nv 2 0 0\nv 2 0 -2\nv 0 0 -2\nf 1 2 3 4\n").unwrap();
+    let out = run(
+        &mut d,
+        json!({"type": "import", "path": path.to_str().unwrap(), "as": "component"}),
+    )
+    .unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    let inst = out["placed"][0].clone();
+    assert_eq!(out["placed"].as_array().unwrap().len(), 1);
+
+    let copy = run(
+        &mut d,
+        json!({"type": "copy", "ids": [inst], "offset": [3, 0, 0]}),
+    )
+    .unwrap()["placed"][0]
+        .clone();
+    let commands: Vec<BatchCommand> = [
+        json!({"type": "make_unique", "ids": [copy]}),
+        json!({"type": "erase", "ids": ["$0:i0"]}),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, v)| BatchCommand::parse(v, i).unwrap())
+    .collect();
+    let err = d.execute_batch(commands, false).unwrap_err();
+    assert_eq!(err.index, 1);
+    assert_eq!(err.error.kind, ErrorKind::InvalidInput);
+}

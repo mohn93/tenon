@@ -42,6 +42,7 @@ impl Document {
             })
             .collect();
         let mut wanted: Vec<MeshId> = targets.iter().flatten().copied().collect();
+        wanted.sort();
         wanted.dedup();
         // Any one path to each wanted mesh: breadth first from the root.
         let mut paths: Vec<(MeshId, Vec<InstanceId>)> = Vec::new();

@@ -222,10 +222,10 @@ impl BatchRef {
     }
 
     /// The ids command N made that a reference of this kind picks from: instances are the ones
-    /// it left in the open context (`placed`, when the command reports it).
+    /// it left in the open context (`placed`; none when absent).
     fn candidates(&self, outcome: &Outcome, kind: Option<RefKind>) -> Vec<EntityId> {
-        let top_level = |id: &EntityId| match (&outcome.placed, id) {
-            (Some(placed), EntityId::Instance(_)) => placed.contains(id),
+        let top_level = |id: &EntityId| match id {
+            EntityId::Instance(_) => outcome.placed.as_ref().is_some_and(|p| p.contains(id)),
             _ => true,
         };
         outcome

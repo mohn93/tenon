@@ -493,7 +493,7 @@ impl Document {
             outcome.positioned = self.positioned.take();
             outcome.purged = self.purged.take();
             outcome.definitions = self.made_definitions.take();
-            outcome.placed = self.placed_instances(&command, &outcome.changes);
+            outcome.placed = self.placed_instances(&outcome.changes);
             outcome.text_3d = self.text_report.take();
             outcome.material = self.library_material.take();
             if let Some(m) = self.existing_material.take()
@@ -1246,7 +1246,7 @@ impl Document {
                         }
                         applied.push(c);
                         names.push(command.name());
-                        let placed = self.placed_instances(&command, &summary);
+                        let placed = self.placed_instances(&summary);
                         Outcome {
                             changes: summary,
                             import: self.import_report.take(),
@@ -2165,27 +2165,9 @@ impl Document {
         Ok(Parts::of(ids))
     }
 
-    /// The instances `command` (just run, with net `changes`) left in the open context, in
-    /// creation order; None for other commands and when it placed none.
-    fn placed_instances(
-        &self,
-        command: &Command,
-        changes: &kernel::ChangeSummary,
-    ) -> Option<Vec<EntityId>> {
-        let places = match command {
-            Command::Copy { .. }
-            | Command::MakeGroup { .. }
-            | Command::MakeComponent { .. }
-            | Command::Explode { .. }
-            | Command::Paste { .. }
-            | Command::PlaceInstance { .. }
-            | Command::InsertLibraryItem { .. } => true,
-            Command::Rotate { copies, .. } => copies.is_some(),
-            _ => false,
-        };
-        if !places {
-            return None;
-        }
+    /// The instances a command (just run, with net `changes`) left in the open context, in
+    /// creation order; None when there are none.
+    fn placed_instances(&self, changes: &kernel::ChangeSummary) -> Option<Vec<EntityId>> {
         let m = self.model();
         let placed: Vec<EntityId> = changes
             .created
