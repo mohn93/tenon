@@ -4,10 +4,13 @@
 //! is the region between the two faces and the chamfer line, reaching a little past both faces
 //! so the boolean cuts them cleanly: a convex edge's prism (a cutter) is subtracted, a concave
 //! edge's (a filler) is added, with the boolean core of `boolean.rs`. At an end shared with
-//! another chosen convex edge, a cutter runs on past the end (meeting cutters overlap and leave
-//! a closed corner); elsewhere the prism ends in the plane of the face at that end, so no
-//! neighbouring face is notched. The result replaces the mesh's own geometry; faces and edges
-//! the cut did not touch keep their ids.
+//! another chosen convex edge where running on leaves the solid, a cutter runs on past the end
+//! (meeting cutters overlap and leave a closed corner); elsewhere the prism ends in the plane
+//! of the face at that end, so no neighbouring face is notched. The fillers' own regions are
+//! taken out of the cutters, so a chamfer never removes what a cove beside it adds; a cove
+//! whose two faces are both cut away at an end stops short there. The new faces take the
+//! first face's materials. The result replaces the mesh's own geometry; faces and edges the
+//! cut did not touch keep their ids.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
@@ -16,7 +19,7 @@ use glam::{DAffine3, DVec2, DVec3};
 
 use crate::boolean::{BooleanError, BooleanOp, apart, combine, placed_copy};
 use crate::geom::{LENGTH_TOL, vector_area};
-use crate::ids::{CurveId, EdgeId, FaceId, VertexId};
+use crate::ids::{CurveId, EdgeId, FaceId, MaterialId, VertexId};
 use crate::model::{Face, Model};
 use crate::scene::{MeshId, Scene, SceneChange};
 use crate::solid::{open_reason, signed_volume};
@@ -47,6 +50,22 @@ impl Profile {
     fn noun(self) -> &'static str {
         match self {
             Profile::Chamfer { .. } => "distance",
+        }
+    }
+
+    /// The region between the two faces and the profile alone, as offsets from a point on the
+    /// edge, in order around it: what a filler adds or a cutter removes.
+    fn core(self, cut: &EdgeCut) -> Vec<DVec3> {
+        let s = self.size();
+        match self {
+            Profile::Chamfer { .. } => vec![DVec3::ZERO, cut.d1 * s, cut.d2 * s],
+        }
+    }
+
+    /// The sides of `section` (side i joins points i and i + 1) that make the new surface.
+    fn surface(self) -> std::ops::Range<usize> {
+        match self {
+            Profile::Chamfer { .. } => 0..1,
         }
     }
 
@@ -135,6 +154,12 @@ enum End {
 /// One chosen edge and the faces beside it.
 #[derive(Clone, Debug)]
 struct EdgeCut {
+    va: VertexId,
+    vb: VertexId,
+    f1: FaceId,
+    f2: FaceId,
+    /// The materials of the first face's outer and inner sides, for the new surface.
+    paint: [Option<MaterialId>; 2],
     a: DVec3,
     b: DVec3,
     /// Unit direction a to b.
@@ -180,45 +205,84 @@ pub fn bevelled(m: &Model, edges: &[EdgeId], profile: Profile) -> Result<Model, 
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    let mut ends: HashMap<VertexId, usize> = HashMap::new();
+    let mut cuts = Vec::new();
+    // How many chosen convex edges end at each vertex, and the faces beside them.
+    let mut convex_ends: HashMap<VertexId, usize> = HashMap::new();
+    let mut cut_faces: HashMap<VertexId, Vec<FaceId>> = HashMap::new();
     for e in &edges {
-        let edge = m
-            .edge(*e)
-            .ok_or_else(|| BevelError::Edge(*e, format!("e{} is not an edge of the solid", e.0)))?;
-        for v in edge.v {
-            *ends.entry(v).or_default() += 1;
+        if m.edge(*e).is_none() {
+            return Err(BevelError::Edge(
+                *e,
+                format!("e{} is not an edge of the solid", e.0),
+            ));
+        }
+        let cut = analyze(m, *e, outward, size, noun).map_err(|why| BevelError::Edge(*e, why))?;
+        if cut.convex {
+            for v in [cut.va, cut.vb] {
+                *convex_ends.entry(v).or_default() += 1;
+                cut_faces.entry(v).or_default().extend([cut.f1, cut.f2]);
+            }
+        }
+        cuts.push((*e, cut));
+    }
+    let mut cutters = Vec::new();
+    let mut fillers = Vec::new();
+    let mut cores = Vec::new();
+    for (e, mut cut) in cuts {
+        let at = Corner {
+            run_on: &|v| convex_ends.get(&v).copied().unwrap_or(0) > 1,
+            cut: &|v, f| cut_faces.get(&v).is_some_and(|fs| fs.contains(&f)),
+        };
+        close_ends(m, &mut cut, e, outward, size, &at).map_err(|why| BevelError::Edge(e, why))?;
+        let too_large = || BevelError::Edge(e, format!("{noun} too large for edge e{}", e.0));
+        let tool = prism(&cut, &profile.section(&cut), profile.surface()).ok_or_else(too_large)?;
+        if cut.convex {
+            cutters.push(tool);
+        } else {
+            cores.push(prism(&cut, &profile.core(&cut), 0..0).ok_or_else(too_large)?);
+            fillers.push(tool);
         }
     }
-    let mut cuts = Vec::new();
-    for e in &edges {
-        let cut = analyze(m, *e, outward, size, noun, &|v| ends[&v] > 1)
-            .map_err(|why| BevelError::Edge(*e, why))?;
-        let prism = prism(&cut, &profile.section(&cut))
-            .ok_or_else(|| BevelError::Edge(*e, format!("{noun} too large for edge e{}", e.0)))?;
-        cuts.push((cut.convex, prism));
+    // A cutter reaching past its faces must not take away what a filler beside it adds (a
+    // chamfered edge meeting a chamfered inside corner): the fillers' own regions are taken out
+    // of the cutters first.
+    let mut trimmed = Vec::new();
+    for mut cutter in cutters {
+        let (lo, hi) = bounds(&cutter);
+        for core in &cores {
+            let (clo, chi) = bounds(core);
+            if clo.cmple(hi).all() && chi.cmpge(lo).all() {
+                match combine(&cutter, core, BooleanOp::Subtract)? {
+                    Some(rest) => cutter = rest,
+                    None => break,
+                }
+            }
+        }
+        trimmed.push(cutter);
     }
 
     let mut acc = placed_copy(m, DAffine3::IDENTITY, None);
-    let (cutters, fillers): (Vec<_>, Vec<_>) = cuts.into_iter().partition(|(c, _)| *c);
-    for (op, tools) in [(BooleanOp::Union, fillers), (BooleanOp::Subtract, cutters)] {
-        for tool in apart(tools.into_iter().map(|(_, p)| p).collect()) {
+    for (op, tools) in [(BooleanOp::Union, fillers), (BooleanOp::Subtract, trimmed)] {
+        for tool in apart(tools) {
             acc = combine(&acc, &tool, op)?.ok_or(BooleanError::NotClosed)?;
         }
     }
     Ok(acc)
 }
 
+/// The bounding box of `m`'s vertices, grown by `LENGTH_TOL`.
+fn bounds(m: &Model) -> (DVec3, DVec3) {
+    let pad = DVec3::splat(LENGTH_TOL);
+    m.vertices().fold(
+        (DVec3::INFINITY, DVec3::NEG_INFINITY),
+        |(lo, hi), (_, v)| (lo.min(v.pos - pad), hi.max(v.pos + pad)),
+    )
+}
+
 /// The geometry of edge `id` for a cut reaching `size` into its faces, or why it cannot be
-/// bevelled. `outward` is 1 when the faces of `m` point out, -1 when in; `shared` says
-/// whether a vertex ends another chosen edge too.
-fn analyze(
-    m: &Model,
-    id: EdgeId,
-    outward: f64,
-    size: f64,
-    noun: &str,
-    shared: &dyn Fn(VertexId) -> bool,
-) -> Result<EdgeCut, String> {
+/// bevelled; its ends are left to `close_ends`. `outward` is 1 when the faces of `m` point
+/// out, -1 when in.
+fn analyze(m: &Model, id: EdgeId, outward: f64, size: f64, noun: &str) -> Result<EdgeCut, String> {
     let name = format!("edge e{}", id.0);
     let edge = m.edge(id).expect("checked");
     if edge.curve.is_some() && !edge.polygon {
@@ -268,12 +332,70 @@ fn analyze(
         }
     }
     let reach = 2.0 * size * (2.0 + (n1 + n2).length());
-    let mut ends = [End::Extend(reach); 2];
-    for (k, (v, p)) in [(va, a), (vb, b)].into_iter().enumerate() {
-        if convex && shared(v) {
+    let sides = |f: &Face| {
+        if outward > 0.0 {
+            [f.front, f.back]
+        } else {
+            [f.back, f.front]
+        }
+    };
+    Ok(EdgeCut {
+        va,
+        vb,
+        f1,
+        f2,
+        paint: sides(face1),
+        a,
+        b,
+        u,
+        n1,
+        n2,
+        d1,
+        d2,
+        convex,
+        ends: [End::Extend(reach); 2],
+    })
+}
+
+/// What the other chosen edges do at a vertex.
+struct Corner<'a> {
+    /// Another chosen convex edge ends there.
+    run_on: &'a dyn Fn(VertexId) -> bool,
+    /// A chosen convex edge ending there lies beside this face, cutting it there.
+    cut: &'a dyn Fn(VertexId, FaceId) -> bool,
+}
+
+/// Decides how each end of `cut` (edge `id`) is closed: a convex edge runs on past an end
+/// where another chosen convex edge ends too and running on leaves the solid (every other
+/// face there faces along the run-on direction); any other end stops in the plane of the
+/// other faces at its vertex, which must be one plane. A concave edge whose two faces are
+/// both cut at an end by chosen convex edges stops `size` short of that plane: what it would
+/// add there would rest on nothing but the corner.
+fn close_ends(
+    m: &Model,
+    cut: &mut EdgeCut,
+    id: EdgeId,
+    outward: f64,
+    size: f64,
+    at: &Corner<'_>,
+) -> Result<(), String> {
+    let name = format!("edge e{}", id.0);
+    let u = cut.u;
+    for (k, (v, p, along)) in [(cut.va, cut.a, -u), (cut.vb, cut.b, u)]
+        .into_iter()
+        .enumerate()
+    {
+        let others: Vec<FaceId> = m
+            .faces_at(v)
+            .filter(|f| *f != cut.f1 && *f != cut.f2)
+            .collect();
+        let leaves = others.iter().all(|f| {
+            let n = m.face(*f).expect("face").normal * outward;
+            n.dot(along) > 1e-9
+        });
+        if cut.convex && (at.run_on)(v) && leaves {
             continue;
         }
-        let others: Vec<FaceId> = m.faces_at(v).filter(|f| *f != f1 && *f != f2).collect();
         let Some(first) = others.first() else {
             return Err(format!("{name} has no face at its end v{}", v.0));
         };
@@ -298,19 +420,11 @@ fn analyze(
                 first.0
             ));
         }
-        ends[k] = End::Plane(p, n3);
+        let unsupported = !cut.convex && (at.cut)(v, cut.f1) && (at.cut)(v, cut.f2);
+        let p = if unsupported { p - along * size } else { p };
+        cut.ends[k] = End::Plane(p, n3);
     }
-    Ok(EdgeCut {
-        a,
-        b,
-        u,
-        n1,
-        n2,
-        d1,
-        d2,
-        convex,
-        ends,
-    })
+    Ok(())
 }
 
 /// Whether the strip of `face` beside its edge `ends` (from `a` along `u` for `length`, `size`
@@ -382,7 +496,11 @@ fn crosses_box(p: DVec2, q: DVec2, lo: DVec2, hi: DVec2) -> bool {
 /// The closed, outward prism with cross-section `section` (offsets from the edge, in order
 /// around it) running along `cut` between its two ends. None when the ends cross (the edge
 /// is too short for the section).
-fn prism(cut: &EdgeCut, section: &[DVec3]) -> Option<Model> {
+///
+/// The sides in `surface` (side i joins section points i and i + 1) are painted with the
+/// first face's outer material on the front and its inner one on the back: the boolean shows
+/// a cutter's front material on the cut, and a filler's faces point out as they are.
+fn prism(cut: &EdgeCut, section: &[DVec3], surface: std::ops::Range<usize>) -> Option<Model> {
     let cap = |end: End, p: DVec3, sign: f64| -> Vec<DVec3> {
         section
             .iter()
@@ -408,25 +526,34 @@ fn prism(cut: &EdgeCut, section: &[DVec3]) -> Option<Model> {
     let s: Vec<VertexId> = start.iter().map(|p| m.insert_vertex(*p)).collect();
     let e: Vec<VertexId> = end.iter().map(|p| m.insert_vertex(*p)).collect();
     let n = section.len();
-    let mut loops: Vec<Vec<VertexId>> = vec![s.iter().rev().copied().collect(), e.clone()];
+    let mut loops: Vec<Vec<VertexId>> = Vec::new();
     for i in 0..n {
         let j = (i + 1) % n;
         loops.push(vec![s[i], s[j], e[j], e[i]]);
     }
+    loops.push(s.iter().rev().copied().collect());
+    loops.push(e.clone());
     for i in 0..n {
         let j = (i + 1) % n;
         m.insert_edge(s[i], s[j]);
         m.insert_edge(e[i], e[j]);
         m.insert_edge(s[i], e[i]);
     }
+    let mut faces = Vec::new();
     for l in loops {
         let points: Vec<DVec3> = l.iter().map(|v| m.pos(*v)).collect();
         let normal = vector_area(&points).normalize_or_zero();
-        m.insert_face(Face::new(l, Vec::new(), normal));
+        faces.push(m.insert_face(Face::new(l, Vec::new(), normal)));
     }
     if signed_volume(&m) < 0.0 {
-        let all: Vec<FaceId> = m.faces().map(|(id, _)| id).collect();
-        m.reverse_faces(&all);
+        m.reverse_faces(&faces);
+    }
+    let [outer, inner] = cut.paint;
+    for i in surface {
+        let mut f = m.face(faces[i]).expect("face").clone();
+        f.front = outer;
+        f.back = inner;
+        m.replace_face(faces[i], f);
     }
     m.take_changes();
     Some(m)
@@ -648,6 +775,105 @@ mod tests {
         // The two corners become four; nothing else is cut.
         assert_eq!(r.vertices().count(), 8);
         assert_eq!(r.faces().count(), 6);
+    }
+
+    /// Every vertex of `r` is a corner of `m` or lies within `reach` of one of `edges`.
+    fn local(m: &Model, r: &Model, edges: &[EdgeId], reach: f64) {
+        let near = |p: DVec3| {
+            edges.iter().any(|e| {
+                let e = m.edge(*e).unwrap();
+                let (a, b) = (m.pos(e.v[0]), m.pos(e.v[1]));
+                let t = ((p - a).dot(b - a) / (b - a).length_squared()).clamp(0.0, 1.0);
+                (a + (b - a) * t).distance(p) < reach
+            })
+        };
+        for (_, v) in r.vertices() {
+            let corner = m.vertices().any(|(_, w)| w.pos.distance(v.pos) < 1e-9);
+            assert!(corner || near(v.pos), "stray vertex {}", v.pos);
+        }
+    }
+
+    #[test]
+    fn a_chamfer_meeting_a_concave_chamfer_cuts_no_groove() {
+        let m = l_shape();
+        let before = signed_volume(&m);
+        let edges = [
+            edge_at(&m, [1.0, 0.0, 1.0], [1.0, 2.0, 1.0]),
+            edge_at(&m, [1.0, 0.0, 1.0], [4.0, 0.0, 1.0]),
+        ];
+        let r = bevelled(&m, &edges, chamfer(0.25)).unwrap();
+        closed(&r);
+        // The cove adds 0.03125 per meter over 2 m, the chamfer removes as much over 3 m.
+        let v = signed_volume(&r) - before;
+        assert!((v + 0.03125).abs() < 1e-9, "{v}");
+        local(&m, &r, &edges, 0.3);
+    }
+
+    #[test]
+    fn convex_chamfers_at_a_reflex_corner_stop_at_the_faces_there() {
+        let m = l_shape();
+        let before = signed_volume(&m);
+        let edges = [
+            edge_at(&m, [1.0, 0.0, 1.0], [4.0, 0.0, 1.0]),
+            edge_at(&m, [1.0, 0.0, 1.0], [1.0, 0.0, 3.0]),
+        ];
+        let r = bevelled(&m, &edges, chamfer(0.25)).unwrap();
+        closed(&r);
+        let v = signed_volume(&r) - before;
+        assert!((v + 0.03125 * 5.0).abs() < 1e-9, "{v}");
+        local(&m, &r, &edges, 0.3);
+    }
+
+    #[test]
+    fn a_cove_between_two_cut_faces_stops_short_of_the_corner() {
+        let m = l_shape();
+        let before = signed_volume(&m);
+        let edges = [
+            edge_at(&m, [1.0, 0.0, 1.0], [1.0, 2.0, 1.0]),
+            edge_at(&m, [1.0, 0.0, 1.0], [4.0, 0.0, 1.0]),
+            edge_at(&m, [1.0, 0.0, 1.0], [1.0, 0.0, 3.0]),
+        ];
+        let r = bevelled(&m, &edges, chamfer(0.25)).unwrap();
+        closed(&r);
+        // Chamfers of 3 m and 2 m; the cove starts 0.25 in from the front, where both of its
+        // faces are cut away.
+        let v = signed_volume(&r) - before;
+        assert!((v - 0.03125 * (-5.0 + 1.75)).abs() < 1e-9, "{v}");
+        local(&m, &r, &edges, 0.3);
+    }
+
+    #[test]
+    fn all_edges_of_an_l_stay_a_solid_without_grooves() {
+        let m = l_shape();
+        let edges: Vec<EdgeId> = m.edges().map(|(id, _)| id).collect();
+        let r = bevelled(&m, &edges, chamfer(0.1)).unwrap();
+        closed(&r);
+        local(&m, &r, &edges, 0.12);
+        assert!(signed_volume(&r) < signed_volume(&m));
+    }
+
+    #[test]
+    fn the_chamfer_face_takes_the_first_faces_paint() {
+        let mut m = cuboid([2.0, 3.0, 4.0]);
+        let all: Vec<FaceId> = m.faces().map(|(id, _)| id).collect();
+        for f in all {
+            let mut face = m.face(f).unwrap().clone();
+            face.front = Some(MaterialId(7));
+            face.back = Some(MaterialId(8));
+            m.replace_face(f, face);
+        }
+        m.take_changes();
+        let e = edge_at(&m, [0.0, 0.0, 4.0], [2.0, 0.0, 4.0]);
+        let r = bevelled(&m, &[e], chamfer(0.5)).unwrap();
+        closed(&r);
+        let slope = DVec3::new(0.0, -1.0, 1.0).normalize();
+        let new = r
+            .faces()
+            .find(|(_, f)| f.normal.distance(slope) < 1e-9)
+            .unwrap()
+            .1;
+        assert_eq!(new.paint(), [Some(MaterialId(7)), Some(MaterialId(8))]);
+        assert!(r.faces().all(|(_, f)| f.front == Some(MaterialId(7))));
     }
 
     #[test]

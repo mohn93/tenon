@@ -535,9 +535,15 @@ to `ids`, `target`, `tools`, and `a` and `b` of `solid_split`.
 Each edge becomes a flat face set back `distance` (more than 0.000001 m, in the edited mesh's own
 coordinates, before any instance scaling) on both faces beside it. A convex edge (the solid's angle
 there under 180 degrees) loses material; a concave edge (the inside corner of an L) gains it.
-Chamfers of edges meeting at a corner overlap and close the corner; at an end shared with no other
-chosen edge the chamfer stops in the plane of the face there, so that face is trimmed and nothing
-else is notched.
+Chamfers of convex edges meeting at an outside corner (a box's) overlap and close the corner; at
+any other end (shared with no other chosen edge, with a concave one, or at an inside corner such
+as where an L's slab meets its tower) the chamfer stops in the plane of the face there, so that
+face is trimmed and nothing else is notched. An end face narrower than the distance does not stop
+the cut: the chamfer runs on past it (the result is still a closed solid). A chamfer never removes
+what a concave chamfer beside it adds; a concave chamfer whose two faces are both chamfered away
+at an end (the inside corner of an L with the edges around it chamfered too) starts `distance` in
+from that end. The new face takes the front and back materials of the first face beside the edge
+(the outer and inner sides).
 
 The geometry chamfered (the open context's faces, nested groups and components aside, or the
 instance's definition, which must have no nested ones) must be a solid (see the `solid` query);
