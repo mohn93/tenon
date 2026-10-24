@@ -261,6 +261,14 @@ fn describe_lists_methods_and_schemas() {
         "soften_edges",
         "soften_by_angle",
         "intersect_faces",
+        "solid_union",
+        "solid_subtract",
+        "solid_intersect",
+        "solid_trim",
+        "solid_split",
+        "outer_shell",
+        "chamfer_edges",
+        "fillet_edges",
         "paste",
         "new",
         "open",
@@ -279,6 +287,7 @@ fn describe_lists_methods_and_schemas() {
         "context",
         "file",
         "curve",
+        "\"solid\"",
         "materials",
         "tags",
         "scenes",
@@ -295,6 +304,23 @@ fn describe_lists_methods_and_schemas() {
             "Query schema lacks {variant}"
         );
     }
+}
+
+#[test]
+fn solid_query_reports_volume_over_rpc() {
+    let mut h = HeadlessHost::new();
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "add_box", "corner": [0, 0, 0], "size": [2, 3, 4], "as": "group"}),
+    );
+    let id = r["result"]["placed"][0].clone();
+    let r = call(&mut h, "query", json!({"type": "solid", "id": id}));
+    assert_eq!(r["result"]["type"], "solid");
+    assert_eq!(r["result"]["solid"], true);
+    assert!((r["result"]["volume"].as_f64().unwrap() - 24.0).abs() < 1e-9);
+    let r = call(&mut h, "query", json!({"type": "solid", "id": "f1"}));
+    assert_eq!(r["error"]["code"], codes::COMMAND_FAILED);
 }
 
 #[test]
@@ -552,6 +578,37 @@ fn first_pixel(reply: &Value) -> [u8; 3] {
     let mut buf = vec![0; reader.output_buffer_size().unwrap()];
     reader.next_frame(&mut buf).unwrap();
     [buf[0], buf[1], buf[2]]
+}
+
+#[test]
+fn render_view_takes_studio_lighting_without_changing_the_documents() {
+    let mut h = HeadlessHost::new();
+    let level = json!({"eye": [0, -6, 1.5], "target": [0, 0, 1.5]});
+    let studio = call(
+        &mut h,
+        "render_view",
+        json!({"width": 16, "height": 16, "camera": level, "lighting": "studio"}),
+    );
+    assert_eq!(h.doc.lighting, session::Lighting::Day);
+    if studio["error"]["code"] == codes::RENDER_UNAVAILABLE {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    }
+    // The backdrop is the day's background; the pixels are the same where nothing is drawn.
+    let day = call(
+        &mut h,
+        "render_view",
+        json!({"width": 16, "height": 16, "camera": level}),
+    );
+    assert_eq!(first_pixel(&studio), first_pixel(&day));
+    // The document's own studio lighting is what a render without `lighting` follows.
+    let set = call(
+        &mut h,
+        "execute",
+        json!({"type": "set_lighting", "mode": "studio"}),
+    );
+    assert!(set.get("error").is_none(), "{set}");
+    assert_eq!(h.doc.lighting, session::Lighting::Studio);
 }
 
 #[test]
@@ -1397,4 +1454,172 @@ fn export_pdf_refuses_bad_input_and_other_files_before_rendering() {
     );
     assert!(!dir.join("a.pdf").exists());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A box group at x = 0 and its id, and a scene "Moved" that stores its position and a camera
+/// seen from the front; the box then moves 3 m and the camera turns to the top.
+fn scene_with_a_moving_box(h: &mut HeadlessHost) -> (Value, Value) {
+    let boxed = call(
+        h,
+        "execute",
+        json!({"type": "add_box", "corner": [0, 0, 0], "size": [1, 1, 1]}),
+    );
+    let id = boxed["result"]["placed"][0].clone();
+    assert!(id.is_string(), "{boxed}");
+    call(
+        h,
+        "execute",
+        json!({"type": "set_camera", "eye": [0.5, -8, 0.5], "target": [0.5, 0, 0.5]}),
+    );
+    let scene = call(
+        h,
+        "execute",
+        json!({"type": "add_scene", "name": "Moved", "positions": [id]}),
+    );
+    let scene = scene["result"]["changes"]["scenes"][0].clone();
+    assert!(scene.is_string());
+    call(
+        h,
+        "execute",
+        json!({"type": "move", "ids": [id], "offset": [3, 0, 0]}),
+    );
+    call(
+        h,
+        "execute",
+        json!({"type": "set_camera", "eye": [0, 0, 9], "target": [0, 0, 0], "up": [0, 1, 0]}),
+    );
+    (id, scene)
+}
+
+fn png_of(reply: &Value) -> String {
+    reply["result"]["png_base64"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{reply}"))
+        .to_string()
+}
+
+fn no_render_gpu(reply: &Value) -> bool {
+    if reply["error"]["code"] == codes::RENDER_UNAVAILABLE {
+        eprintln!("no GPU adapter, skipping");
+        return true;
+    }
+    false
+}
+
+#[test]
+fn render_view_of_a_scene_refuses_a_camera_and_stray_frame_params() {
+    let mut h = HeadlessHost::new();
+    let (_, scene) = scene_with_a_moving_box(&mut h);
+    let both = call(
+        &mut h,
+        "render_view",
+        json!({"width": 8, "height": 8, "scene": scene,
+               "camera": {"eye": [0, -5, 1], "target": [0, 0, 1]}}),
+    );
+    assert_eq!(both["error"]["code"], codes::INVALID_PARAMS, "{both}");
+    for stray in [json!({"t": 0.5}), json!({"from": scene})] {
+        let mut p = json!({"width": 8, "height": 8});
+        p.as_object_mut()
+            .unwrap()
+            .extend(stray.as_object().unwrap().clone());
+        let r = call(&mut h, "render_view", p);
+        assert_eq!(r["error"]["code"], codes::INVALID_PARAMS, "{r}");
+    }
+    for t in [json!(-0.1), json!(1.5)] {
+        let r = call(
+            &mut h,
+            "render_view",
+            json!({"width": 8, "height": 8, "scene": scene, "t": t}),
+        );
+        assert_eq!(r["error"]["code"], codes::INVALID_PARAMS, "{r}");
+    }
+    let missing = call(
+        &mut h,
+        "render_view",
+        json!({"width": 8, "height": 8, "scene": "p99"}),
+    );
+    assert_eq!(missing["error"]["code"], codes::COMMAND_FAILED, "{missing}");
+}
+
+#[test]
+fn render_view_of_a_scene_is_the_current_image_at_t0_and_the_scene_image_at_t1() {
+    let mut h = HeadlessHost::new();
+    let (_, scene) = scene_with_a_moving_box(&mut h);
+    let size = json!({"width": 48, "height": 32});
+    let current = call(&mut h, "render_view", size.clone());
+    if no_render_gpu(&current) {
+        return;
+    }
+    let frame = |h: &mut HeadlessHost, t: Option<f64>| {
+        let mut p = size.clone();
+        p["scene"] = scene.clone();
+        if let Some(t) = t {
+            p["t"] = json!(t);
+        }
+        call(h, "render_view", p)
+    };
+    let revision = h.doc.revision();
+    let undo = h.doc.camera.clone();
+    let start = frame(&mut h, Some(0.0));
+    let middle = frame(&mut h, Some(0.5));
+    let end = frame(&mut h, None);
+    assert_eq!(
+        png_of(&start),
+        png_of(&current),
+        "t = 0 is the current view"
+    );
+    assert_ne!(png_of(&middle), png_of(&current));
+    assert_ne!(png_of(&middle), png_of(&end));
+    assert_ne!(png_of(&end), png_of(&current));
+    assert_eq!(h.doc.revision(), revision, "the document is unchanged");
+    assert_eq!(h.doc.camera, undo);
+    // What going to the scene makes is the image at t = 1.
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "go_to_scene", "scene": scene}),
+    );
+    let there = call(&mut h, "render_view", size.clone());
+    assert_eq!(png_of(&end), png_of(&there));
+}
+
+#[test]
+fn render_view_from_a_scene_starts_at_that_scene() {
+    let mut h = HeadlessHost::new();
+    let (id, scene) = scene_with_a_moving_box(&mut h);
+    // A second scene, stored where the box and camera now are.
+    let top = call(
+        &mut h,
+        "execute",
+        json!({"type": "add_scene", "name": "Top", "positions": [id]}),
+    );
+    let top = top["result"]["changes"]["scenes"][0].clone();
+    let size = json!({"width": 48, "height": 32});
+    let start = call(
+        &mut h,
+        "render_view",
+        json!({"width": 48, "height": 32, "scene": top, "from": scene, "t": 0.0}),
+    );
+    if no_render_gpu(&start) {
+        return;
+    }
+    let end = call(
+        &mut h,
+        "render_view",
+        json!({"width": 48, "height": 32, "scene": top, "from": scene, "t": 1.0}),
+    );
+    // t = 0 from "Moved" is the picture going to "Moved" makes; t = 1 the one of "Top".
+    let alone = call(
+        &mut h,
+        "render_view",
+        json!({"width": 48, "height": 32, "scene": scene, "t": 1.0}),
+    );
+    assert_eq!(png_of(&start), png_of(&alone));
+    let current = call(&mut h, "render_view", size);
+    assert_eq!(
+        png_of(&end),
+        png_of(&current),
+        "Top is where things are now"
+    );
+    assert_ne!(png_of(&start), png_of(&end));
 }

@@ -18,9 +18,10 @@ use crate::model::{Edge, Face, Guide, Instance, Model, Vertex};
 use crate::page::{Page, PageView};
 use crate::scene::{Definition, DefinitionKind, Scene};
 use crate::section::SectionPlane;
-use crate::style::{Style, StyleSettings};
+use crate::style::{AmbientOcclusion, Style, StyleSettings};
 use crate::tag::Tag;
 use crate::texture::{Texture, TextureImage, TexturePlacement};
+use crate::transition::SceneTransition;
 
 /// Ids in a file are below this, and its `next_id` is at most this, so every id is exact as a
 /// JSON (double) number and a scene that loads also saves and loads again.
@@ -60,6 +61,18 @@ pub struct SceneData {
     /// is the default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<LocationData>,
+    /// How going to a scene animates. Absent in files written before it existed (and when it
+    /// is the default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition: Option<TransitionData>,
+}
+
+/// How going to a scene animates: see [`crate::SceneTransition`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TransitionData {
+    pub on: bool,
+    pub seconds: f64,
 }
 
 /// Where the model stands: see [`crate::Location`].
@@ -93,6 +106,18 @@ pub struct PageData {
     pub view: Option<PageView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<u64>>,
+    /// The instances of the root whose positions the page stores (absent: none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub positions: Option<Vec<PagePosition>>,
+}
+
+/// An instance's stored position in a page.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PagePosition {
+    pub id: u64,
+    /// Column-major 3x4, as an instance's.
+    pub transform: [f64; 12],
 }
 
 /// A style: a name and its settings.
@@ -101,7 +126,46 @@ pub struct PageData {
 pub struct StyleData {
     pub id: u64,
     pub name: String,
+    #[serde(serialize_with = "serialize_settings")]
     pub settings: StyleSettings,
+}
+
+/// A style's settings as saved: the same fields as `StyleSettings`, but without the ambient
+/// occlusion while it is the default, so a file that does not need it is as it was before it
+/// existed (and older versions read it).
+#[derive(Serialize)]
+struct SettingsOut<'a> {
+    edges: &'a crate::style::EdgeStyle,
+    background: [u8; 3],
+    sky: Option<[u8; 3]>,
+    ground: &'a Option<crate::style::Ground>,
+    fog: &'a Option<crate::style::Fog>,
+    #[serde(skip_serializing_if = "AmbientOcclusion::is_default")]
+    ambient_occlusion: AmbientOcclusion,
+}
+
+fn serialize_settings<S: serde::Serializer>(
+    settings: &StyleSettings,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    // Naming every field makes a new setting a compile error here, not a missing save.
+    let StyleSettings {
+        edges,
+        background,
+        sky,
+        ground,
+        fog,
+        ambient_occlusion,
+    } = settings;
+    SettingsOut {
+        edges,
+        background: *background,
+        sky: *sky,
+        ground,
+        fog,
+        ambient_occlusion: *ambient_occlusion,
+    }
+    .serialize(serializer)
 }
 
 /// A tag: `color` is sRGB red, green and blue.
@@ -141,6 +205,12 @@ pub struct MaterialData {
     /// Absent when 0, as in files written before emission existed.
     #[serde(default, skip_serializing_if = "is_dark")]
     pub emission: f32,
+    /// Absent when 0, as in files written before material finish existed.
+    #[serde(default, skip_serializing_if = "is_dark")]
+    pub metalness: f32,
+    /// Absent when 1 (matte).
+    #[serde(default = "opaque", skip_serializing_if = "is_opaque")]
+    pub roughness: f32,
 }
 
 /// A material's texture: the file holding its image and the size it covers on the model, in
@@ -261,6 +331,18 @@ pub struct InstanceData {
     /// Absent (false) before hiding existed, and for entities that are shown.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
+    /// Absent (true) before section cuts could be refused, and for instances section planes
+    /// cut.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub section_cut: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 /// A guide line through `point` along `direction` (a unit vector), or, without `direction`, a
@@ -407,6 +489,8 @@ impl Scene {
                         image: Some(t.image.clone()),
                     }),
                     emission: m.emission,
+                    metalness: m.metalness,
+                    roughness: m.roughness,
                 })
                 .collect(),
             tags: self
@@ -425,6 +509,14 @@ impl Scene {
                     name: p.name.clone(),
                     view: p.view,
                     tags: p.tags.as_ref().map(|t| t.iter().map(|t| t.0).collect()),
+                    positions: p.positions.as_ref().map(|m| {
+                        m.iter()
+                            .map(|(i, t)| PagePosition {
+                                id: i.0,
+                                transform: t.to_cols_array(),
+                            })
+                            .collect()
+                    }),
                 })
                 .collect(),
             styles: self
@@ -442,6 +534,13 @@ impl Scene {
                     longitude: l.longitude,
                     north_angle: l.north_angle,
                     utc_offset: l.utc_offset,
+                }
+            }),
+            transition: (!self.scene_transition().is_default()).then(|| {
+                let t = self.scene_transition();
+                TransitionData {
+                    on: t.on,
+                    seconds: t.seconds,
                 }
             }),
             axes: (!self.axes().is_world()).then(|| {
@@ -504,6 +603,8 @@ impl Scene {
                 opacity: m.opacity,
                 texture,
                 emission: m.emission,
+                metalness: m.metalness,
+                roughness: m.roughness,
             };
             if materials.insert(MaterialId(m.id), material).is_some() {
                 return Err(format!("material m{} appears twice", m.id));
@@ -534,6 +635,11 @@ impl Scene {
                     .tags
                     .as_ref()
                     .map(|t| t.iter().map(|t| TagId(*t)).collect()),
+                positions: p.positions.as_ref().map(|m| {
+                    m.iter()
+                        .map(|q| (InstanceId(q.id), DAffine3::from_cols_array(&q.transform)))
+                        .collect()
+                }),
             };
             pages.push((PageId(p.id), page));
         }
@@ -570,6 +676,14 @@ impl Scene {
             };
             location.check().map_err(|e| e.to_string())?;
             scene.location = location;
+        }
+        if let Some(t) = &data.transition {
+            let transition = SceneTransition {
+                on: t.on,
+                seconds: t.seconds,
+            };
+            transition.check().map_err(|e| e.to_string())?;
+            scene.transition = transition;
         }
         scene.validate()?;
         Ok(scene)
@@ -624,6 +738,7 @@ fn mesh_data(m: &Model) -> MeshData {
                 material: i.material.map(|m| m.0),
                 tag: i.tag.map(|t| t.0),
                 hidden: i.hidden,
+                section_cut: i.section_cut,
             })
             .collect(),
         guides: m
@@ -820,6 +935,7 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
             material: i.material.map(MaterialId),
             tag: i.tag.map(TagId),
             hidden: i.hidden,
+            section_cut: i.section_cut,
         };
         if instances.insert(InstanceId(i.id), instance).is_some() {
             return Err(format!("instance i{} appears twice", i.id));

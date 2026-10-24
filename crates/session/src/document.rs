@@ -35,6 +35,7 @@ mod clip;
 mod copy_along_path;
 mod elsewhere;
 mod files;
+mod fillet;
 mod flip;
 mod follow_me;
 mod groups;
@@ -52,6 +53,7 @@ mod scenes;
 mod sections;
 mod shadows;
 mod soften;
+mod solid;
 mod styles;
 mod tags;
 mod text3d;
@@ -63,7 +65,7 @@ pub use axes::world_drawing_axes;
 pub use camera::{DEFAULT_EYE_HEIGHT, MAX_EYE_HEIGHT, MIN_EYE_HEIGHT};
 pub use files::ExportedBytes;
 pub use import::ImportOptions;
-pub use sections::SectionDisplay;
+pub use sections::{SectionDisplay, SectionFillColor};
 
 /// Largest coordinate magnitude (meters) accepted from commands.
 pub const MAX_COORDINATE: f64 = 1.0e6;
@@ -199,6 +201,8 @@ pub struct Document {
     purged: Option<usize>,
     /// The definitions the last `make_unique` made, until its outcome takes them.
     made_definitions: Option<Vec<DefinitionId>>,
+    /// Set when the last solid boolean left nothing, until its outcome takes it.
+    solid_empty: Option<bool>,
     /// What the last `add_3d_text` made, until its outcome takes it.
     text_report: Option<Text3dReport>,
     /// The material an `insert_library_item` of a material added or reused, for its outcome.
@@ -252,6 +256,7 @@ impl Document {
             positioned: None,
             purged: None,
             made_definitions: None,
+            solid_empty: None,
             text_report: None,
             library_material: None,
             existing_material: None,
@@ -469,12 +474,22 @@ impl Document {
 
     /// Runs one command. Each modeling command is one undo step; camera commands are not recorded.
     pub fn execute(&mut self, command: Command) -> Result<Outcome, CommandError> {
-        // The undo step of a library insert reads "insert" wherever it came from.
-        let label = match command {
-            Command::InsertLibraryItem { .. } => "insert".to_string(),
-            _ => command.name(),
-        };
+        let label = self.step_label(&command);
         self.execute_as(command, label)
+    }
+
+    /// The label of the undo step `command` makes: its name, except that a library insert reads
+    /// "insert" wherever it came from and going to a scene that stores positions (it moves
+    /// instances) says which scene.
+    pub fn step_label(&self, command: &Command) -> String {
+        match command {
+            Command::InsertLibraryItem { .. } => "insert".to_string(),
+            Command::GoToScene { scene } => match self.scene.page(*scene) {
+                Some(p) if p.positions.is_some() => format!("Go to scene {}", p.name),
+                _ => command.name(),
+            },
+            _ => command.name(),
+        }
     }
 
     /// Runs one command as `execute` does, its undo step (if it makes one) labelled `label`
@@ -499,6 +514,10 @@ impl Document {
             outcome.purged = self.purged.take();
             outcome.definitions = self.made_definitions.take();
             outcome.placed = self.placed_instances(&outcome.changes);
+            outcome.empty = self.solid_empty.take();
+            if outcome.empty.is_some() {
+                outcome.placed = Some(Vec::new());
+            }
             outcome.text_3d = self.text_report.take();
             outcome.material = self.library_material.take();
             if let Some(m) = self.existing_material.take()
@@ -631,8 +650,13 @@ impl Document {
                 self.prune_hidden_selection();
                 Ok(Outcome::default())
             }
-            Command::SetSectionDisplay { planes, cuts, fill } => {
-                self.set_section_display_changes(planes, cuts, fill);
+            Command::SetSectionDisplay {
+                planes,
+                cuts,
+                fill,
+                fill_color,
+            } => {
+                self.set_section_display_changes(planes, cuts, fill, fill_color);
                 Ok(Outcome::default())
             }
             Command::OpenInstance { id } => {
@@ -767,12 +791,14 @@ impl Document {
             | Command::AddEdgeDimension { .. }
             | Command::AddRadialDimension { .. }
             | Command::AddNote { .. }
+            | Command::AddLabel { .. }
             | Command::AddScreenNote { .. }
             | Command::ChangeNote { .. }
             | Command::AddSectionPlane { .. }
             | Command::FlipSectionPlane { .. }
             | Command::ActivateSectionPlane { .. }
             | Command::DeactivateSection {}
+            | Command::SetSectionCut { .. }
             | Command::Add3dText { .. }
             | Command::SetUnits { .. }
             | Command::PushPull { .. }
@@ -788,10 +814,12 @@ impl Document {
             | Command::MakeGroup { .. }
             | Command::MakeComponent { .. }
             | Command::Explode { .. }
+            | Command::ExplodeView { .. }
             | Command::MakeUnique { .. }
             | Command::SetAxes { .. }
             | Command::ResetAxes {}
             | Command::SetLocation { .. }
+            | Command::SetSceneTransition { .. }
             | Command::Flip { .. }
             | Command::RenameDefinition { .. }
             | Command::PlaceInstance { .. }
@@ -830,6 +858,14 @@ impl Document {
             | Command::SoftenEdges { .. }
             | Command::SoftenByAngle { .. }
             | Command::IntersectFaces { .. }
+            | Command::SolidUnion { .. }
+            | Command::SolidSubtract { .. }
+            | Command::SolidIntersect { .. }
+            | Command::SolidTrim { .. }
+            | Command::SolidSplit { .. }
+            | Command::OuterShell { .. }
+            | Command::ChamferEdges { .. }
+            | Command::FilletEdges { .. }
             | Command::PositionTexture { .. }
             | Command::Import { .. }
             | Command::Paste { .. }
@@ -955,6 +991,11 @@ impl Document {
                 position,
                 text,
             } => self.add_note_changes(*anchor, *position, text.clone()),
+            Command::AddLabel {
+                target,
+                text,
+                position,
+            } => self.add_label_changes(*target, text, *position),
             Command::AddScreenNote { at, text } => self.add_screen_note_changes(*at, text),
             Command::ChangeNote { note, text } => self.change_note_changes(*note, text.clone()),
             Command::AddSectionPlane {
@@ -1026,6 +1067,11 @@ impl Document {
             Command::MakeGroup { ids, name } => self.group_changes(ids, None, name.as_deref()),
             Command::MakeComponent { ids, name } => self.group_changes(ids, Some(name), None),
             Command::Explode { ids } => self.explode_changes(ids),
+            Command::ExplodeView {
+                ids,
+                factor,
+                center,
+            } => self.explode_view_changes(ids, *factor, *center),
             Command::SetAxes {
                 origin,
                 x_axis,
@@ -1038,6 +1084,9 @@ impl Document {
                 north_angle,
                 utc_offset,
             } => self.set_location_changes(*latitude, *longitude, *north_angle, *utc_offset),
+            Command::SetSceneTransition { on, seconds } => {
+                self.set_scene_transition_changes(*on, *seconds)
+            }
             Command::MakeUnique { ids } => self.make_unique_changes(ids.as_deref()),
             Command::Flip { ids, axis, frame } => self.flip_changes(ids.as_deref(), *axis, *frame),
             Command::RenameDefinition { definition, name } => {
@@ -1154,13 +1203,15 @@ impl Document {
                 opacity,
                 texture,
                 emission,
+                metalness,
+                roughness,
                 existing,
             } => self.add_material_changes(
                 name.as_deref(),
                 *color,
                 *opacity,
                 texture.as_ref(),
-                *emission,
+                (*emission, *metalness, *roughness),
                 *existing,
             ),
             Command::ChangeMaterial {
@@ -1170,6 +1221,8 @@ impl Document {
                 opacity,
                 texture,
                 emission,
+                metalness,
+                roughness,
             } => self.change_material_changes(
                 *material,
                 MaterialEdit {
@@ -1178,6 +1231,8 @@ impl Document {
                     opacity: *opacity,
                     texture: None,
                     emission: *emission,
+                    metalness: *metalness,
+                    roughness: *roughness,
                 },
                 texture.as_ref().map(Option::as_ref),
             ),
@@ -1203,20 +1258,31 @@ impl Document {
             ),
             Command::DeleteTag { tag, move_to } => self.delete_tag_changes(*tag, *move_to),
             Command::SetTag { ids, tag } => self.set_tag_changes(ids, *tag),
-            Command::AddScene { name, camera, tags } => {
-                self.add_scene_changes(name.as_deref(), *camera, *tags)
-            }
+            Command::AddScene {
+                name,
+                camera,
+                tags,
+                positions,
+            } => self.add_scene_changes(name.as_deref(), *camera, *tags, positions.as_ref()),
             Command::UpdateScene {
                 scene,
                 camera,
                 tags,
-            } => self.update_scene_changes(*scene, *camera, *tags),
+                positions,
+            } => self.update_scene_changes(*scene, *camera, *tags, positions.as_ref()),
             Command::ChangeScene {
                 scene,
                 name,
                 camera,
                 tags,
-            } => self.change_scene_changes(*scene, name.as_deref(), *camera, *tags),
+                positions,
+            } => self.change_scene_changes(
+                *scene,
+                name.as_deref(),
+                *camera,
+                *tags,
+                positions.as_ref(),
+            ),
             Command::MoveScene { scene, index } => self.move_scene_changes(*scene, *index),
             Command::DeleteScene { scene } => self.delete_scene_changes(*scene),
             // Its view change is made here too, outside the returned change.
@@ -1229,6 +1295,7 @@ impl Document {
             } => self.change_style_changes(*style, name.as_deref(), settings.as_ref()),
             Command::DeleteStyle { style } => self.delete_style_changes(*style),
             Command::Hide { ids } => self.hide_changes(ids),
+            Command::SetSectionCut { ids, cut } => self.set_section_cut_changes(ids, *cut),
             Command::Unhide { ids } => self.unhide_changes(ids),
             Command::UnhideLast {} => self.unhide_last_changes(),
             Command::UnhideAll {} => self.unhide_all_changes(),
@@ -1239,6 +1306,27 @@ impl Document {
                 self.soften_by_angle_changes(ids, *max_angle_deg)
             }
             Command::IntersectFaces { ids, with } => self.intersect_faces_changes(ids, *with),
+            Command::SolidUnion { ids } => {
+                self.solid_all_changes(kernel::boolean::BooleanOp::Union, ids)
+            }
+            Command::SolidSubtract { target, tools } => self.solid_subtract_changes(*target, tools),
+            Command::SolidTrim { target, tools } => self.solid_trim_changes(*target, tools),
+            Command::SolidSplit { a, b } => self.solid_split_changes(*a, *b),
+            Command::OuterShell { ids } => self.outer_shell_changes(ids),
+            Command::ChamferEdges {
+                instance,
+                edges,
+                distance,
+            } => self.chamfer_edges_changes(*instance, edges, *distance),
+            Command::FilletEdges {
+                instance,
+                edges,
+                radius,
+                segments,
+            } => self.fillet_edges_changes(*instance, edges, *radius, *segments),
+            Command::SolidIntersect { ids } => {
+                self.solid_all_changes(kernel::boolean::BooleanOp::Intersect, ids)
+            }
             Command::PositionTexture {
                 ids,
                 offset,
@@ -1392,7 +1480,12 @@ impl Document {
                         }
                         applied.push(c);
                         names.push(command.name());
-                        let placed = self.placed_instances(&summary);
+                        let empty = self.solid_empty.take();
+                        let placed = if empty.is_some() {
+                            Some(Vec::new())
+                        } else {
+                            self.placed_instances(&summary)
+                        };
                         Outcome {
                             changes: summary,
                             import: self.import_report.take(),
@@ -1408,6 +1501,7 @@ impl Document {
                             text_3d: self.text_report.take(),
                             material: self.library_material.take(),
                             units: (self.units != units_then).then_some(self.units),
+                            empty,
                         }
                     }),
                     None if matches!(
@@ -1767,6 +1861,76 @@ impl Document {
             );
             c.ops
                 .extend(m.transform_sections(&parts.sections, shift).ops);
+            Ok(c)
+        })
+        .map_err(|e| self.kernel_error(e, ids))
+    }
+
+    fn explode_view_changes(
+        &mut self,
+        ids: &[EntityId],
+        factor: f64,
+        center: Option<[f64; 3]>,
+    ) -> Result<SceneChange, CommandError> {
+        let invalid = |m: &str| CommandError::new(ErrorKind::InvalidInput, m);
+        if ids.is_empty() {
+            return Err(invalid("ids must list at least one instance"));
+        }
+        if !factor.is_finite() || !(-0.99..=100.0).contains(&factor) {
+            return Err(invalid("factor must be finite, from -0.99 to 100"));
+        }
+        if let Some(c) = center {
+            check_coordinates(&[c])?;
+        }
+        self.require_existing(ids)?;
+        let mut instances: Vec<(InstanceId, DVec3)> = Vec::new();
+        let mut union: Option<[DVec3; 2]> = None;
+        for id in ids {
+            let EntityId::Instance(i) = *id else {
+                return Err(invalid("ids must all be instances").with_ids(vec![*id]));
+            };
+            let Some([lo, hi]) = self.instance_box(i) else {
+                return Err(invalid(
+                    "the instance is empty: it has no box to move from the center",
+                )
+                .with_ids(vec![*id]));
+            };
+            union = Some(match union {
+                Some([ul, uh]) => [ul.min(lo), uh.max(hi)],
+                None => [lo, hi],
+            });
+            if !instances.iter().any(|(j, _)| *j == i) {
+                instances.push((i, (lo + hi) * 0.5));
+            }
+        }
+        let center = match (center, union) {
+            (Some(c), _) => DVec3::from(c),
+            (None, Some([lo, hi])) => (lo + hi) * 0.5,
+            (None, None) => DVec3::ZERO,
+        };
+        let moves: Vec<(InstanceId, DVec3)> = instances
+            .iter()
+            .map(|(i, c)| (*i, (*c - center) * factor))
+            .filter(|(_, d)| d.length_squared() > 0.0)
+            .collect();
+        if moves.is_empty() {
+            return Ok(SceneChange::default());
+        }
+        // Every instance must stay within the coordinate limit after its own move.
+        for (i, d) in &moves {
+            let one = Parts::of(&[EntityId::Instance(*i)]);
+            self.check_placed(
+                &BTreeSet::new(),
+                &one,
+                &[DAffine3::from_translation(*d)],
+                false,
+            )?;
+        }
+        self.edit_mesh(|m| {
+            let mut c = ChangeSet::default();
+            for (i, d) in &moves {
+                c.ops.extend(m.move_instances(&[*i], *d).ops);
+            }
             Ok(c)
         })
         .map_err(|e| self.kernel_error(e, ids))
@@ -2470,6 +2634,30 @@ impl Document {
                 }
             }
             Query::Curve { id } => QueryResult::Curve(self.curve_info(*id)?),
+            Query::Solid { id } => {
+                let EntityId::Instance(i) = *id else {
+                    return Err(CommandError::new(
+                        ErrorKind::InvalidInput,
+                        format!("{id} is not a group or component"),
+                    )
+                    .with_ids(vec![*id]));
+                };
+                let Some(instance) = m.instance(i) else {
+                    return Err(self.missing_error(vec![*id], format!("no entity {id}")));
+                };
+                match kernel::solid::instance_volume(&self.scene, instance) {
+                    Ok(volume) => QueryResult::Solid {
+                        solid: true,
+                        volume: Some(volume),
+                        reason: None,
+                    },
+                    Err(reason) => QueryResult::Solid {
+                        solid: false,
+                        volume: None,
+                        reason: Some(reason),
+                    },
+                }
+            }
             Query::Camera {} => QueryResult::Camera {
                 eye: self.camera.eye.to_array(),
                 target: self.camera.target.to_array(),
@@ -2584,6 +2772,13 @@ impl Document {
             },
             Query::Units {} => QueryResult::Units(self.units),
             Query::Location {} => QueryResult::Location(self.scene.location().into()),
+            Query::SceneTransition {} => {
+                let t = self.scene.scene_transition();
+                QueryResult::SceneTransition(crate::query::SceneTransitionInfo {
+                    on: t.on,
+                    seconds: t.seconds,
+                })
+            }
             Query::Sun {} => QueryResult::Sun(self.sun().into()),
             Query::Library { folder } => {
                 QueryResult::Library(crate::library::list(std::path::Path::new(folder))?)
@@ -2599,6 +2794,7 @@ impl Document {
                 planes: self.section_display.planes,
                 cuts: self.section_display.cuts,
                 fill: self.section_display.fill,
+                fill_color: self.section_display.fill_color,
             },
         })
     }

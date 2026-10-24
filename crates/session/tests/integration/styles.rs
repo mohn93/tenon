@@ -370,7 +370,7 @@ fn files_without_styles_keep_their_schema_and_bytes() {
     assert!(doc["model"].get("styles").is_none());
     assert!(doc["camera"].get("style").is_none());
     assert_eq!(session::file::STYLES_SCHEMA_VERSION, 18);
-    assert_eq!(session::file::SCHEMA_VERSION, 18);
+    assert_eq!(session::file::SCHEMA_VERSION, 24);
 }
 
 #[test]
@@ -576,4 +576,103 @@ fn library_items_save_and_insert_with_a_style_chosen() {
         json!({"type": "insert_library_item", "path": model.to_str().unwrap()}),
     )
     .unwrap();
+}
+
+#[test]
+fn ambient_occlusion_is_set_by_change_style_and_defaults_to_off() {
+    let mut d = doc();
+    let a = add_style(&mut d, json!({"name": "A"}));
+    let s = styles(&d)[0]["settings"]["ambient_occlusion"].clone();
+    assert_eq!(s, json!({"on": false, "radius": 0.25, "strength": 1.0}));
+    run(
+        &mut d,
+        json!({"type": "change_style", "style": a, "settings": {"ambient_occlusion": {"on": true}}}),
+    )
+    .unwrap();
+    let s = styles(&d)[0]["settings"]["ambient_occlusion"].clone();
+    assert_eq!(s, json!({"on": true, "radius": 0.25, "strength": 1.0}));
+    run(
+        &mut d,
+        json!({"type": "change_style", "style": a, "settings": {"ambient_occlusion": {"radius": 2.0, "strength": 0.5}}}),
+    )
+    .unwrap();
+    let s = styles(&d)[0]["settings"]["ambient_occlusion"].clone();
+    assert_eq!(s, json!({"on": true, "radius": 2.0, "strength": 0.5}));
+    for bad in [
+        json!({"radius": 0.0}),
+        json!({"radius": 101.0}),
+        json!({"strength": -0.1}),
+        json!({"strength": 2.5}),
+    ] {
+        let e = run(
+            &mut d,
+            json!({"type": "change_style", "style": a, "settings": {"ambient_occlusion": bad}}),
+        )
+        .unwrap_err();
+        assert_eq!(e.0, ErrorKind::InvalidInput, "{bad}");
+    }
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    let s = styles(&d)[0]["settings"]["ambient_occlusion"].clone();
+    assert_eq!(s["radius"], 0.25);
+}
+
+#[test]
+fn a_style_with_ambient_occlusion_is_schema_21_and_default_ones_keep_18() {
+    let mut d = doc();
+    let a = add_style(&mut d, json!({"name": "A"}));
+    let path = scratch("ao.skr");
+    let save = |d: &mut Document| {
+        run(d, json!({"type": "save", "path": path.to_str().unwrap()})).unwrap();
+        stored(&path)
+    };
+    let plain = save(&mut d);
+    assert_eq!(plain["schema_version"], 18);
+    assert!(
+        plain["model"]["styles"][0]["settings"]
+            .get("ambient_occlusion")
+            .is_none()
+    );
+    run(
+        &mut d,
+        json!({"type": "change_style", "style": a, "settings": {"ambient_occlusion": {"on": true, "radius": 1.5}}}),
+    )
+    .unwrap();
+    let occluded = save(&mut d);
+    assert_eq!(occluded["schema_version"], 21);
+    assert_eq!(
+        occluded["schema_version"],
+        session::file::AMBIENT_OCCLUSION_SCHEMA_VERSION
+    );
+    assert_eq!(
+        occluded["model"]["styles"][0]["settings"]["ambient_occlusion"],
+        json!({"on": true, "radius": 1.5, "strength": 1.0})
+    );
+    let mut e = doc();
+    run(
+        &mut e,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(styles(&e), styles(&d));
+    // An older file has no such field and loads with the default.
+    let mut text = plain;
+    text["model"]["styles"][0]["settings"]
+        .as_object_mut()
+        .unwrap()
+        .remove("ambient_occlusion");
+    let old = scratch("old-ao.skr");
+    {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&old).unwrap());
+        zip.start_file("document.json", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(&serde_json::to_vec(&text).unwrap()).unwrap();
+        zip.finish().unwrap();
+    }
+    run(
+        &mut e,
+        json!({"type": "open", "path": old.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(styles(&e)[0]["settings"]["ambient_occlusion"]["on"], false);
 }

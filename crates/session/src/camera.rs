@@ -74,6 +74,10 @@ pub enum Lighting {
     Day,
     /// Headlight and ambient dimmed and a dark background: glowing faces light the scene.
     Night,
+    /// No headlight: a key light from the camera's upper left front (which casts the shadows
+    /// when they are on), a fill light from the right, a rim light from behind above, and a
+    /// low ambient light, all following the camera.
+    Studio,
 }
 
 /// The six views along the axes, and an isometric one from the front left.
@@ -208,6 +212,7 @@ impl Camera {
             fov_y: self.fov_y,
             parallel: self.is_parallel(),
             night: lighting == Lighting::Night,
+            studio: lighting == Lighting::Studio,
             color_by_tag,
             x_ray,
             hidden_geometry,

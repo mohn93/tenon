@@ -35,7 +35,7 @@ use crate::flows::{Effect, Env, Flows, PlatformReply, Then, file_name};
 use crate::fly::FlyKey;
 use crate::gui::Gui;
 use crate::host::{AppHost, CLOSE_WAIT, Offscreen, editor_state};
-use crate::info::entity_info;
+use crate::info::entity_info_with;
 #[cfg(target_os = "macos")]
 use crate::menus;
 #[cfg(target_os = "macos")]
@@ -516,6 +516,8 @@ struct Gpu {
     lost: Arc<AtomicBool>,
     /// Whether the adapter can draw light shadows (see `render::supports_shadows`).
     shadows: bool,
+    /// Whether it can draw ambient occlusion (see `render::supports_ambient_occlusion`).
+    occlusion: bool,
 }
 
 /// A GPU adapter, device and queue with the surface they draw to. The desktop makes them when
@@ -604,6 +606,7 @@ fn gpu(context: GpuContext, size: (u32, u32)) -> Result<Gpu, String> {
         // A desktop's renderer finds out for itself (it checks its shader); a browser's cannot
         // wait for that.
         shadows: cfg!(not(target_arch = "wasm32")) || render::supports_shadows(&adapter),
+        occlusion: render::supports_ambient_occlusion(&adapter),
     })
 }
 
@@ -613,17 +616,50 @@ fn make_renderer(
     queue: &wgpu::Queue,
     format: wgpu::TextureFormat,
     shadows: bool,
+    occlusion: bool,
 ) -> Renderer {
-    if shadows {
+    let mut renderer = if shadows {
         Renderer::new(device, queue, format)
     } else {
         Renderer::without_shadows(device, queue, format)
+    };
+    if !occlusion {
+        renderer.disable_ambient_occlusion();
     }
+    renderer
+}
+
+/// The offscreen snapshotter for pictures of the model (swatches, thumbnails), sharing the
+/// window's device.
+fn make_snapshotter(device: &wgpu::Device, queue: &wgpu::Queue, occlusion: bool) -> Snapshotter {
+    let mut snapshotter = Snapshotter::with_device(device, queue);
+    if !occlusion {
+        snapshotter.disable_ambient_occlusion();
+    }
+    snapshotter
 }
 
 /// True for the input that makes a held Ctrl part of a chord rather than a tap: presses,
 /// scrolls, pinches, focus changes and keys other than modifiers (the window reports the
 /// modifier keys themselves as key events too).
+/// Whether `event` is input that ends a scene transition at once: a press (key other than a
+/// modifier, mouse button, touch), a scroll or a gesture. Moving the cursor does not.
+fn finishes_transition(event: &WindowEvent) -> bool {
+    match event {
+        WindowEvent::KeyboardInput { event, .. } => {
+            event.state == ElementState::Pressed && !is_modifier_key(&event.logical_key)
+        }
+        WindowEvent::MouseInput { state, .. } => *state == ElementState::Pressed,
+        WindowEvent::Touch(touch) => touch.phase == TouchPhase::Started,
+        _ => matches!(
+            event,
+            WindowEvent::MouseWheel { .. }
+                | WindowEvent::PinchGesture { .. }
+                | WindowEvent::PanGesture { .. }
+        ),
+    }
+}
+
 fn interrupts_ctrl_tap(event: &WindowEvent) -> bool {
     match event {
         WindowEvent::KeyboardInput { event, .. } => !is_modifier_key(&event.logical_key),
@@ -1087,13 +1123,14 @@ impl State {
             config,
             lost,
             shadows,
+            occlusion,
         } = gpu(context, (size.width, size.height)).unwrap_or_else(|e| panic!("{e}"));
 
-        let renderer = make_renderer(&device, &queue, config.format, shadows);
+        let renderer = make_renderer(&device, &queue, config.format, shadows, occlusion);
         let gui = Gui::new(&window, &device, config.format, prefs.theme, prefs.ui_scale);
         set_min_window(&window, prefs.ui_scale);
         let view = Viewport::full((config.width, config.height));
-        let offscreen = Offscreen::with(Snapshotter::with_device(&device, &queue));
+        let offscreen = Offscreen::with(make_snapshotter(&device, &queue, occlusion));
         let mut editor = Editor::new(
             DVec2::new(config.width as f64, config.height as f64),
             window.scale_factor(),
@@ -1602,6 +1639,8 @@ impl State {
                 color: m.color,
                 opacity: m.opacity,
                 emission: m.emission,
+                metalness: m.metalness,
+                roughness: m.roughness,
             })
             .collect()
     }
@@ -1883,6 +1922,9 @@ impl State {
             UiAction::SetUnits(units) => {
                 self.editor.set_units(units);
             }
+            UiAction::SetSceneTransition(transition) => {
+                self.editor.set_scene_transition(transition);
+            }
             UiAction::ExportFile => self.export(),
             UiAction::ExportPdf => self.open_sheet(Sheet::Print {
                 purpose: PrintPurpose::Export,
@@ -2058,6 +2100,12 @@ impl State {
             UiAction::SetMaterialEmission(material, tenths) => {
                 self.editor.set_material_emission(material, tenths);
             }
+            UiAction::SetMaterialMetalness(material, percent) => {
+                self.editor.set_material_metalness(material, percent);
+            }
+            UiAction::SetMaterialRoughness(material, percent) => {
+                self.editor.set_material_roughness(material, percent);
+            }
             UiAction::LoadTexture(material) => self.load_texture(material),
             UiAction::RemoveTexture(material) => {
                 self.editor.remove_texture(material);
@@ -2091,6 +2139,9 @@ impl State {
             }
             UiAction::SetHidden(hidden) => {
                 self.editor.set_selection_hidden(hidden);
+            }
+            UiAction::SetSectionCut(cut) => {
+                self.editor.set_selection_section_cut(cut);
             }
             UiAction::OutlinerSetHidden { path, hidden } => {
                 self.editor.outliner_set_hidden(&path, hidden);
@@ -2171,6 +2222,9 @@ impl State {
             }
             UiAction::UpdateScene(scene) => {
                 self.editor.update_scene(scene, None, None);
+            }
+            UiAction::StoreScenePositions(scene, on) => {
+                self.editor.set_scene_positions(scene, on);
             }
             UiAction::StoreSceneCamera(scene, on) => {
                 self.editor.set_scene_stores(scene, Some(on), None);
@@ -2314,6 +2368,9 @@ impl State {
             UiAction::IntersectFaces(scope) => {
                 self.editor.intersect_faces(scope);
             }
+            UiAction::SolidTool(op) => {
+                self.editor.solid_tool(op);
+            }
             UiAction::Harden => {
                 self.editor.harden_selection();
             }
@@ -2438,6 +2495,7 @@ impl State {
             config,
             lost,
             shadows,
+            occlusion,
         } = match made {
             Ok(gpu) => gpu,
             Err(e) => {
@@ -2446,8 +2504,8 @@ impl State {
             }
         };
         eprintln!("GPU device made again");
-        self.renderer = make_renderer(&device, &queue, config.format, shadows);
-        self.offscreen = Offscreen::with(Snapshotter::with_device(&device, &queue));
+        self.renderer = make_renderer(&device, &queue, config.format, shadows, occlusion);
+        self.offscreen = Offscreen::with(make_snapshotter(&device, &queue, occlusion));
         // The window and its AccessKit adapter stay; only the panels' renderer is new.
         self.gui = self.gui.rebuilt(
             &self.window,
@@ -2522,6 +2580,9 @@ impl State {
 
         // Fly mode moves the eye by the time since the last frame.
         let flying_on = self.editor.fly_tick(Instant::now());
+        // A scene transition draws interpolated state; the document is already at the end.
+        let motion = self.editor.transition_frame(Instant::now());
+        let animating = motion.is_some();
         // The hover is worked out once per frame, not per event.
         self.editor.refresh_hover();
         let doc = self.editor.doc();
@@ -2551,7 +2612,7 @@ impl State {
             self.edited = modified;
         }
         let status = self.editor.status_parts();
-        let info = entity_info(self.editor.doc());
+        let info = entity_info_with(self.editor.doc(), &|i| self.editor.selected_volume(i));
         let materials = self.material_rows();
         // Thumbnails tiles in view asked for last frame; more wait for the next.
         self.make_thumbnails();
@@ -2591,7 +2652,11 @@ impl State {
         let dark_canvas =
             self.editor.doc().lighting == Lighting::Night || self.gui.theme() == egui::Theme::Dark;
         let navigating = self.editor.navigating();
-        let hud = self.editor.hud(dark_canvas);
+        // While a transition runs the labels follow the drawn camera and instances.
+        let hud = match &motion {
+            Some(frame) => self.editor.transition_hud(dark_canvas, frame),
+            None => self.editor.hud(dark_canvas),
+        };
         // Whether the rest's end would show a chip: none to show, or one hidden while
         // navigating or under a window, is no reason to wake (Select over empty space, an
         // orbit drag).
@@ -2684,6 +2749,7 @@ impl State {
                 .any(|id| matches!(id, EntityId::Instance(_))),
             can_make_unique: self.editor.can_make_unique(),
             can_flip_own: self.editor.can_flip_own(),
+            solid_tools: self.editor.solid_tools(),
             inside_instance: !self.editor.doc().context().is_empty(),
             has_guides: self.editor.doc().model().guides().next().is_some(),
             projection: self.editor.doc().camera.projection,
@@ -2694,6 +2760,7 @@ impl State {
             tags: self.tag_rows.as_ref().map(|(_, t)| t).expect("built above"),
             color_by_tag: self.editor.doc().color_by_tag,
             styles: &styles,
+            ambient_occlusion: self.renderer.ambient_occlusion_available(),
             style: self.editor.doc().style(),
             section_display: self.editor.doc().section_display,
             x_ray: self.editor.doc().x_ray,
@@ -2710,6 +2777,7 @@ impl State {
             soften: self.editor.soften_window(),
             edges_soft: self.editor.selection_soft(),
             selection_hidden: self.editor.selection_hidden(),
+            selection_section_cut: self.editor.selection_section_cut(),
             has_hidden: self.editor.context_has_hidden(),
             has_last_hidden: self.editor.has_last_hidden(),
             has_hidden_selected: self.editor.selection_has_hidden(),
@@ -2732,7 +2800,9 @@ impl State {
                 self.editor.hovered().is_some(),
                 navigating,
             ),
-            camera: &self.editor.doc().camera,
+            camera: motion
+                .as_ref()
+                .map_or(&self.editor.doc().camera, |m| &m.camera),
             axes: self.editor.doc().drawing_axes_in_world().matrix3,
             start: (self.editor.untouched() && !self.start_dismissed && !self.editor.flying())
                 .then_some(StartCard {
@@ -2749,6 +2819,7 @@ impl State {
                 trackpad: self.prefs.trackpad,
                 autosave_minutes: self.prefs.autosave_minutes,
                 units: self.editor.doc().units(),
+                transition: self.editor.doc().scene().scene_transition(),
             }),
             recover: self.recover.as_ref().map(|r| RecoverView {
                 rows: &r.rows,
@@ -2792,12 +2863,19 @@ impl State {
         }
 
         let doc = self.editor.doc();
-        let update = scene_update(
-            self.drawn.as_ref(),
-            doc.revision(),
-            doc.selection(),
-            doc.context(),
-        );
+        // The frames of a transition that moves instances rebuild the model, and the first one
+        // after it does too; a camera-only transition keeps it.
+        let moving = motion.as_ref().is_some_and(|m| m.scene.is_some());
+        let update = if moving {
+            SceneUpdate::Model
+        } else {
+            scene_update(
+                self.drawn.as_ref(),
+                doc.revision(),
+                doc.selection(),
+                doc.context(),
+            )
+        };
         // Coloring by tag changes how faces are colored, not the revision.
         let recolored = self.renderer.set_color_by_tag(doc.color_by_tag);
         // The chosen style's edge colors do too, and its background reaches the canvas.
@@ -2809,7 +2887,11 @@ impl State {
             hidden_geometry: doc.hidden_geometry && !self.features.read_only,
         }) || recolored;
         if update == SceneUpdate::Model || recolored {
-            self.renderer.set_model(doc.scene(), doc.context());
+            let scene = motion
+                .as_ref()
+                .and_then(|m| m.scene.as_ref())
+                .unwrap_or(doc.scene());
+            self.renderer.set_model(scene, doc.context());
         }
         if update != SceneUpdate::Keep || recolored {
             self.renderer.set_selection(doc.selection());
@@ -2818,6 +2900,9 @@ impl State {
                 doc.selection().clone(),
                 doc.context().to_vec(),
             ));
+            if moving {
+                self.drawn = None;
+            }
         }
         // What a click would act on, and the tool's solid: window feedback only (render_view's
         // renderer never shows them). Both are no-ops when unchanged.
@@ -2825,9 +2910,11 @@ impl State {
         let tool = self.editor.tool_kind();
         let ui_theme = self.gui.theme();
         let sampling = self.editor.sampling();
+        // No hover while a transition draws: it is of the document's view.
         self.renderer.set_hover(
             self.editor
                 .hovered()
+                .filter(|_| !animating)
                 .map(|id| (id, theme::hover_look(ui_theme, tool, id, paint, sampling))),
         );
         self.renderer.set_preview(&self.editor.solid_preview());
@@ -2839,8 +2926,15 @@ impl State {
         self.renderer.set_lighting(doc.lighting);
         self.renderer.set_sun(render::SunLight::of(doc));
         // The tools' marker and lines are egui's (the HUD); the renderer draws no overlay.
-        self.renderer
-            .render_in(&target, size, self.view, &self.editor.doc().camera, &[]);
+        self.renderer.render_in(
+            &target,
+            size,
+            self.view,
+            motion
+                .as_ref()
+                .map_or(&self.editor.doc().camera, |m| &m.camera),
+            &[],
+        );
         // Text copied in a text field reaches a clipboard the window does not otherwise reach.
         if self.features.paste_by_event {
             for text in gui_frame.copied_texts() {
@@ -2865,7 +2959,7 @@ impl State {
             Repaint::At(t) => self.repaint_at = Some(t),
             Repaint::Idle => {}
         }
-        if flying_on {
+        if flying_on || animating {
             self.window.request_redraw();
         }
         // The ages in the open log move.
@@ -3203,6 +3297,7 @@ fn scene_rows(doc: &session::Document) -> Vec<SceneRow> {
             name: p.name.clone(),
             camera: p.view.is_some(),
             tags: p.tags.is_some(),
+            positions: p.positions.is_some(),
             selected: selected == Some(id),
         })
         .collect()
@@ -3812,6 +3907,9 @@ impl ApplicationHandler<AppEvent> for App {
         if interrupts_ctrl_tap(&event) {
             s.ctrl_tap.interrupt();
         }
+        if finishes_transition(&event) && s.editor.finish_transition() {
+            s.window.request_redraw();
+        }
         let changed = match event {
             WindowEvent::CloseRequested => {
                 s.settle_and(Then::Quit);
@@ -4340,6 +4438,7 @@ mod tests {
                     name: None,
                     camera: false,
                     tags: false,
+                    positions: None,
                 },
             );
             e.doc().selected_scene().unwrap()
@@ -4396,6 +4495,34 @@ mod tests {
         assert!(!tap.modifiers(ctrl | ModifiersState::SHIFT, ModifiersState::SHIFT));
         // A release alone is no tap.
         assert!(!tap.modifiers(ctrl, none));
+    }
+
+    #[test]
+    fn presses_scrolls_and_gestures_finish_a_scene_transition_but_not_a_drifting_cursor() {
+        let id = winit::event::DeviceId::dummy();
+        let mouse = |state| WindowEvent::MouseInput {
+            device_id: id,
+            state,
+            button: MouseButton::Left,
+        };
+        assert!(finishes_transition(&mouse(ElementState::Pressed)));
+        // The release of the click that started it must not end it.
+        assert!(!finishes_transition(&mouse(ElementState::Released)));
+        assert!(finishes_transition(&WindowEvent::MouseWheel {
+            device_id: id,
+            delta: MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(0.0, 4.0)),
+            phase: TouchPhase::Moved,
+        }));
+        assert!(finishes_transition(&WindowEvent::PinchGesture {
+            device_id: id,
+            delta: 0.01,
+            phase: TouchPhase::Moved,
+        }));
+        assert!(!finishes_transition(&WindowEvent::CursorMoved {
+            device_id: id,
+            position: winit::dpi::PhysicalPosition::new(1.0, 2.0),
+        }));
+        assert!(!finishes_transition(&WindowEvent::Focused(true)));
     }
 
     #[test]

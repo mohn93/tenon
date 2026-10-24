@@ -659,15 +659,8 @@ mod tests {
             let [a, b] = m.edge(id).unwrap().v;
             assert!(sides.contains_key(&(a, b)), "edge {id:?} bounds no face");
         }
-        let mut volume = 0.0;
-        for (_, f) in m.faces() {
-            let pts = |l: &[VertexId]| l.iter().map(|v| m.pos(*v)).collect::<Vec<_>>();
-            let mut area = vector_area(&pts(&f.outer)).dot(f.normal);
-            for h in &f.holes {
-                area += vector_area(&pts(h)).dot(f.normal);
-            }
-            volume += f.normal.dot(m.pos(f.outer[0])) * area / 3.0;
-        }
+        let volume = crate::solid::signed_volume(m);
+        assert_eq!(crate::solid::open_reason(m), None);
         volume
     }
 

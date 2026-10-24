@@ -281,6 +281,7 @@ fn settings_open() -> Fixture {
             ui_scale: UiScale::P100,
             trackpad: TrackpadScroll::Orbit,
             autosave_minutes: 5,
+            transition: kernel::SceneTransition::DEFAULT,
             units: session::Units::default(),
         }),
         ..Default::default()
@@ -435,6 +436,16 @@ fn a_slider_value_box_steps_on_increment_and_decrement() {
             "Glow value",
             Action::Decrement,
             UiAction::SetMaterialEmission(id, 19),
+        ),
+        (
+            "Metalness value",
+            Action::Increment,
+            UiAction::SetMaterialMetalness(id, 1),
+        ),
+        (
+            "Roughness value",
+            Action::Decrement,
+            UiAction::SetMaterialRoughness(id, 99),
         ),
     ] {
         let mut h = harness(fixture());

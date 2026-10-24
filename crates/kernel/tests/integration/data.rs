@@ -52,6 +52,36 @@ fn round_trip(s: &Scene) -> Scene {
 }
 
 #[test]
+fn the_section_cut_flag_survives_a_round_trip_and_copies_and_is_absent_when_on() {
+    let mut s = scene();
+    let id = s.root().instances().next().unwrap().0;
+    let json = serde_json::to_string(&s.to_data()).unwrap();
+    assert!(!json.contains("section_cut"), "the default is not written");
+    s.edit(MeshId::Root, |m| {
+        Ok(
+            m.set_section_cut_entities(&[kernel::EntityId::Instance(id)], false)
+                .0,
+        )
+    })
+    .unwrap();
+    assert_eq!(s.root().section_cut_of(id), Some(false));
+    let json = serde_json::to_string(&s.to_data()).unwrap();
+    assert!(json.contains("\"section_cut\":false"));
+    assert_eq!(round_trip(&s), s);
+    // Copies keep it.
+    let before: Vec<_> = s.root().instances().map(|(i, _)| i).collect();
+    s.copy_instances(MeshId::Root, &[id], p(10.0, 0.0, 0.0), 1)
+        .unwrap();
+    let copy = s
+        .root()
+        .instances()
+        .map(|(i, _)| i)
+        .find(|i| !before.contains(i))
+        .unwrap();
+    assert_eq!(s.root().section_cut_of(copy), Some(false));
+}
+
+#[test]
 fn a_scene_survives_a_round_trip_with_its_ids() {
     let s = scene();
     let back = round_trip(&s);
@@ -134,6 +164,7 @@ fn broken_data_is_rejected() {
                 material: None,
                 tag: None,
                 hidden: false,
+                section_cut: true,
             });
         },
         "places itself",
@@ -195,6 +226,7 @@ fn loose_vertices(next_id: u64, vertices: &[(u64, [f64; 3])]) -> SceneData {
         styles: Vec::new(),
         axes: None,
         location: None,
+        transition: None,
     }
 }
 
@@ -401,6 +433,7 @@ fn nested(n: u64, cycle: bool) -> SceneData {
         material: None,
         tag: None,
         hidden: false,
+        section_cut: true,
     };
     let definitions = (0..n)
         .map(|k| kernel::DefinitionData {
@@ -432,6 +465,7 @@ fn nested(n: u64, cycle: bool) -> SceneData {
         styles: Vec::new(),
         axes: None,
         location: None,
+        transition: None,
     }
 }
 

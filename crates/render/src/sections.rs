@@ -5,7 +5,10 @@
 //! plane keeps what `SectionPlane::keeps` keeps, so faces lying in the plane stay.
 
 use glam::DVec3;
-pub use session::section_clip::{Cut, clip_polygon, clip_segment, clip_triangle, cut_surface};
+use session::SectionFillColor;
+pub use session::section_clip::{
+    Cut, clip_polygon, clip_segment, clip_triangle, crosses_plane, cut_surface,
+};
 use session::{Camera, SectionShape};
 
 use crate::annotations::{ARROW_PT, arrow};
@@ -13,6 +16,13 @@ use crate::grid::LineVertex;
 
 /// The fill of closed cuts: #3a3a3a, whatever the theme.
 pub const CUT_FILL_COLOR: [f32; 4] = [0.227, 0.227, 0.227, 1.0];
+
+/// The fill of a cut whose faces show `material`: that color darkened (see
+/// `SectionFillColor::MATERIAL_SHADE`).
+pub fn material_fill_color(material: [f32; 3]) -> [f32; 4] {
+    let k = SectionFillColor::MATERIAL_SHADE;
+    [material[0] * k, material[1] * k, material[2] * k, 1.0]
+}
 
 /// The active plane's outline: orange #f08c00, whatever the theme.
 pub const ACTIVE_SECTION_COLOR: [f32; 4] = [0.941, 0.549, 0.0, 1.0];

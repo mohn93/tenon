@@ -147,7 +147,7 @@ fn the_native_menu_ids_of_the_new_items_are_distinct_and_stable() {
     let bar = menu_bar(&f.view(), true);
     let ids: Vec<String> = items(&bar)
         .iter()
-        .map(|i| crate::menus::item_id(&i.action))
+        .map(|i| crate::menus::item_key(i))
         .collect();
     let mut unique = ids.clone();
     unique.sort();

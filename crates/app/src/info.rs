@@ -10,9 +10,21 @@ use session::{AnnotationShape, Document, Units, format_angle, format_length, not
 /// kind, name and rotation of a single instance; a single face's front and back materials and
 /// a painted instance's material. While a group or component is open, a first line says
 /// which.
+#[cfg(test)]
 pub fn entity_info(doc: &Document) -> Vec<String> {
+    entity_info_with(doc, &|i| {
+        kernel::solid::instance_volume(doc.scene(), i).ok()
+    })
+}
+
+/// As `entity_info`, with `volume` giving a lone selected instance's solid volume (None: not
+/// a solid), so the window can keep the answer between frames.
+pub fn entity_info_with(
+    doc: &Document,
+    volume: &dyn Fn(&kernel::Instance) -> Option<f64>,
+) -> Vec<String> {
     let mut lines = editing(doc).into_iter().collect::<Vec<_>>();
-    lines.extend(selection_info(doc, &doc.units()));
+    lines.extend(selection_info(doc, &doc.units(), volume));
     lines
 }
 
@@ -29,7 +41,11 @@ fn editing(doc: &Document) -> Option<String> {
     })
 }
 
-fn selection_info(doc: &Document, units: &Units) -> Vec<String> {
+fn selection_info(
+    doc: &Document,
+    units: &Units,
+    volume: &dyn Fn(&kernel::Instance) -> Option<f64>,
+) -> Vec<String> {
     let m = doc.model();
     let (mut edges, mut faces, mut instances) = (Vec::new(), Vec::new(), Vec::new());
     let mut guides = Vec::new();
@@ -128,6 +144,18 @@ fn selection_info(doc: &Document, units: &Units) -> Vec<String> {
             }
             _ => vec!["1 group".into()],
         };
+        if let (Some(d), Some(i)) = (d, instance)
+            && let Some(volume) = volume(i)
+        {
+            lines.push(
+                match d.kind {
+                    DefinitionKind::Group => "Solid group",
+                    DefinitionKind::Component => "Solid component",
+                }
+                .into(),
+            );
+            lines.push(format!("Volume: {} m³", number(volume)));
+        }
         lines.extend(instance.map_or_else(Vec::new, |i| placement(i.transform, units)));
         if let Some(material) = instance.and_then(|i| i.material) {
             lines.push(format!("Material: {}", material_name(doc, Some(material))));
@@ -417,6 +445,8 @@ mod tests {
                 opacity: None,
                 texture: None,
                 emission: None,
+                metalness: None,
+                roughness: None,
                 existing: Default::default(),
             })
             .unwrap();
@@ -587,6 +617,37 @@ mod tests {
         );
         select(&mut d, &["g9", "g10", "e2"]);
         assert_eq!(entity_info(&d), ["1 edge, 2 guides"]);
+    }
+
+    #[test]
+    fn a_closed_group_or_component_shows_solid_and_volume() {
+        for (as_, line) in [("group", "Solid group"), ("component", "Solid component")] {
+            let mut d = Document::new(DVec2::new(800.0, 600.0));
+            let out = d
+                .execute(
+                    serde_json::from_value(serde_json::json!({
+                        "type": "add_box", "corner": [0, 0, 0], "size": [2, 3, 4], "as": as_
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+            d.execute(Command::Select {
+                ids: out.placed.clone().unwrap(),
+                mode: SelectMode::Replace,
+                all: false,
+            })
+            .unwrap();
+            let lines = entity_info(&d);
+            assert!(lines.contains(&line.to_string()), "{lines:?}");
+            assert!(lines.contains(&"Volume: 24 m³".to_string()), "{lines:?}");
+        }
+        // A plain group of loose geometry is not a solid.
+        let mut d = doc_with_square();
+        let ids = ["e2", "e4", "e6", "e7", "f8"]
+            .map(|s| s.parse().unwrap())
+            .to_vec();
+        d.execute(Command::MakeGroup { ids, name: None }).unwrap();
+        assert_eq!(entity_info(&d), ["1 group"]);
     }
 
     #[test]

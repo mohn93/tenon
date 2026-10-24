@@ -7,7 +7,7 @@ use serde_json::{Map, Value, json};
 use session::{Command, Lighting, Query};
 
 use super::Backend;
-use crate::dispatch::{EditorQuery, MAX_IMAGE_SIDE};
+use crate::dispatch::{EditorQuery, MAX_IMAGE_SIDE, MAX_SUPERSAMPLE};
 use crate::editor::EditorCommand;
 use crate::input::ToolInputParams;
 use crate::probe::{InferQuery, PickQuery, ScreenCommand, View};
@@ -62,7 +62,7 @@ fn description(tool: &str) -> &'static str {
             "Reports what a drawing tool's click at a view pixel or a model point (meters, Z up) would snap to; call describe for the schemas."
         }
         "render_view" => {
-            "Renders the model to a PNG image (960 x 600 pixels unless given) from the document camera or a camera whose eye and target are in meters with Z up, without moving the document camera; call describe for the schemas."
+            "Renders the model to a PNG image (960 x 600 pixels unless given) from the document camera, a camera whose eye and target are in meters with Z up, or a frame of going to a scene (scene, t, from), without moving the document camera or changing the document; call describe for the schemas."
         }
         "tool_input" => {
             "Drives the active drawing tool with mouse and keyboard events as a person would (model points in meters, Z up) and reports the commands it ran; call describe for the schemas."
@@ -140,13 +140,50 @@ fn input_schema(tool: &str) -> Value {
             };
             let camera = hoist(&mut defs, schema::<View>());
             let lighting = hoist(&mut defs, schema::<Lighting>());
+            let scene = hoist(&mut defs, schema::<kernel::PageId>());
             json!({
                 "type": "object",
                 "properties": {
                     "width": side(DEFAULT_WIDTH),
                     "height": side(DEFAULT_HEIGHT),
                     "camera": camera,
-                    "lighting": lighting
+                    "lighting": lighting,
+                    "style": {
+                        "type": "string",
+                        "description": "A style id (y<n>) to draw this image with instead of the document's chosen style."
+                    },
+                    "projection": {
+                        "enum": ["perspective", "parallel"],
+                        "description": "Overrides the camera's projection for this image."
+                    },
+                    "section": {
+                        "type": "object",
+                        "properties": {
+                            "planes": {"type": "boolean"},
+                            "cuts": {"type": "boolean"},
+                            "fill": {"type": "boolean"},
+                            "fill_color": {"enum": ["dark", "material"]}
+                        },
+                        "additionalProperties": false,
+                        "description": "Overrides parts of the section display for this image; parts left out follow the document's."
+                    },
+                    "shadows": {
+                        "type": "boolean",
+                        "description": "Sun shadows on or off for this image."
+                    },
+                    "supersample": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_SUPERSAMPLE,
+                        "description": "Default 1. Renders at this many times the size and averages down to width x height for smoother edges; width and height times it are at most twice the largest side."
+                    },
+                    "background": {
+                        "enum": ["style", "transparent"],
+                        "description": "style (default) or transparent: pixels with nothing drawn (no faces, edges, guides, ground grid or axes) get alpha 0."
+                    },
+                    "scene": {"description": "Render a frame of going to this scene (its camera and stored instance positions) instead of the document camera; not with camera.", "allOf": [scene.clone()]},
+                    "t": {"type": "number", "minimum": 0, "maximum": 1, "description": "With scene: how far along, 0 (the current view, or from) to 1 (the scene; default), linear."},
+                    "from": {"description": "With scene: the scene to start from (default the current view and positions).", "allOf": [scene]}
                 },
                 "additionalProperties": false,
                 "$defs": defs

@@ -37,9 +37,18 @@ pub enum Query {
     Curve {
         id: EntityId,
     },
+    /// Whether a group or component is a solid: its own geometry is closed (every edge bounds
+    /// two faces, consistently oriented) and it holds no nested groups or components.
+    /// Gives its volume in cubic meters of the open context (after the placement's scale),
+    /// or why it is not one.
+    Solid {
+        id: EntityId,
+    },
     Camera {},
     /// Where the model stands (see `set_location`).
     Location {},
+    /// How going to a scene animates in the window (see `set_scene_transition`).
+    SceneTransition {},
     /// The sun at the shadow settings' date and time, whether or not shadows are on.
     Sun {},
     Stats {},
@@ -217,8 +226,20 @@ pub struct InstanceInfo {
     /// false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
+    /// False for an instance section planes outside it do not cut (see `set_section_cut`).
+    /// Absent when true.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub section_cut: bool,
     /// The tag it is on; null when Untagged.
     pub tag: Option<TagId>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 /// Whether a guide is a line or a point.
@@ -297,6 +318,13 @@ impl From<kernel::Location> for LocationInfo {
             utc_offset: l.utc_offset,
         }
     }
+}
+
+/// How going to a scene animates (see `set_scene_transition`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SceneTransitionInfo {
+    pub on: bool,
+    pub seconds: f64,
 }
 
 /// The sun in the sky and the model (see the `sun` query).
@@ -507,6 +535,10 @@ pub struct MaterialInfo {
     pub opacity: f32,
     /// How strongly its faces glow, from 0 (not at all) to 10. Always present.
     pub emission: f32,
+    /// How metallic its surface is, from 0 (not at all) to 1. Always present.
+    pub metalness: f32,
+    /// How rough its surface is, from 0 (a mirror) to 1 (matte). Always present.
+    pub roughness: f32,
     /// The texture faces painted with it show; absent for none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub texture: Option<TextureInfo>,
@@ -539,6 +571,9 @@ pub struct SceneInfo {
     pub camera: bool,
     /// Whether it stores which tags are hidden.
     pub tags: bool,
+    /// The instances of the root whose positions it stores (empty: none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub positions: Vec<EntityId>,
     /// Whether it is the selected scene (the one last added or gone to).
     pub selected: bool,
 }
@@ -599,6 +634,15 @@ pub enum QueryResult {
     Note(NoteInfo),
     SectionPlane(SectionPlaneInfo),
     Curve(CurveInfo),
+    /// The `solid` query: `volume` is present exactly when `solid` is true; `reason` says why
+    /// not otherwise (e.g. "edge e12 bounds 1 face").
+    Solid {
+        solid: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        volume: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
     /// The view: `up` is the screen's up direction (+Z, except in a view straight down or
     /// up); `view_height` is the height the view spans at the target (in a parallel view, the
     /// whole view's height); `lighting` is `day` or `night`; `color_by_tag` is whether faces
@@ -624,6 +668,7 @@ pub enum QueryResult {
         axes: AxesInfo,
     },
     Location(LocationInfo),
+    SceneTransition(SceneTransitionInfo),
     /// The sun: `direction` the unit vector from the model towards it in the model's x, y and
     /// z, `azimuth` the degrees clockwise from true north and `elevation` the degrees above
     /// the horizon, `up` whether it is above the horizon.
@@ -682,6 +727,8 @@ pub enum QueryResult {
         name: String,
         view: Option<SceneView>,
         hidden_tags: Option<Vec<TagId>>,
+        /// The instances of the root whose positions it stores, null when it stores none.
+        positions: Option<Vec<EntityId>>,
         revision: u64,
     },
     /// `path` lists the open instances from the root; empty when the root is open.
@@ -727,6 +774,7 @@ pub enum QueryResult {
         planes: bool,
         cuts: bool,
         fill: bool,
+        fill_color: crate::document::SectionFillColor,
     },
     /// The items of a library folder.
     Library(LibraryListing),

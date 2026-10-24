@@ -18,7 +18,8 @@ mod transport;
 mod windows;
 
 pub use dispatch::{
-    BatchResult, EditorQuery, ExecuteResult, Host, call, describe, handle, no_gpu_for_printing,
+    BatchResult, EditorQuery, ExecuteResult, Host, RenderOptions, call, describe, handle,
+    no_gpu_for_printing,
 };
 pub use editor::{Dialog, EditorCommand, EditorState, MessageKind, PdfReport, PhaseName, ToolName};
 pub use headless::HeadlessHost;

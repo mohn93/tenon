@@ -133,6 +133,7 @@ fn a_model_without_planes_is_drawn_as_before() {
             planes: false,
             cuts: false,
             fill: false,
+            ..Default::default()
         },
     );
     assert_eq!(plain, off);
@@ -287,6 +288,7 @@ fn headless_renders_show_the_fill_and_the_cut_edges() {
             planes: None,
             cuts: None,
             fill: Some(false),
+            fill_color: None,
         },
     );
     let without = pixels(&mut snap, &d);
@@ -300,6 +302,7 @@ fn headless_renders_show_the_fill_and_the_cut_edges() {
             planes: None,
             cuts: Some(false),
             fill: Some(true),
+            fill_color: None,
         },
     );
     let whole = pixels(&mut snap, &d);
@@ -827,4 +830,271 @@ fn a_ghost_placement_is_not_cut_or_filled_whichever_placement_is_walked_first() 
         assert!((edges - 5.0).abs() < 1e-5, "one outline: {edges}");
         assert_eq!(planes, 1, "a ghost's plane square is left out");
     }
+}
+
+/// The cut box with every face painted `color` on its front.
+fn painted_cut_box(color: [u8; 3]) -> Document {
+    let mut d = cut_box();
+    let paint = crate::golden::add_material(&mut d, "Red", color);
+    let faces = crate::golden::all_faces(&d);
+    run(
+        &mut d,
+        Command::Paint {
+            ids: faces,
+            material: Some(paint),
+            side: session::Side::Front,
+        },
+    );
+    d
+}
+
+fn material_display() -> SectionDisplay {
+    SectionDisplay {
+        fill_color: session::SectionFillColor::Material,
+        ..SectionDisplay::default()
+    }
+}
+
+/// `color` darkened by the material fill's shade.
+fn shaded(color: [f32; 3]) -> [f32; 4] {
+    let k = session::SectionFillColor::MATERIAL_SHADE;
+    [color[0] * k, color[1] * k, color[2] * k, 1.0]
+}
+
+#[test]
+fn the_material_fill_is_the_faces_color_darkened_and_the_dark_fill_stays_the_default() {
+    let d = painted_cut_box([200, 20, 20]);
+    let dark = base(&d, SectionDisplay::default());
+    assert!(dark.cut_fill.iter().all(|v| v.color == CUT_FILL_COLOR));
+    let b = base(&d, material_display());
+    let red = b.faces[0].front;
+    assert!(red[0] > 0.5 && red[1] < 0.2, "{red:?}");
+    assert!(!b.cut_fill.is_empty());
+    for v in &b.cut_fill {
+        assert_eq!(v.color, shaded(red));
+    }
+    // Only the color changed.
+    assert!((triangle_area(&b.cut_fill) - 1.5).abs() < 1e-5);
+    assert_eq!(b.cut_edges, dark.cut_edges);
+}
+
+#[test]
+fn an_unpainted_cut_takes_the_default_face_color_and_a_painted_group_its_material() {
+    let d = cut_box();
+    let b = base(&d, material_display());
+    for v in &b.cut_fill {
+        assert_eq!(v.color, shaded(render::scene::DEFAULT_FRONT));
+    }
+
+    // A group painted as a whole, its faces unpainted: the cut shows the group's material.
+    let mut d = doc();
+    add_box(&mut d, [0.0, 0.0]);
+    let ids: Vec<EntityId> = crate::golden::all_faces(&d)
+        .into_iter()
+        .chain(d.model().edges().map(|(id, _)| EntityId::Edge(id)))
+        .collect();
+    let out = run(&mut d, Command::MakeGroup { ids, name: None });
+    let group = *out
+        .changes
+        .created
+        .iter()
+        .find(|e| matches!(e, EntityId::Instance(_)))
+        .unwrap();
+    let paint = crate::golden::add_material(&mut d, "Blue", [20, 30, 200]);
+    run(
+        &mut d,
+        Command::Paint {
+            ids: vec![group],
+            material: Some(paint),
+            side: session::Side::Front,
+        },
+    );
+    run(
+        &mut d,
+        Command::AddSectionPlane {
+            point: [1.0, 0.0, 0.0],
+            normal: [1.0, 0.0, 0.0],
+            activate: None,
+        },
+    );
+    let b = base(&d, material_display());
+    let blue = b.faces[0].front;
+    assert!(blue[2] > 0.5 && blue[0] < 0.2, "{blue:?}");
+    assert!(!b.cut_fill.is_empty());
+    for v in &b.cut_fill {
+        assert_eq!(v.color, shaded(blue));
+    }
+}
+
+#[test]
+fn the_cut_takes_the_color_most_of_its_faces_show() {
+    let mut d = cut_box();
+    let paint = crate::golden::add_material(&mut d, "Green", [10, 200, 30]);
+    // The plane x = 1 crosses the four side faces; paint one of the four.
+    let side = d
+        .model()
+        .faces()
+        .find(|(_, f)| f.normal.y.abs() > 0.5)
+        .map(|(id, _)| EntityId::Face(id))
+        .unwrap();
+    run(
+        &mut d,
+        Command::Paint {
+            ids: vec![side],
+            material: Some(paint),
+            side: session::Side::Front,
+        },
+    );
+    let b = base(&d, material_display());
+    for v in &b.cut_fill {
+        assert_eq!(
+            v.color,
+            shaded(render::scene::DEFAULT_FRONT),
+            "most are unpainted"
+        );
+    }
+}
+
+#[test]
+fn headless_renders_fill_the_cut_in_the_material_color() {
+    let Some(mut snap) = Snapshotter::new_headless() else {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    };
+    let mut d = painted_cut_box([200, 20, 20]);
+    look(&mut d, [-6.0, 0.75, 0.5], [1.0, 0.75, 0.5]);
+    let center = |snap: &mut Snapshotter, d: &Document| {
+        snap.set_section_display(d.section_display);
+        let p = snap
+            .capture(
+                d.scene(),
+                d.context(),
+                d.selection(),
+                &d.camera,
+                d.lighting,
+                WIDTH,
+                HEIGHT,
+            )
+            .expect("capture");
+        let k = (((HEIGHT / 2) * WIDTH + WIDTH / 2) * 4) as usize;
+        [p[k], p[k + 1], p[k + 2]]
+    };
+    let dark = center(&mut snap, &d);
+    assert!(dark.iter().all(|v| (50..=70).contains(v)), "{dark:?}");
+    run(
+        &mut d,
+        Command::SetSectionDisplay {
+            planes: None,
+            cuts: None,
+            fill: None,
+            fill_color: Some(session::SectionFillColor::Material),
+        },
+    );
+    let pixel = center(&mut snap, &d);
+    // Red (200, 20, 20) darkened by 20%: (160, 16, 16), give or take the color pipeline.
+    assert!(pixel[0] > 130 && pixel[0] < 190, "{pixel:?}");
+    assert!(pixel[1] < 40 && pixel[2] < 40, "{pixel:?}");
+    assert!(pixel[0] < 200, "darker than the paint: {pixel:?}");
+}
+
+/// Two groups, one at y = 0 and one at y = 5, each 2 x 1.5 x 1 m, and a root plane through
+/// x = 1. Returns the document and the two instances (near, far).
+fn two_groups() -> (Document, EntityId, EntityId) {
+    let mut d = doc();
+    let mut groups = Vec::new();
+    for y in [0.0, 5.0] {
+        add_box(&mut d, [0.0, y]);
+        let ids: Vec<EntityId> = crate::golden::all_faces(&d)
+            .into_iter()
+            .chain(d.model().edges().map(|(id, _)| EntityId::Edge(id)))
+            .collect();
+        let out = run(&mut d, Command::MakeGroup { ids, name: None });
+        groups.push(
+            *out.changes
+                .created
+                .iter()
+                .find(|e| matches!(e, EntityId::Instance(_)))
+                .unwrap(),
+        );
+    }
+    run(
+        &mut d,
+        Command::AddSectionPlane {
+            point: [1.0, 0.0, 0.0],
+            normal: [1.0, 0.0, 0.0],
+            activate: None,
+        },
+    );
+    (d, groups[0], groups[1])
+}
+
+/// The lowest x of the faces whose y is below / above 3.
+fn min_x(b: &SceneBase) -> (f32, f32) {
+    let m = |near: bool| {
+        b.faces
+            .iter()
+            .filter(|v| (v.pos[1] < 3.0) == near)
+            .map(|v| v.pos[0])
+            .fold(f32::MAX, f32::min)
+    };
+    (m(true), m(false))
+}
+
+#[test]
+fn an_instance_left_whole_is_not_cut_while_its_sibling_is() {
+    let (mut d, _near, far) = two_groups();
+    let (a, b) = min_x(&base(&d, SectionDisplay::default()));
+    assert!(a >= 1.0 - 1e-5 && b >= 1.0 - 1e-5, "both cut: {a} {b}");
+    run(
+        &mut d,
+        Command::SetSectionCut {
+            ids: vec![far],
+            cut: false,
+        },
+    );
+    let scene = base(&d, SectionDisplay::default());
+    let (a, b) = min_x(&scene);
+    assert!(a >= 1.0 - 1e-5, "the sibling is still cut: {a}");
+    assert!(b.abs() < 1e-5, "the group is whole: {b}");
+    // Its edges are whole too, and only the cut sibling is filled and outlined.
+    assert!(scene.edges.iter().any(|e| e.pos[1] > 3.0 && e.pos[0] < 0.5));
+    assert!((triangle_area(&scene.cut_fill) - 1.5).abs() < 1e-5);
+    assert!(scene.cut_fill.iter().all(|v| v.pos[1] < 3.0));
+    // Undo puts it back under the plane.
+    run(
+        &mut d,
+        Command::Undo {
+            count: None,
+            expect: None,
+        },
+    );
+    let (_, b) = min_x(&base(&d, SectionDisplay::default()));
+    assert!(b >= 1.0 - 1e-5, "{b}");
+}
+
+#[test]
+fn a_plane_inside_an_instance_left_whole_still_cuts_it() {
+    let (mut d, _near, far) = two_groups();
+    run(
+        &mut d,
+        Command::SetSectionCut {
+            ids: vec![far],
+            cut: false,
+        },
+    );
+    run(&mut d, Command::OpenInstance { id: far });
+    run(
+        &mut d,
+        Command::AddSectionPlane {
+            point: [0.5, 0.0, 0.0],
+            normal: [1.0, 0.0, 0.0],
+            activate: None,
+        },
+    );
+    let (a, b) = min_x(&base(&d, SectionDisplay::default()));
+    assert!(a >= 1.0 - 1e-5, "{a}");
+    assert!(
+        (b - 0.5).abs() < 1e-5,
+        "the inner plane cuts it at 0.5, the outer one does not: {b}"
+    );
 }

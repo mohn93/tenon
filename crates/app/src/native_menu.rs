@@ -11,7 +11,7 @@ use muda::{AboutMetadata, CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedM
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSEventType};
 
-use crate::menus::{self, APP_MENU, Entry, OPEN_RECENT, item_id, native_enabled};
+use crate::menus::{self, APP_MENU, Entry, OPEN_RECENT, item_key, native_enabled};
 use crate::shortcuts::{Chord, Key};
 use crate::ui::UiAction;
 
@@ -27,7 +27,7 @@ pub struct NativeMenu {
 /// One item and what was last applied to it.
 struct Native {
     widget: Widget,
-    /// What the item does now (Night Lighting's action flips with the lighting).
+    /// What the item does now (the lighting items' actions flip with the lighting).
     action: UiAction,
     text: String,
     enabled: bool,
@@ -90,7 +90,7 @@ impl NativeMenu {
     pub fn sync(&mut self, bar: &[menus::Menu], text_focused: bool, sheet_open: bool) {
         self.sync_recent(bar);
         for item in menus::items(bar) {
-            let Some(native) = self.items.get_mut(&item_id(&item.action)) else {
+            let Some(native) = self.items.get_mut(&item_key(item)) else {
                 continue;
             };
             native.action = item.action.clone();
@@ -184,7 +184,7 @@ fn add_entries(
     for entry in entries {
         match entry {
             Entry::Item(item) => {
-                let id = item_id(&item.action);
+                let id = item_key(item);
                 let key = item
                     .bound
                     .and_then(crate::shortcuts::chord)

@@ -37,6 +37,17 @@ pub enum PrimitiveAs {
 /// commands never refer to screen positions or cursor state. Points, offsets and entity ids are
 /// those of the open context (see `OpenInstance`): the root, or the definition of the instance
 /// being edited, in its own coordinates.
+/// Which instances a scene stores the positions of: the ids of instances of the root (their
+/// current transforms are stored), `true` (add: every instance of the root; update and change:
+/// the same set again from the current transforms, every instance of the root when the scene
+/// stores none) or `false` (stop storing).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum ScenePositions {
+    Flag(bool),
+    Ids(Vec<EntityId>),
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
@@ -226,6 +237,20 @@ pub enum Command {
         #[serde(default)]
         text: Option<String>,
     },
+    /// Label `target` (a face, edge, vertex or instance of the open context), as one undo
+    /// step: a leader note with `text` anchored on it. The anchor is a vertex's position (the
+    /// note follows it), an edge's midpoint, the point of a face's interior nearest its
+    /// centroid, or for an instance its bounding box center moved onto its surface toward the
+    /// camera when that is hit. Without `position` the note goes outward from the open
+    /// context's box center through the anchor, 15% of the box diagonal away and raised by
+    /// 5% of it. Text rules as `add_note`.
+    AddLabel {
+        target: EntityId,
+        text: String,
+        #[serde(default)]
+        #[schemars(with = "Option<ModelPoint>")]
+        position: Option<[f64; 3]>,
+    },
     /// Add a note fixed to the view, as one undo step: `text` at `at`, fractions (0 to 1) of
     /// the view's width and height from its top left corner. Only the root holds screen notes:
     /// refused while an instance is open.
@@ -285,8 +310,11 @@ pub enum Command {
     DeactivateSection {},
     /// Set how section planes are shown; absent fields stay as they are: `planes` draws the
     /// plane entities, `cuts` applies the active planes' cuts, `fill` fills closed cuts. All
-    /// default to true. A view setting like `set_lighting`: saved with the model, but not an
-    /// undo step and not a change to the revision.
+    /// default to true; `fill_color` is `dark` (default, #3a3a3a) or `material` (the color of
+    /// the material most of the cut faces' area shows on their front, else the nearest painted
+    /// instance's material, else the default face color, darkened by 20%). A view setting
+    /// like `set_lighting`: saved with the model, but not an undo step and not a change to the
+    /// revision.
     SetSectionDisplay {
         #[serde(default)]
         planes: Option<bool>,
@@ -294,7 +322,16 @@ pub enum Command {
         cuts: Option<bool>,
         #[serde(default)]
         fill: Option<bool>,
+        #[serde(default)]
+        fill_color: Option<crate::document::SectionFillColor>,
     },
+    /// Set whether section planes of the contexts outside each instance in `ids` cut it
+    /// (default true for every instance), as one undo step. An instance with `cut` false
+    /// stays whole under planes outside it; planes inside its own definition still cut its
+    /// contents. Entities that are not instances are `invalid_input`; instances already as
+    /// asked are skipped (no change, no undo step when none differs). The outcome's `changed`
+    /// lists the instances that changed.
+    SetSectionCut { ids: Vec<EntityId>, cut: bool },
     /// Set the model's display units, which lengths and angles are written and typed in and
     /// the tools snap to, as one undo step; absent fields stay as they are. `precision` is
     /// the decimals kept (0 to 6), or for `feet_inches` the finest fraction of an inch,
@@ -328,6 +365,17 @@ pub enum Command {
     Move {
         ids: Vec<EntityId>,
         offset: [f64; 3],
+    },
+    /// Spread instances of the open context apart as one undo step: each moves by
+    /// `(c_i - center) * factor`, `c_i` its bounding box center in the context's coordinates.
+    /// `center` defaults to the center of all their boxes. `factor` is finite, -0.99 to 100
+    /// (0 changes nothing; negative pulls them together). Other ids are `invalid_input`.
+    ExplodeView {
+        ids: Vec<EntityId>,
+        factor: f64,
+        #[serde(default)]
+        #[schemars(with = "Option<ModelPoint>")]
+        center: Option<[f64; 3]>,
     },
     /// Copy edges, faces, instances, guides, dimensions, notes and section planes (copies are
     /// inactive) `count` times (default 1), copy k
@@ -678,10 +726,15 @@ pub enum Command {
     /// painted with it are see-through. `texture` reads a PNG or JPEG image for its faces
     /// (`path` required); `color` may then be left out and is the image's average color.
     /// `emission` (default 0) from 0 to 10 makes its faces glow and light their surroundings.
+    /// `metalness` (default 0) and `roughness` (default 1), each from 0 to 1, set its finish:
+    /// a rough non-metal is matte, a smooth one has highlights and reflections, a metal tints
+    /// them with its color.
     /// The new id is in the outcome's `changes.materials`. `existing` says what happens when
     /// `name` is already taken: `fail` (default) is an error, `reuse` returns the existing
-    /// material unchanged (no undo step), `update` gives it the color, opacity, texture and
-    /// emission passed, as `change_material` would (one undo step), and returns it.
+    /// material unchanged (no undo step), `update` gives it the color, opacity, texture,
+    /// emission, metalness and roughness passed, as `change_material` would (one undo step),
+    /// and returns it. `reuse` checks only the ranges of the opacity, emission, metalness and
+    /// roughness given.
     /// `existing` other than `fail` needs a `name`.
     AddMaterial {
         #[serde(default)]
@@ -695,10 +748,15 @@ pub enum Command {
         #[serde(default)]
         emission: Option<f32>,
         #[serde(default)]
+        metalness: Option<f32>,
+        #[serde(default)]
+        roughness: Option<f32>,
+        #[serde(default)]
         existing: ExistingMaterial,
     },
-    /// Rename, recolor, change the opacity (0 to 1), the texture and/or the emission (0 to 10)
-    /// of a material; absent fields stay as they are. `texture`: null removes it; an object
+    /// Rename, recolor, change the opacity (0 to 1), the texture, the emission (0 to 10), the
+    /// metalness and/or the roughness (each 0 to 1) of a material; absent fields stay as they
+    /// are. `texture`: null removes it; an object
     /// sets it, reading `path` (the color becomes the image's average unless `color` is
     /// given), or without `path` keeps the image and changes its size.
     ChangeMaterial {
@@ -718,6 +776,10 @@ pub enum Command {
         texture: Option<Option<TextureSource>>,
         #[serde(default)]
         emission: Option<f32>,
+        #[serde(default)]
+        metalness: Option<f32>,
+        #[serde(default)]
+        roughness: Option<f32>,
     },
     /// Remove a material. Faces and instances painted with it, anywhere in the model, go back
     /// to the default material.
@@ -780,6 +842,10 @@ pub enum Command {
         camera: bool,
         #[serde(default = "yes")]
         tags: bool,
+        /// Also store the positions (transforms) of instances of the root (see
+        /// `ScenePositions`); absent or false: not stored.
+        #[serde(default)]
+        positions: Option<ScenePositions>,
     },
     /// Store the current view (`camera`) and hidden tags (`tags`) in a scene again, as one undo
     /// step; false stops storing that part. Absent parts are stored again if the scene stores
@@ -790,9 +856,12 @@ pub enum Command {
         camera: Option<bool>,
         #[serde(default)]
         tags: Option<bool>,
+        /// The instance positions (see `ScenePositions`); absent: stored again if stored.
+        #[serde(default)]
+        positions: Option<ScenePositions>,
     },
     /// Rename a scene and choose what it stores, as one undo step (none when nothing changes).
-    /// At least one of `name`, `camera` and `tags` is needed. `camera` or `tags` false stops
+    /// At least one of `name`, `camera`, `tags` and `positions` is needed. `camera` or `tags` false stops
     /// storing that part; true stores it from the current view or tag visibility only if the
     /// scene does not store it yet. A part that stays stored keeps exactly what was stored.
     ChangeScene {
@@ -803,6 +872,9 @@ pub enum Command {
         camera: Option<bool>,
         #[serde(default)]
         tags: Option<bool>,
+        /// The instance positions (see `ScenePositions`); absent: kept as stored.
+        #[serde(default)]
+        positions: Option<ScenePositions>,
     },
     /// Move a scene to `index` in the order (0: first), as one undo step. An index past the
     /// last scene is invalid input.
@@ -811,7 +883,9 @@ pub enum Command {
     DeleteScene { scene: PageId },
     /// Go to a scene: set the camera, projection, lighting and color by tag it stores (a view
     /// change like `set_camera`, not an undo step), and show and hide tags as it stores (one
-    /// undo step, only when that changes a tag). It becomes the selected scene.
+    /// undo step, only when that changes a tag). A scene that stores positions also sets those
+    /// instances' transforms in that one undo step, labelled "Go to scene <name>". It becomes
+    /// the selected scene.
     GoToScene { scene: PageId },
     /// Add a style after the last one, as one undo step: a copy of the style `from`, or the
     /// default settings (today's look: near-black edges on a light gray background, no
@@ -909,6 +983,81 @@ pub enum Command {
         #[serde(default)]
         with: IntersectScope,
     },
+    /// Solid Tools Union, as one undo step: the groups and components `ids` (2 or more,
+    /// instances of the open context, each a solid: see the `solid` query) become one new
+    /// group holding everything inside any of them, placed with the first one's transform,
+    /// material, tag and hidden flag and its definition's name; the operands are erased.
+    /// Faces keep their materials; seams between coplanar faces the operation made are
+    /// removed. `placed` holds the new group and `definitions` its new definition. A result that would not be closed is
+    /// `invalid_input` ("the result would not be a solid") and changes nothing.
+    SolidUnion { ids: Vec<EntityId> },
+    /// Solid Tools Subtract, as one undo step: `target` minus each of `tools` (1 or more) in
+    /// order, under the rules of `solid_union`; target and tools are erased. The tools' faces
+    /// that bound the cut are turned over, with their front material on the cut. When
+    /// nothing is left, no group is made: the outcome has `empty: true` and `placed` is
+    /// empty.
+    SolidSubtract {
+        target: EntityId,
+        tools: Vec<EntityId>,
+    },
+    /// Solid Tools Intersect, as one undo step: what lies inside every one of `ids` (2 or
+    /// more), under the rules of `solid_union`. When the solids share no volume, no group is
+    /// made and the operands are still erased: the outcome has `empty: true`.
+    SolidIntersect { ids: Vec<EntityId> },
+    /// Solid Tools Trim, as one undo step: as `solid_subtract`, but the `tools` stay where
+    /// they are; only `target` is erased and replaced by the new group. When nothing is left
+    /// of the target, no group is made and the outcome has `empty: true`.
+    SolidTrim {
+        target: EntityId,
+        tools: Vec<EntityId>,
+    },
+    /// Solid Tools Split, as one undo step: `a` and `b` (solids) become up to three groups,
+    /// in this order: `a` minus `b`, what both share, `b` minus `a`; a piece with nothing in
+    /// it is not made. The groups take the transform, material, tag and hidden flag of `a`;
+    /// `a` and `b` are erased. `placed` holds the groups.
+    SolidSplit { a: EntityId, b: EntityId },
+    /// Solid Tools Outer Shell, as one undo step: the union of `ids` (1 or more) with its
+    /// internal faces removed: shells inside another shell (voids, and solids floating in
+    /// them) are dropped. A single solid with a void inside becomes the solid without it.
+    /// Placed and erased as `solid_union`.
+    OuterShell { ids: Vec<EntityId> },
+    /// Chamfer straight edges of a solid, as one undo step: each edge in `edges` becomes a
+    /// flat face set back `distance` meters (more than 0.000001, measured in the edited mesh's
+    /// own coordinates) on both faces beside it. A convex edge loses material, a concave one
+    /// gains it. Without `instance`, `edges` are edges of the open context, whose own faces
+    /// (nested groups and components aside) must be a solid: open the group first. With
+    /// `instance` (a group or component of the open context, a solid), `edges` are edges of
+    /// its definition, which is edited (a component's other instances change too). Each edge
+    /// must be straight (not part of a curve), not soft, lie between two flat faces at least 1
+    /// degree apart, and the setback line must stay inside both faces along the whole edge;
+    /// two chosen edges facing each other across a face must not have overlapping setbacks.
+    /// Chamfers of convex edges meeting at an outside corner overlap and close it; at any
+    /// other end (no other chosen edge, next to a concave edge, or an inside corner) the cut
+    /// stops in the plane of the face there. A concave edge whose two faces are both cut away
+    /// at an end starts `distance` back from that end. Faces and edges the cut does not touch
+    /// keep their ids.
+    ChamferEdges {
+        #[serde(default)]
+        instance: Option<EntityId>,
+        edges: Vec<EntityId>,
+        distance: f64,
+    },
+    /// Round straight edges of a solid, as one undo step: each edge in `edges` becomes an arc
+    /// of `radius` meters (more than 0.000001, in the edited mesh's own coordinates) tangent to
+    /// both faces beside it, made of `segments` faces per quarter turn (default 8, 1 to 90; in
+    /// proportion for other angles, at least 1) whose edges, and the edges where the round
+    /// meets the flat faces, are soft. The round touches each face `radius / tan(angle / 2)`
+    /// from the edge, `angle` the angle between the faces inside the solid (for a concave
+    /// edge, outside it). Everything else is as `chamfer_edges`, with that setback in place of
+    /// the distance.
+    FilletEdges {
+        #[serde(default)]
+        instance: Option<EntityId>,
+        edges: Vec<EntityId>,
+        radius: f64,
+        #[serde(default)]
+        segments: Option<u32>,
+    },
     /// Move, turn and scale the texture on faces of the open context, as one undo step: on
     /// top of the projection, `offset` [u, v] in meters, `rotation_deg` counter-clockwise
     /// seen from the face's front (or `rotate_by`: that many degrees more than each face's
@@ -977,7 +1126,8 @@ pub enum Command {
     /// are always made, materials and tags are matched by name (missing ones are added),
     /// the minimum corner of its bounding box lands at `at`, or at the open context's origin
     /// without it, and what it made becomes the selection. A material: added to the model;
-    /// one with the same name and the same color, opacity, emission and texture is reused,
+    /// one with the same name and the same color, opacity, emission, metalness, roughness and
+    /// texture is reused,
     /// otherwise the new one is named "<name> 2", "<name> 3"... (the lowest free). The
     /// outcome's `material` is the material's id.
     InsertLibraryItem {
@@ -1171,7 +1321,8 @@ pub enum Command {
         look_at: Option<[f64; 3]>,
     },
     /// Light the view by `day` (a headlight and ambient light, glowing faces adding theirs) or
-    /// by `night` (both dimmed, a dark background: glowing faces light the scene). A view
+    /// by `night` (both dimmed, a dark background: glowing faces light the scene), or by
+    /// `studio` (no headlight: key, fill and rim lights that follow the camera). A view
     /// setting like the camera's: saved with the model, but not an undo step and not a change
     /// to the revision.
     SetLighting { mode: Lighting },
@@ -1225,6 +1376,16 @@ pub enum Command {
         north_angle: Option<f64>,
         #[serde(default)]
         utc_offset: Option<f64>,
+    },
+    /// Set how the window moves between scenes, as one undo step (nothing to change makes no
+    /// step): `on` (default true) animates going to a scene and `seconds` (0 to 10, default 1)
+    /// is how long. Absent fields stay as they are; at least one is needed. A model setting,
+    /// saved with the file; going to a scene over the API (`go_to_scene`) is never animated.
+    SetSceneTransition {
+        #[serde(default)]
+        on: Option<bool>,
+        #[serde(default)]
+        seconds: Option<f64>,
     },
 }
 
@@ -1306,6 +1467,22 @@ pub struct StylePatch {
     )]
     #[schemars(with = "Option<Fog>")]
     pub fog: Option<Option<Fog>>,
+    #[serde(default)]
+    pub ambient_occlusion: Option<AmbientOcclusionPatch>,
+}
+
+/// The parts of a style's ambient occlusion settings `change_style` sets.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AmbientOcclusionPatch {
+    #[serde(default)]
+    pub on: Option<bool>,
+    /// Meters, 0.001 to 100.
+    #[serde(default)]
+    pub radius: Option<f32>,
+    /// 0 to 2.
+    #[serde(default)]
+    pub strength: Option<f32>,
 }
 
 /// The parts of a style's edge settings `change_style` sets.
@@ -1504,7 +1681,7 @@ pub struct Outcome {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purged: Option<usize>,
     /// The definitions a `make_unique` made, in order (empty when it did nothing), or the one a
-    /// `make_group`, `make_component` or `add_<primitive>` (as group or component) made; absent
+    /// `make_group`, `make_component`, `add_<primitive>` (as group or component) or a Solid Tools command (the new groups' definitions, in `placed` order) made; absent
     /// for other commands. Batch commands can refer to them as `$N:dI`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definitions: Option<Vec<DefinitionId>>,
@@ -1522,6 +1699,10 @@ pub struct Outcome {
     /// commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<MaterialId>,
+    /// True when a `solid_subtract`, `solid_intersect` or `solid_trim` left nothing (no group was made; the
+    /// operands were still erased); absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub empty: Option<bool>,
     /// The display units, after a command that changed them (`set_units`, or an undo or redo
     /// of such a step); absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]

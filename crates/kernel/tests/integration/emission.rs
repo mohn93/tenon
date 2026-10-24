@@ -12,6 +12,8 @@ fn lamp(emission: f32) -> Material {
         opacity: 1.0,
         texture: None,
         emission,
+        metalness: 0.0,
+        roughness: 1.0,
     }
 }
 

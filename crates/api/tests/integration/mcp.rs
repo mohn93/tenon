@@ -438,6 +438,48 @@ fn render_view_returns_an_image_block() {
 }
 
 #[test]
+fn render_view_takes_the_render_options() {
+    let out = run(&[init(1, "2025-11-25"), req(2, "tools/list", json!({}))]);
+    let tools = out[1]["result"]["tools"].as_array().unwrap();
+    let schema = &tools.iter().find(|t| t["name"] == "render_view").unwrap()["inputSchema"];
+    for field in [
+        "lighting",
+        "style",
+        "projection",
+        "section",
+        "shadows",
+        "supersample",
+        "background",
+    ] {
+        assert!(schema["properties"][field].is_object(), "{field}");
+    }
+    let out = session(&[
+        tool(1, "transact", json!({"commands": square()})),
+        tool(
+            2,
+            "render_view",
+            json!({"width": 32, "height": 24, "projection": "parallel", "shadows": true,
+                   "supersample": 2, "background": "transparent", "lighting": "studio",
+                   "section": {"cuts": false, "fill_color": "material"}}),
+        ),
+        tool(3, "render_view", json!({"supersample": 9})),
+    ]);
+    let r = &out[1]["result"];
+    if r["isError"] == true {
+        assert_eq!(r["structuredContent"]["code"], codes::RENDER_UNAVAILABLE);
+        eprintln!("no GPU adapter, skipping");
+        return;
+    }
+    assert_eq!(text_json(r), json!({"width": 32, "height": 24}));
+    let r = &out[2]["result"];
+    assert_eq!(r["isError"], true);
+    assert_eq!(
+        r["structuredContent"]["data"]["kind"], "invalid_input",
+        "{r}"
+    );
+}
+
+#[test]
 fn render_view_checks_its_sides() {
     let out = session(&[tool(1, "render_view", json!({"width": 0}))]);
     assert_eq!(out[0]["result"]["isError"], true);

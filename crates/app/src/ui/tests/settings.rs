@@ -10,6 +10,7 @@ pub(super) fn settings_fixture() -> Fixture {
             ui_scale: UiScale::P100,
             trackpad: TrackpadScroll::Orbit,
             autosave_minutes: 5,
+            transition: kernel::SceneTransition::DEFAULT,
             units: session::Units::default(),
         }),
         ..Default::default()
@@ -82,6 +83,7 @@ fn the_input_tab_sets_the_trackpad() {
             ui_scale: UiScale::P100,
             trackpad: TrackpadScroll::Zoom,
             autosave_minutes: 5,
+            transition: kernel::SceneTransition::DEFAULT,
             units: session::Units::default(),
         }),
         ..Default::default()
@@ -124,6 +126,7 @@ fn the_model_tab_sets_the_models_units() {
     // Feet and inches name their precision as a fraction of an inch.
     let mut h = harness(Fixture {
         settings: Some(SettingsView {
+            transition: kernel::SceneTransition::DEFAULT,
             units: Units {
                 length: LengthUnit::FeetInches,
                 precision: 3,
@@ -152,6 +155,7 @@ fn the_model_tab_offers_formats_units_and_snapping() {
     let with = |units: Units| {
         let mut h = harness(Fixture {
             settings: Some(SettingsView {
+                transition: kernel::SceneTransition::DEFAULT,
                 units,
                 ..settings_fixture().settings.unwrap()
             }),
@@ -224,6 +228,7 @@ fn the_snapping_values_are_typed_in_the_model_unit_and_degrees() {
     use session::{LengthUnit, Units};
     let mut h = harness(Fixture {
         settings: Some(SettingsView {
+            transition: kernel::SceneTransition::DEFAULT,
             units: Units {
                 length: LengthUnit::FeetInches,
                 length_snap: 0.0254,
@@ -267,6 +272,7 @@ fn the_snapping_boxes_show_full_precision_and_escape_discards() {
     };
     let mut h = harness(Fixture {
         settings: Some(SettingsView {
+            transition: kernel::SceneTransition::DEFAULT,
             units,
             ..settings_fixture().settings.unwrap()
         }),
@@ -296,6 +302,46 @@ fn model_tab(h: &mut H) {
         .find(|n| (n.rect().center().y - row).abs() < 1.0)
         .expect("the Model tab")
         .click();
+    h.run_ok();
+    assert_eq!(h.state_mut().take(), []);
+}
+
+#[test]
+fn the_model_tab_sets_the_scene_transition() {
+    use kernel::SceneTransition;
+    let mut h = harness(settings_fixture());
+    model_tab(&mut h);
+    assert_eq!(is_on(&h, "Animate scene changes"), Some(true));
+    assert_eq!(
+        click(&mut h, "Animate scene changes"),
+        [UiAction::SetSceneTransition(SceneTransition {
+            on: false,
+            seconds: 1.0
+        })]
+    );
+    // Typed seconds apply when the box is left; a value out of range changes nothing.
+    h.get_by_label("Transition seconds").click();
+    h.run_ok();
+    h.key_combination_modifiers(egui::Modifiers::COMMAND, &[egui::Key::A]);
+    h.run_ok();
+    h.event(egui::Event::Text("2.5".into()));
+    h.run_ok();
+    h.key_press(egui::Key::Enter);
+    h.run_ok();
+    assert_eq!(
+        h.state_mut().take(),
+        [UiAction::SetSceneTransition(SceneTransition {
+            on: true,
+            seconds: 2.5
+        })]
+    );
+    h.get_by_label("Transition seconds").click();
+    h.run_ok();
+    h.key_combination_modifiers(egui::Modifiers::COMMAND, &[egui::Key::A]);
+    h.run_ok();
+    h.event(egui::Event::Text("11".into()));
+    h.run_ok();
+    h.key_press(egui::Key::Enter);
     h.run_ok();
     assert_eq!(h.state_mut().take(), []);
 }

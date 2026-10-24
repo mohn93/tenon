@@ -17,7 +17,7 @@ use kernel::{
 };
 use serde_json::Value;
 
-use crate::command::{AnchorInput, Command, CommandError, ErrorKind, Outcome};
+use crate::command::{AnchorInput, Command, CommandError, ErrorKind, Outcome, ScenePositions};
 use crate::library::LibraryRef;
 
 /// What a batch needs to know about the open context to resolve references.
@@ -316,7 +316,7 @@ impl From<Command> for BatchCommand {
 }
 
 /// The top-level fields where references are recognised; `path` only in `open_path`,
-/// `follow_me` and `copy_along_path`, and the anchors, edges and notes of the annotation commands only there.
+/// `follow_me` and `copy_along_path`, `target` and `tools` only in `solid_subtract` and `solid_trim`, `a` and `b` also in `solid_split`, `instance` and `edges` only in `chamfer_edges` and `fillet_edges`, and the anchors, edges and notes of the annotation commands only there.
 fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
     matches!(key, "ids" | "face" | "id" | "material")
         || matches!(
@@ -324,12 +324,19 @@ fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
             ("item", Some("save_to_library"))
                 | ("definition", Some("rename_definition" | "place_instance"))
                 | ("path", Some("open_path" | "follow_me" | "copy_along_path"))
-                | ("a" | "b", Some("add_dimension"))
+                | ("target" | "tools", Some("solid_subtract" | "solid_trim"))
+                | ("instance" | "edges", Some("chamfer_edges" | "fillet_edges"))
+                | ("a" | "b", Some("add_dimension" | "solid_split"))
                 | ("edge", Some("add_edge_dimension" | "add_radial_dimension"))
                 | ("anchor", Some("add_note"))
+                | ("target", Some("add_label"))
                 | ("note", Some("change_note"))
                 | ("style", Some("change_style" | "delete_style" | "set_style"))
                 | ("from", Some("add_style"))
+                | (
+                    "positions",
+                    Some("add_scene" | "update_scene" | "change_scene")
+                )
                 | (
                     "plane",
                     Some("flip_section_plane" | "activate_section_plane")
@@ -455,7 +462,8 @@ impl BatchCommand {
             let result = match slot {
                 Slot::List(ids) => self.resolve_list(ids, done, context),
                 // The elements of a path are instances of nested contexts, not of the open one:
-                // `open_path` checks them.
+                // `open_path` checks them (as `chamfer_edges` and `fillet_edges` check a definition's
+                // edges).
                 Slot::Path(ids) => self.resolve_list(ids, done, &AnyContext),
                 Slot::One(id) => self.resolve_one(id, done, context),
                 Slot::Material(m) => self.resolve_material(m, done),
@@ -654,7 +662,8 @@ fn is_stand_in_ref(r: &LibraryRef) -> bool {
 /// An id field of a command.
 enum Slot<'a> {
     List(&'a mut Vec<EntityId>),
-    /// The instance path of `open_path`.
+    /// Ids outside the open context, which the command checks: the instance path of
+    /// `open_path`, the definition edges of `chamfer_edges` and `fillet_edges` with `instance`.
     Path(&'a mut Vec<EntityId>),
     One(&'a mut EntityId),
     Material(&'a mut MaterialId),
@@ -686,12 +695,17 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::MakeGroup { ids, .. }
         | Command::MakeComponent { ids, .. }
         | Command::Explode { ids }
+        | Command::ExplodeView { ids, .. }
         | Command::Hide { ids }
+        | Command::SetSectionCut { ids, .. }
         | Command::Unhide { ids }
         | Command::ReverseFaces { ids }
         | Command::SoftenEdges { ids, .. }
         | Command::SoftenByAngle { ids, .. }
         | Command::IntersectFaces { ids, .. }
+        | Command::SolidUnion { ids }
+        | Command::SolidIntersect { ids }
+        | Command::OuterShell { ids }
         | Command::PositionTexture { ids, .. }
         | Command::SetTag { ids, .. }
         | Command::Select { ids, .. } => f(Slot::List(ids)),
@@ -701,6 +715,13 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
             }
         }
         Command::OpenPath { path } => f(Slot::Path(path)),
+        Command::AddScene { positions, .. }
+        | Command::UpdateScene { positions, .. }
+        | Command::ChangeScene { positions, .. } => {
+            if let Some(ScenePositions::Ids(ids)) = positions {
+                f(Slot::List(ids));
+            }
+        }
         Command::SaveToLibrary { item, .. } => {
             if let Some(item) = item {
                 f(Slot::Item(item));
@@ -722,10 +743,33 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
             f(Slot::One(edge))
         }
         Command::ChangeNote { note, .. } => f(Slot::One(note)),
+        Command::AddLabel { target, .. } => f(Slot::One(target)),
         Command::FlipSectionPlane { plane } | Command::ActivateSectionPlane { plane } => {
             f(Slot::One(plane))
         }
         Command::Revolve { face, .. } => f(Slot::One(face)),
+        Command::SolidSubtract { target, tools } | Command::SolidTrim { target, tools } => {
+            f(Slot::One(target));
+            f(Slot::List(tools));
+        }
+        Command::SolidSplit { a, b } => {
+            f(Slot::One(a));
+            f(Slot::One(b));
+        }
+        Command::ChamferEdges {
+            instance, edges, ..
+        }
+        | Command::FilletEdges {
+            instance, edges, ..
+        } => match instance {
+            Some(instance) => {
+                f(Slot::One(instance));
+                // Edges of the instance's definition, not of the open context: the command
+                // checks them.
+                f(Slot::Path(edges));
+            }
+            None => f(Slot::List(edges)),
+        },
         Command::CopyAlongPath { ids, path, .. } => {
             f(Slot::List(ids));
             f(Slot::List(path));
@@ -794,9 +838,6 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::AddTag { .. }
         | Command::ChangeTag { .. }
         | Command::DeleteTag { .. }
-        | Command::AddScene { .. }
-        | Command::UpdateScene { .. }
-        | Command::ChangeScene { .. }
         | Command::MoveScene { .. }
         | Command::DeleteScene { .. }
         | Command::GoToScene { .. }
@@ -823,7 +864,8 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::SetXRay { .. }
         | Command::SetHiddenGeometry { .. }
         | Command::SetShadows { .. }
-        | Command::SetLocation { .. } => {}
+        | Command::SetLocation { .. }
+        | Command::SetSceneTransition { .. } => {}
     }
 }
 

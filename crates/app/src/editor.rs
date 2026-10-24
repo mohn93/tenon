@@ -48,6 +48,7 @@ pub use print::{PaperChoice, PrintJob, PrintOptions, PrintPurpose, PrintQueue};
 mod scenes;
 mod sections;
 mod soften;
+mod solids;
 mod styles;
 mod tags;
 mod texture_position;
@@ -56,6 +57,7 @@ pub use viewer::PartCard;
 mod visibility;
 
 use soften::SoftenWindow;
+pub use solids::{SolidOp, SolidTools};
 pub use tags::SelectionTag;
 
 /// How the window imports OBJ and STL files: the `import` command's `scale`, `up`, `as` and
@@ -210,6 +212,8 @@ impl Message {
 
 pub struct Editor {
     doc: Document,
+    /// The scene transition being drawn, if any (see `scenes::Transition`).
+    transition: Option<scenes::Transition>,
     /// For each style the Styles tab added: the style chosen before, which undoing the add
     /// goes back to (the choice is a view setting and is not itself undone).
     style_before_add: std::collections::BTreeMap<kernel::StyleId, Option<kernel::StyleId>>,
@@ -268,6 +272,10 @@ pub struct Editor {
     /// How many selected instances Make Unique would give a definition of their own, by
     /// revision, open context and selection.
     unique_cache: RefCell<Option<UniqueCache>>,
+    /// The Solid Tools items' state for the revision, context and selection (`solid_tools`).
+    solid_cache: RefCell<Option<solids::SolidCache>>,
+    /// The lone selected instance's volume for the revision, context and selection (`selected_volume`).
+    volume_cache: RefCell<Option<solids::VolumeCache>>,
     /// Text typed into the measurements box, not yet submitted.
     typed: String,
     /// Feedback from the last tool action or failed command.
@@ -354,6 +362,7 @@ impl Editor {
         nav.set_scale_factor(scale_factor);
         Self {
             doc: Document::new(viewport),
+            transition: None,
             nav,
             touch_pivot: None,
             measure: None,
@@ -381,6 +390,8 @@ impl Editor {
             layout: RefCell::new(None),
             hidden_cache: RefCell::new(None),
             unique_cache: RefCell::new(None),
+            solid_cache: RefCell::new(None),
+            volume_cache: RefCell::new(None),
             typed: String::new(),
             style_before_add: Default::default(),
             message: None,
@@ -423,6 +434,7 @@ impl Editor {
         if command.changes_model() {
             self.reset_tool();
         }
+        self.transition = None;
         let replaces = replaces_document(&command);
         let result = self.doc.execute(command);
         if replaces && result.is_ok() {
@@ -441,6 +453,7 @@ impl Editor {
         if commands.iter().any(|c| c.command().changes_model()) {
             self.reset_tool();
         }
+        self.transition = None;
         // A batch that may have replaced the document counts as having done so.
         if commands.iter().any(|c| replaces_document(c.command())) {
             self.document_replaced();
@@ -643,6 +656,8 @@ impl Editor {
             opacity: None,
             texture: None,
             emission: None,
+            metalness: None,
+            roughness: None,
             existing: Default::default(),
         }) else {
             return true;
@@ -661,6 +676,8 @@ impl Editor {
             opacity: None,
             texture: None,
             emission: None,
+            metalness: None,
+            roughness: None,
         });
         true
     }
@@ -675,6 +692,8 @@ impl Editor {
             opacity: None,
             texture: None,
             emission: None,
+            metalness: None,
+            roughness: None,
         });
         true
     }
@@ -689,6 +708,8 @@ impl Editor {
             opacity: Some(f32::from(percent.min(100)) / 100.0),
             texture: None,
             emission: None,
+            metalness: None,
+            roughness: None,
         });
         true
     }
@@ -703,6 +724,40 @@ impl Editor {
             opacity: None,
             texture: None,
             emission: Some(f32::from(tenths.min(100)) / 10.0),
+            metalness: None,
+            roughness: None,
+        });
+        true
+    }
+
+    /// Sets a material's metalness, in percent (0 to 100).
+    pub fn set_material_metalness(&mut self, material: MaterialId, percent: u8) -> bool {
+        self.message = None;
+        self.run(Command::ChangeMaterial {
+            material,
+            name: None,
+            color: None,
+            opacity: None,
+            texture: None,
+            emission: None,
+            metalness: Some(f32::from(percent.min(100)) / 100.0),
+            roughness: None,
+        });
+        true
+    }
+
+    /// Sets a material's roughness, in percent (0 to 100: 100 is matte).
+    pub fn set_material_roughness(&mut self, material: MaterialId, percent: u8) -> bool {
+        self.message = None;
+        self.run(Command::ChangeMaterial {
+            material,
+            name: None,
+            color: None,
+            opacity: None,
+            texture: None,
+            emission: None,
+            metalness: None,
+            roughness: Some(f32::from(percent.min(100)) / 100.0),
         });
         true
     }
@@ -723,6 +778,8 @@ impl Editor {
                 height: None,
             })),
             emission: None,
+            metalness: None,
+            roughness: None,
         });
         true
     }
@@ -737,6 +794,8 @@ impl Editor {
             opacity: None,
             texture: Some(None),
             emission: None,
+            metalness: None,
+            roughness: None,
         });
         true
     }
@@ -756,6 +815,8 @@ impl Editor {
                 height: Some(height),
             })),
             emission: None,
+            metalness: None,
+            roughness: None,
         });
         true
     }
@@ -1979,6 +2040,17 @@ impl Editor {
             .collect()
     }
 
+    /// The HUD while a scene transition draws `frame`: only the labels, placed for the
+    /// frame's camera and of its scene (instances where the transition has them), nothing
+    /// hovered. The marker, lines and chip wait for the document's view.
+    pub fn transition_hud(&self, dark_canvas: bool, frame: &scenes::TransitionFrame) -> Hud {
+        Hud {
+            dark_canvas,
+            labels: self.labels_seen_by(&frame.camera, None, frame.scene.as_ref()),
+            ..Hud::default()
+        }
+    }
+
     /// The marker, preview lines and chip contents as of the last `refresh_hover`, in view
     /// pixels (the chip shown regardless of the rest; `Timing::dress` decides), and the labels
     /// of the dimensions and notes in view. Preview lines and halos take the colors of a dark
@@ -2276,11 +2348,8 @@ impl Editor {
 
     /// Runs a command on the document, noting it and its result while `tool_input` runs.
     fn execute_recorded(&mut self, command: Command) -> Result<Outcome, CommandError> {
-        // A library insert's undo step reads "insert", as `Document::execute` labels it.
-        let label = match command {
-            Command::InsertLibraryItem { .. } => "insert".to_string(),
-            _ => command.name(),
-        };
+        // The undo step is labelled as `Document::execute` labels it.
+        let label = self.doc.step_label(&command);
         self.execute_recorded_as(command, label)
     }
 
@@ -2290,6 +2359,8 @@ impl Editor {
         command: Command,
         label: impl Into<String>,
     ) -> Result<Outcome, CommandError> {
+        // Whatever else happens finishes a transition at once: the document is already there.
+        self.transition = None;
         let noted = self.issued.is_some().then(|| command.clone());
         let replaces = replaces_document(&command);
         let result = self.doc.execute_as(command, label);
@@ -5754,6 +5825,29 @@ mod tests {
     /// The front and back materials of the open context's only face.
     fn face_paint(e: &Editor) -> [Option<MaterialId>; 2] {
         e.doc().model().faces().next().unwrap().1.paint()
+    }
+
+    #[test]
+    fn metalness_and_roughness_are_set_in_percent_as_undo_steps() {
+        let mut e = editor();
+        assert!(e.add_material());
+        let id = e.current_material().unwrap();
+        let finish = |e: &Editor| {
+            let m = e.doc().scene().material(id).unwrap();
+            (m.metalness, m.roughness)
+        };
+        assert_eq!(finish(&e), (0.0, 1.0));
+        e.set_material_metalness(id, 80);
+        e.set_material_roughness(id, 30);
+        assert_eq!(finish(&e), (0.8, 0.3));
+        e.set_material_roughness(id, 250);
+        assert_eq!(finish(&e).1, 1.0);
+        e.undo();
+        assert_eq!(finish(&e), (0.8, 0.3));
+        e.undo();
+        assert_eq!(finish(&e), (0.8, 1.0));
+        e.undo();
+        assert_eq!(finish(&e), (0.0, 1.0));
     }
 
     #[test]

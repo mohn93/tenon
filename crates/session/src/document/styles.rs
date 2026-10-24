@@ -143,6 +143,18 @@ fn apply_patch(settings: &mut StyleSettings, patch: &StylePatch) {
     if let Some(fog) = patch.fog {
         settings.fog = fog;
     }
+    if let Some(a) = &patch.ambient_occlusion {
+        let ao = &mut settings.ambient_occlusion;
+        if let Some(on) = a.on {
+            ao.on = on;
+        }
+        if let Some(radius) = a.radius {
+            ao.radius = radius;
+        }
+        if let Some(strength) = a.strength {
+            ao.strength = strength;
+        }
+    }
 }
 
 /// A kernel refusal as a command error; a missing style is `not_found`.

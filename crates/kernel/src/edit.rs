@@ -31,6 +31,8 @@ pub enum KernelError {
     BadAxes(&'static str),
     /// A location that is out of range; the text says how.
     BadLocation(&'static str),
+    /// A scene transition that is out of range; the text says how.
+    BadTransition(String),
     /// A material id names no material in the scene.
     MaterialNotFound,
     /// A material name is empty, too long or taken; the text says which.
@@ -43,6 +45,9 @@ pub enum KernelError {
     /// A material emission is not a finite number from 0 to `MAX_EMISSION`; the text says
     /// which.
     MaterialEmission(String),
+    /// A material metalness or roughness is not a finite number from 0 to 1; the text says
+    /// which.
+    MaterialFinish(String),
     /// A texture placement's offset, rotation or scale is out of range; the text says which.
     TexturePlacement(String),
     /// A tag id names no tag in the scene.
@@ -104,6 +109,7 @@ impl fmt::Display for KernelError {
             KernelError::DefinitionNotFound => write!(f, "no such definition"),
             KernelError::BadAxes(why) => write!(f, "{why}"),
             KernelError::BadLocation(why) => write!(f, "{why}"),
+            KernelError::BadTransition(why) => write!(f, "{why}"),
             KernelError::MaterialNotFound => write!(f, "no such material"),
             KernelError::TagNotFound => write!(f, "no such tag"),
             KernelError::PageNotFound => write!(f, "no such scene"),
@@ -112,6 +118,7 @@ impl fmt::Display for KernelError {
             | KernelError::MaterialOpacity(why)
             | KernelError::MaterialTexture(why)
             | KernelError::MaterialEmission(why)
+            | KernelError::MaterialFinish(why)
             | KernelError::TexturePlacement(why)
             | KernelError::TagName(why)
             | KernelError::Page(why)

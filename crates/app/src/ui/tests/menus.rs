@@ -262,6 +262,24 @@ fn the_camera_menu_has_views_zoom_extents_and_projections() {
         camera_menu(parallel_night, "Night Lighting"),
         [UiAction::SetLighting(Lighting::Day)]
     );
+    // Studio Lighting sits next to it; at night it still lights by studio, and unchecking it goes
+    // back to day.
+    assert_eq!(
+        camera_menu(parallel_night, "Studio Lighting"),
+        [UiAction::SetLighting(Lighting::Studio)]
+    );
+    let studio = || Fixture {
+        lighting: Lighting::Studio,
+        ..Default::default()
+    };
+    assert_eq!(
+        camera_menu(studio, "Studio Lighting"),
+        [UiAction::SetLighting(Lighting::Day)]
+    );
+    assert_eq!(
+        camera_menu(studio, "Night Lighting"),
+        [UiAction::SetLighting(Lighting::Night)]
+    );
 }
 
 /// A fixture for the Edit menu tests.
@@ -437,6 +455,7 @@ fn checked_menu_items_show_the_state() {
         &[
             ("Fly Mode", true),
             ("Night Lighting", true),
+            ("Studio Lighting", false),
             ("Perspective", false),
             ("Parallel Projection", true),
         ],
@@ -447,6 +466,7 @@ fn checked_menu_items_show_the_state() {
         &[
             ("Fly Mode", false),
             ("Night Lighting", false),
+            ("Studio Lighting", false),
             ("Perspective", true),
             ("Parallel Projection", false),
         ],
@@ -838,13 +858,13 @@ fn the_app_menu_reads_about_settings_then_quit() {
 
 #[test]
 fn the_menu_bar_has_the_same_items_in_every_state() {
-    use crate::menus::{item_id, items, menu_bar};
+    use crate::menus::{item_key, items, menu_bar};
     // The Open Recent rows are the stated exception: that submenu is rebuilt when they change.
     let ids = |f: &Fixture| {
         items(&menu_bar(&f.view(), true))
             .iter()
             .filter(|i| !matches!(i.action, UiAction::OpenRecent(_)))
-            .map(|i| item_id(&i.action))
+            .map(|i| item_key(i))
             .collect::<Vec<_>>()
     };
     let empty = ids(&Fixture::default());
@@ -861,6 +881,7 @@ fn the_menu_bar_has_the_same_items_in_every_state() {
             planes: false,
             cuts: false,
             fill: false,
+            ..Default::default()
         },
         recent: vec!["/a/house.skr".into(), "/b/shed.skr".into()],
         ..super::styles::styles_tab(Some(kernel::StyleId(2)))
@@ -871,6 +892,7 @@ fn the_menu_bar_has_the_same_items_in_every_state() {
         "native items are built once and only synced"
     );
     assert_eq!(empty, ids(&busy(Lighting::Night)), "also at night");
+    assert_eq!(empty, ids(&busy(Lighting::Studio)), "and in the studio");
     let unique: std::collections::BTreeSet<_> = empty.iter().collect();
     assert_eq!(unique.len(), empty.len(), "ids are unique");
     for id in [
@@ -1255,4 +1277,91 @@ fn field_of_view_needs_perspective() {
             .is_disabled()
     );
     assert_eq!(click(&mut h, "Field of View..."), []);
+}
+
+fn solid_tools_fixture(enabled: bool) -> Fixture {
+    use crate::editor::SolidTools;
+    Fixture {
+        // As `Editor::solid_tools` reports two solid groups selected.
+        solid_tools: if enabled {
+            SolidTools::all_enabled()
+        } else {
+            SolidTools::default()
+        },
+        ..Fixture::default()
+    }
+}
+
+const SOLID_TOOLS: &str = "Solid Tools \u{23F5}";
+
+#[test]
+fn tools_solid_tools_lists_its_items_and_runs_them_when_enabled() {
+    use crate::editor::SolidOp;
+    for op in SolidOp::ALL {
+        let mut h = harness(solid_tools_fixture(true));
+        assert_eq!(
+            click_menu(&mut h, &["Tools", SOLID_TOOLS, op.label()]),
+            [UiAction::SolidTool(op)],
+            "{op:?}"
+        );
+        // Disabled without suitable solids: nothing runs.
+        let mut h = harness(solid_tools_fixture(false));
+        click(&mut h, "Tools");
+        click(&mut h, SOLID_TOOLS);
+        assert!(
+            h.get_by_label(op.label()).accesskit_node().is_disabled(),
+            "{op:?}"
+        );
+        h.get_by_label(op.label()).click();
+        h.run_ok();
+        assert_eq!(h.state_mut().take(), [], "{op:?}");
+    }
+}
+
+#[test]
+fn solid_tools_items_carry_the_tooltip_reason_and_stable_native_ids() {
+    use crate::editor::SolidOp;
+    use crate::menus::{Entry, item_id, menu_bar};
+    let f = Fixture {
+        solid_tools: crate::editor::SolidTools::refused("Select two or more solids"),
+        ..Fixture::default()
+    };
+    let bar = menu_bar(&f.view(), true);
+    let tools = &bar.iter().find(|m| m.title == "Tools").unwrap().entries;
+    let Some(Entry::Submenu { entries, .. }) = tools
+        .iter()
+        .find(|e| matches!(e, Entry::Submenu { label, .. } if *label == "Solid Tools"))
+    else {
+        panic!("no Solid Tools submenu");
+    };
+    let labels: Vec<_> = entries
+        .iter()
+        .map(|e| match e {
+            Entry::Item(i) => {
+                assert!(!i.enabled);
+                assert_eq!(i.tooltip.as_deref(), Some("Select two or more solids"));
+                i.label.as_str()
+            }
+            _ => panic!("only items"),
+        })
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "Union",
+            "Subtract",
+            "Intersect",
+            "Trim",
+            "Split",
+            "Outer Shell"
+        ]
+    );
+    assert_eq!(
+        item_id(&UiAction::SolidTool(SolidOp::OuterShell)),
+        "SolidTool(OuterShell)"
+    );
+    // The ids of items that were already there did not change.
+    assert_eq!(item_id(&UiAction::Show3dText), "Show3dText");
+    assert_eq!(item_id(&UiAction::MakeGroup), "MakeGroup");
+    assert_eq!(item_id(&UiAction::Tool(ToolKind::Select)), "Tool(Select)");
 }

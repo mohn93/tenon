@@ -42,6 +42,15 @@ pub fn clip_polygon<A: Copy>(
     out
 }
 
+/// Whether some plane of `planes` cuts through the triangle: it has a corner clearly on each
+/// side. The triangles whose cut a fill shows.
+pub fn crosses_plane(tri: &[DVec3; 3], planes: &[SectionPlane]) -> bool {
+    planes.iter().any(|plane| {
+        let d = tri.map(|p| distance(plane, p));
+        d.iter().any(|d| *d < -KEEP_TOL) && d.iter().any(|d| *d > KEEP_TOL)
+    })
+}
+
 /// The triangles that remain of `tri` after every plane of `planes` cut it: none, the
 /// triangle itself, or the pieces of the kept polygon fanned out.
 pub fn clip_triangle<A: Copy>(

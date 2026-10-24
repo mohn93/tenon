@@ -30,7 +30,18 @@ pub struct Material {
     pub texture: Option<Texture>,
     /// How strongly faces painted with it glow, from 0 (not at all) to `MAX_EMISSION`.
     pub emission: f32,
+    /// How metallic the surface is, from 0 (not at all, the default) to 1: a metal tints its
+    /// highlights and reflections with its color and has no diffuse shading.
+    pub metalness: f32,
+    /// How rough the surface is, from 0 (a mirror) to 1 (matte, the default: no highlight and
+    /// no reflection).
+    pub roughness: f32,
 }
+
+/// A material's default metalness.
+pub const DEFAULT_METALNESS: f32 = 0.0;
+/// A material's default roughness.
+pub const DEFAULT_ROUGHNESS: f32 = 1.0;
 
 impl Material {
     /// True when the material lets anything behind it show through.
@@ -53,6 +64,8 @@ pub struct MaterialEdit<'a> {
     /// `Some(None)` removes the texture.
     pub texture: Option<Option<Texture>>,
     pub emission: Option<f32>,
+    pub metalness: Option<f32>,
+    pub roughness: Option<f32>,
 }
 
 /// Which side of a face to paint.
@@ -90,6 +103,16 @@ pub(crate) fn check_emission(emission: f32) -> Result<(), String> {
         Err(format!(
             "emission must be a number from 0 to {MAX_EMISSION}, not {emission}"
         ))
+    }
+}
+
+/// Fails, saying why, when a metalness or roughness (`what` names it) is not a finite number
+/// from 0 to 1.
+pub(crate) fn check_unit(what: &str, value: f32) -> Result<(), String> {
+    if value.is_finite() && (0.0..=1.0).contains(&value) {
+        Ok(())
+    } else {
+        Err(format!("{what} must be a number from 0 to 1, not {value}"))
     }
 }
 
@@ -202,19 +225,30 @@ impl Scene {
             opacity,
             texture,
             emission: 0.0,
+            metalness: DEFAULT_METALNESS,
+            roughness: DEFAULT_ROUGHNESS,
         })
     }
 
-    /// Checks the ranges of the opacity and emission given, as `add_material_from` does.
+    /// Checks the ranges of the opacity, emission, metalness and roughness given, as
+    /// `add_material_from` does.
     pub fn check_material_ranges(
         opacity: Option<f32>,
         emission: Option<f32>,
+        metalness: Option<f32>,
+        roughness: Option<f32>,
     ) -> Result<(), KernelError> {
         if let Some(o) = opacity {
             check_opacity(o).map_err(KernelError::MaterialOpacity)?;
         }
         if let Some(e) = emission {
             check_emission(e).map_err(KernelError::MaterialEmission)?;
+        }
+        if let Some(m) = metalness {
+            check_unit("metalness", m).map_err(KernelError::MaterialFinish)?;
+        }
+        if let Some(r) = roughness {
+            check_unit("roughness", r).map_err(KernelError::MaterialFinish)?;
         }
         Ok(())
     }
@@ -229,6 +263,8 @@ impl Scene {
         self.check_free_name(&material.name, None)?;
         check_opacity(material.opacity).map_err(KernelError::MaterialOpacity)?;
         check_emission(material.emission).map_err(KernelError::MaterialEmission)?;
+        check_unit("metalness", material.metalness).map_err(KernelError::MaterialFinish)?;
+        check_unit("roughness", material.roughness).map_err(KernelError::MaterialFinish)?;
         if let Some(t) = &material.texture {
             self.check_new_texture(t, None)?;
         }
@@ -268,6 +304,8 @@ impl Scene {
                 opacity,
                 texture,
                 emission: None,
+                metalness: None,
+                roughness: None,
             },
         )
     }
@@ -293,6 +331,12 @@ impl Scene {
         if let Some(emission) = edit.emission {
             check_emission(emission).map_err(KernelError::MaterialEmission)?;
         }
+        if let Some(m) = edit.metalness {
+            check_unit("metalness", m).map_err(KernelError::MaterialFinish)?;
+        }
+        if let Some(r) = edit.roughness {
+            check_unit("roughness", r).map_err(KernelError::MaterialFinish)?;
+        }
         if let Some(Some(t)) = &edit.texture {
             self.check_new_texture(t, Some(id))?;
         }
@@ -302,6 +346,8 @@ impl Scene {
             opacity: edit.opacity.unwrap_or(from.opacity),
             texture: edit.texture.unwrap_or_else(|| from.texture.clone()),
             emission: edit.emission.unwrap_or(from.emission),
+            metalness: edit.metalness.unwrap_or(from.metalness),
+            roughness: edit.roughness.unwrap_or(from.roughness),
         };
         if to == from {
             return Ok(SceneChange::default());

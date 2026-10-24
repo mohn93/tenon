@@ -111,7 +111,8 @@ impl Scene {
             m.land(annotations, true);
             Ok(m.take_changes())
         })?;
-        let change = SceneChange::join([SceneChange::from(added), left, filled]);
+        let dropped = self.drop_stale_positions();
+        let change = SceneChange::join([SceneChange::from(added), left, filled, dropped]);
         Ok((placed.expect("instance placed"), change))
     }
 }
@@ -198,6 +199,7 @@ impl Scene {
                 material: i.material.or(placed.material),
                 tag: i.tag.or(placed.tag),
                 hidden: i.hidden || placed.hidden,
+                section_cut: i.section_cut && placed.section_cut,
             });
         }
         let exploded = self.edit(parent, |m| {
@@ -213,7 +215,9 @@ impl Scene {
             m.land(annotations, false);
             Ok(m.take_changes())
         })?;
-        Ok(SceneChange::join([copied, exploded, self.prune()]))
+        let pruned = self.prune();
+        let dropped = self.drop_stale_positions();
+        Ok(SceneChange::join([copied, exploded, pruned, dropped]))
     }
 
     /// Places `count` copies of instances of mesh `parent`, copy k shifted by `k * offset`.
@@ -275,6 +279,7 @@ impl Scene {
                     material: original.material,
                     tag: original.tag,
                     hidden: original.hidden,
+                    section_cut: original.section_cut,
                 });
             }
         }
@@ -372,6 +377,7 @@ impl Scene {
                 material: child.material,
                 tag: child.tag,
                 hidden: child.hidden,
+                section_cut: child.section_cut,
             });
         }
         let (copy, added) = self.add_definition(&name, kind);
@@ -477,7 +483,9 @@ impl Scene {
                 Ok(m.take_changes())
             })
             .expect("erasing cannot fail");
-        SceneChange::join([erased, self.prune()])
+        let pruned = self.prune();
+        let dropped = self.drop_stale_positions();
+        SceneChange::join([erased, pruned, dropped])
     }
 
     /// Removes group definitions that no instance places any more.
