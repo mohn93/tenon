@@ -678,10 +678,13 @@ pub enum Command {
     /// painted with it are see-through. `texture` reads a PNG or JPEG image for its faces
     /// (`path` required); `color` may then be left out and is the image's average color.
     /// `emission` (default 0) from 0 to 10 makes its faces glow and light their surroundings.
+    /// `metalness` (default 0) and `roughness` (default 1), each from 0 to 1, set its finish:
+    /// a rough non-metal is matte, a smooth one has highlights and reflections, a metal tints
+    /// them with its color.
     /// The new id is in the outcome's `changes.materials`. `existing` says what happens when
     /// `name` is already taken: `fail` (default) is an error, `reuse` returns the existing
-    /// material unchanged (no undo step), `update` gives it the color, opacity, texture and
-    /// emission passed, as `change_material` would (one undo step), and returns it.
+    /// material unchanged (no undo step), `update` gives it the color, opacity, texture,
+    /// emission, metalness and roughness passed, as `change_material` would (one undo step), and returns it.
     /// `existing` other than `fail` needs a `name`.
     AddMaterial {
         #[serde(default)]
@@ -695,10 +698,14 @@ pub enum Command {
         #[serde(default)]
         emission: Option<f32>,
         #[serde(default)]
+        metalness: Option<f32>,
+        #[serde(default)]
+        roughness: Option<f32>,
+        #[serde(default)]
         existing: ExistingMaterial,
     },
-    /// Rename, recolor, change the opacity (0 to 1), the texture and/or the emission (0 to 10)
-    /// of a material; absent fields stay as they are. `texture`: null removes it; an object
+    /// Rename, recolor, change the opacity (0 to 1), the texture, the emission (0 to 10), the
+    /// metalness and/or the roughness (each 0 to 1) of a material; absent fields stay as they are. `texture`: null removes it; an object
     /// sets it, reading `path` (the color becomes the image's average unless `color` is
     /// given), or without `path` keeps the image and changes its size.
     ChangeMaterial {
@@ -718,6 +725,10 @@ pub enum Command {
         texture: Option<Option<TextureSource>>,
         #[serde(default)]
         emission: Option<f32>,
+        #[serde(default)]
+        metalness: Option<f32>,
+        #[serde(default)]
+        roughness: Option<f32>,
     },
     /// Remove a material. Faces and instances painted with it, anywhere in the model, go back
     /// to the default material.
@@ -977,7 +988,7 @@ pub enum Command {
     /// are always made, materials and tags are matched by name (missing ones are added),
     /// the minimum corner of its bounding box lands at `at`, or at the open context's origin
     /// without it, and what it made becomes the selection. A material: added to the model;
-    /// one with the same name and the same color, opacity, emission and texture is reused,
+    /// one with the same name and the same color, opacity, emission, metalness, roughness and texture is reused,
     /// otherwise the new one is named "<name> 2", "<name> 3"... (the lowest free). The
     /// outcome's `material` is the material's id.
     InsertLibraryItem {

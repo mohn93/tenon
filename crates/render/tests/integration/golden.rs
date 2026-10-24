@@ -112,7 +112,7 @@ fn updating() -> bool {
 /// without a GPU adapter, and on a software adapter (Mesa lavapipe, WARP) with a printed note:
 /// the goldens come from a real GPU and stay strict there; a software rasterizer differs in
 /// edges, antialiasing and shadow filtering by more than any tolerance worth having.
-fn check(name: &str, doc: &Document) {
+pub(crate) fn check(name: &str, doc: &Document) {
     let Some(mut snap) = Snapshotter::new_headless() else {
         eprintln!("no GPU adapter, skipping");
         return;
@@ -259,6 +259,8 @@ pub(crate) fn add_material(doc: &mut Document, name: &str, color: [u8; 3]) -> Ma
             opacity: None,
             texture: None,
             emission: None,
+            metalness: None,
+            roughness: None,
             existing: Default::default(),
         },
     );
@@ -410,6 +412,8 @@ fn golden_glass_pane_in_front_of_a_box() {
             opacity: Some(0.35),
             texture: None,
             emission: None,
+            metalness: None,
+            roughness: None,
             existing: Default::default(),
         },
     )
@@ -539,7 +543,7 @@ fn golden_cylinder_hides_soft_edges() {
 
 /// OBJ text for two UV spheres of radius 1 (16 sides, 8 bands), centered at x = -1.2 and 1.2
 /// on z = 1, in meters with Z up.
-fn two_spheres_obj() -> String {
+pub(crate) fn two_spheres_obj() -> String {
     let (sides, bands) = (16, 8);
     let mut out = String::new();
     let mut count = 0;
@@ -813,6 +817,8 @@ fn golden_textured_box_and_ground() {
                 height: Some(1.0),
             }),
             emission: None,
+            metalness: None,
+            roughness: None,
             existing: Default::default(),
         },
     )
@@ -885,6 +891,8 @@ fn golden_positioned_textures() {
                 height: Some(1.0),
             }),
             emission: None,
+            metalness: None,
+            roughness: None,
             existing: Default::default(),
         },
     )
@@ -939,6 +947,8 @@ pub(crate) fn add_lamp_material(
             opacity: None,
             texture: None,
             emission: Some(emission),
+            metalness: None,
+            roughness: None,
             existing: Default::default(),
         },
     );
@@ -1261,6 +1271,7 @@ fn every_golden_image_has_a_test() {
         "style_sky_ground_fog",
         "style_edges_by_axis",
         "style_profiles_sketchy",
+        "finish_spheres",
     ];
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden");
     let mut stored: Vec<String> = std::fs::read_dir(&dir)

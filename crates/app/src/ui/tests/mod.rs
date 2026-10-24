@@ -652,6 +652,8 @@ pub(super) fn brick() -> MaterialRow {
         color: [180, 60, 40],
         opacity: 1.0,
         emission: 0.0,
+        metalness: 0.0,
+        roughness: 1.0,
         texture: None,
     }
 }

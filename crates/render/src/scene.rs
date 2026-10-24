@@ -51,6 +51,8 @@ pub struct FaceVertex {
     pub layer: [f32; 2],
     /// 1 on a side whose material glows, 0 otherwise (see `BaseFaceVertex`).
     pub glow: [f32; 2],
+    /// The finish of the front and back sides (see `BaseFaceVertex`).
+    pub finish: [f32; 4],
 }
 
 /// A face corner as the renderer uploads it; whether it is selected comes from a separate flag
@@ -78,6 +80,10 @@ pub struct BaseFaceVertex {
     /// 1 on a side whose material glows, 0 otherwise: such a side is drawn unshaded at its
     /// color (or texture).
     pub glow: [f32; 2],
+    /// The finish of the front side's material (metalness, roughness) and then the back
+    /// side's: `[0.0, 1.0, 0.0, 1.0]` is matte, shaded as faces were before materials had a
+    /// finish. Faces without a material, and faces colored by tag, are matte.
+    pub finish: [f32; 4],
 }
 
 impl BaseFaceVertex {
@@ -100,6 +106,9 @@ struct Look {
     alpha: f32,
     texture: Option<(u32, DVec2)>,
     emission: f32,
+    /// The material's metalness and roughness (0 and 1: matte).
+    metalness: f32,
+    roughness: f32,
     /// The material the side is painted with, for edges colored by material.
     material: Option<MaterialId>,
 }
@@ -119,6 +128,8 @@ fn side_look(
         alpha: 1.0,
         texture: None,
         emission: 0.0,
+        metalness: 0.0,
+        roughness: 1.0,
         material: None,
     };
     let Some((id, m)) = material.and_then(|id| Some((id, scene.material(id)?))) else {
@@ -133,6 +144,8 @@ fn side_look(
             .zip(layers.get(&id))
             .map(|(t, &layer)| (layer, DVec2::new(t.width, t.height))),
         emission: m.emission,
+        metalness: m.metalness,
+        roughness: m.roughness,
         material: Some(id),
     }
 }
@@ -146,6 +159,8 @@ fn tag_colored(scene: &Scene, tag: Option<TagId>, material: Look) -> Look {
             alpha: 1.0,
             texture: None,
             emission: 0.0,
+            metalness: 0.0,
+            roughness: 1.0,
             material: None,
         },
         None => Look {
@@ -159,6 +174,16 @@ impl Look {
     /// The texture array layer, or -1 without a texture.
     fn layer(&self) -> f32 {
         self.texture.map_or(-1.0, |(layer, _)| layer as f32)
+    }
+
+    /// The finish as a vertex carries it for two sides (see `BaseFaceVertex::finish`).
+    fn finish_of(front: &Look, back: &Look) -> [f32; 4] {
+        [
+            front.metalness,
+            front.roughness,
+            back.metalness,
+            back.roughness,
+        ]
     }
 
     /// 1 when the side glows, else 0.
@@ -478,6 +503,7 @@ impl SceneBase {
                 uv: v.uv,
                 layer: v.layer,
                 glow: v.glow,
+                finish: v.finish,
             })
             .collect();
         let edges = self
@@ -1254,6 +1280,7 @@ impl Walk<'_> {
                 uv,
                 layer: [drawn_front.layer(), drawn_back.layer()],
                 glow: [drawn_front.glow(), drawn_back.glow()],
+                finish: Look::finish_of(&drawn_front, &drawn_back),
             };
             let range = face.corners.clone();
             let (tris, _) = parts.corners[range.clone()].as_chunks::<3>();
@@ -1871,6 +1898,8 @@ mod tests {
             opacity: 1.0,
             texture: None,
             emission,
+            metalness: 0.0,
+            roughness: 1.0,
         })
         .unwrap()
         .0
@@ -1898,6 +1927,47 @@ mod tests {
         let base = scene_base(&s, &[]);
         assert!(base.lights.is_empty());
         assert!(base.faces.iter().all(|v| v.glow == [0.0, 0.0]));
+    }
+
+    #[test]
+    fn faces_carry_the_finish_of_their_materials_and_unpainted_ones_are_matte() {
+        let (mut s, first, _) = two_squares();
+        let (steel, _) = s.add_material("Steel", [200, 200, 210]).unwrap();
+        s.change_material_with(
+            steel,
+            kernel::MaterialEdit {
+                metalness: Some(1.0),
+                roughness: Some(0.25),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        paint_tile(&mut s, first, steel);
+        let base = scene_base(&s, &[]);
+        assert!(!base.faces.is_empty());
+        // Both tiles place the painted component: the front is finished, the back matte.
+        let finishes: std::collections::BTreeSet<[u32; 4]> = base
+            .faces
+            .iter()
+            .map(|v| v.finish.map(f32::to_bits))
+            .collect();
+        let steel_front = [1.0f32, 0.25, 0.0, 1.0].map(f32::to_bits);
+        assert_eq!(finishes, [steel_front].into());
+        // Without a material every face is matte.
+        let (plain, _, _) = two_squares();
+        assert!(
+            scene_base(&plain, &[])
+                .faces
+                .iter()
+                .all(|v| v.finish == [0.0, 1.0, 0.0, 1.0])
+        );
+        // scene_geometry carries it too.
+        assert!(
+            scene_geometry(&s, &[], &BTreeSet::new())
+                .faces
+                .iter()
+                .any(|v| v.finish == [1.0, 0.25, 0.0, 1.0])
+        );
     }
 
     #[test]
@@ -2611,6 +2681,7 @@ mod tests {
                                 uv,
                                 layer: [front.layer(), back.layer()],
                                 glow: [front.glow(), back.glow()],
+                                finish: Look::finish_of(&front, &back),
                             });
                         }
                     }

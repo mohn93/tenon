@@ -155,6 +155,10 @@ pub enum UiAction {
     SetMaterialOpacity(MaterialId, u8),
     /// Set how strongly a material glows, in tenths (0 to 100: emission 0 to 10).
     SetMaterialEmission(MaterialId, u8),
+    /// Set a material's metalness, in percent (0 to 100).
+    SetMaterialMetalness(MaterialId, u8),
+    /// Set a material's roughness, in percent (0 to 100: 100 is matte).
+    SetMaterialRoughness(MaterialId, u8),
     /// Choose an image file for a material's texture.
     LoadTexture(MaterialId),
     /// Take a material's texture off.
@@ -438,6 +442,10 @@ pub struct MaterialRow {
     pub opacity: f32,
     /// From 0 (no glow) to 10.
     pub emission: f32,
+    /// From 0 (not metallic) to 1.
+    pub metalness: f32,
+    /// From 0 (a mirror) to 1 (matte).
+    pub roughness: f32,
     pub texture: Option<TextureRow>,
 }
 

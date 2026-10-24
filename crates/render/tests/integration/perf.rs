@@ -100,6 +100,8 @@ fn scene() -> Document {
             opacity: None,
             texture: None,
             emission: Some(3.0),
+            metalness: None,
+            roughness: None,
             existing: Default::default(),
         },
     )
@@ -248,6 +250,8 @@ fn time_house_renders() {
                 opacity: None,
                 texture: None,
                 emission: Some(3.0),
+                metalness: None,
+                roughness: None,
             },
         );
     }

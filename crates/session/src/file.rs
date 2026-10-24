@@ -32,11 +32,14 @@ pub const FORMAT: &str = "sketchup-alt";
 /// version 14 hidden entities and the x-ray and hidden geometry view flags, version 15 the
 /// model axes, version 16 the location and sun shadow settings, version 17 decimal feet
 /// and the length and angle snapping settings of the display units, and version 18 styles
-/// and the style a view chooses; older files still open
+/// and the style a view chooses, and version 19 material metalness and roughness; older files
+/// still open
 /// (untagged before version 10, without scenes before version 11, without annotations and in
 /// the default units before version 12, without section planes and with the default section
 /// display before version 13).
-pub const SCHEMA_VERSION: u32 = 18;
+pub const SCHEMA_VERSION: u32 = 19;
+/// The version written when a material has a metalness above 0 or a roughness below 1.
+pub const FINISH_SCHEMA_VERSION: u32 = 19;
 /// The version written when the model has a style or the camera or a scene's view chooses
 /// one.
 pub const STYLES_SCHEMA_VERSION: u32 = 18;
@@ -305,6 +308,10 @@ pub(crate) fn write_bytes(
             .any(|p| p.view.is_some_and(|v| v.style.is_some()));
     let needs_lights_schema =
         model.materials.iter().any(|m| m.emission > 0.0) || lighting != Lighting::Day;
+    let finished = model
+        .materials
+        .iter()
+        .any(|m| m.metalness > 0.0 || m.roughness < 1.0);
     let textured = model.materials.iter().any(|m| m.texture.is_some());
     let translucent = model.materials.iter().any(|m| m.opacity < 1.0);
     let mut images: Vec<(String, Arc<TextureImage>)> = model
@@ -319,7 +326,9 @@ pub(crate) fn write_bytes(
     images.dedup_by(|a, b| a.0 == b.0);
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: if styled {
+        schema_version: if finished {
+            FINISH_SCHEMA_VERSION
+        } else if styled {
             STYLES_SCHEMA_VERSION
         } else if units.needs_snap_schema() {
             SNAP_SCHEMA_VERSION

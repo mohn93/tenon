@@ -507,6 +507,10 @@ pub struct MaterialInfo {
     pub opacity: f32,
     /// How strongly its faces glow, from 0 (not at all) to 10. Always present.
     pub emission: f32,
+    /// How metallic its surface is, from 0 (not at all) to 1. Always present.
+    pub metalness: f32,
+    /// How rough its surface is, from 0 (a mirror) to 1 (matte). Always present.
+    pub roughness: f32,
     /// The texture faces painted with it show; absent for none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub texture: Option<TextureInfo>,

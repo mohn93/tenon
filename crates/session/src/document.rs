@@ -1154,13 +1154,15 @@ impl Document {
                 opacity,
                 texture,
                 emission,
+                metalness,
+                roughness,
                 existing,
             } => self.add_material_changes(
                 name.as_deref(),
                 *color,
                 *opacity,
                 texture.as_ref(),
-                *emission,
+                (*emission, *metalness, *roughness),
                 *existing,
             ),
             Command::ChangeMaterial {
@@ -1170,6 +1172,8 @@ impl Document {
                 opacity,
                 texture,
                 emission,
+                metalness,
+                roughness,
             } => self.change_material_changes(
                 *material,
                 MaterialEdit {
@@ -1178,6 +1182,8 @@ impl Document {
                     opacity: *opacity,
                     texture: None,
                     emission: *emission,
+                    metalness: *metalness,
+                    roughness: *roughness,
                 },
                 texture.as_ref().map(Option::as_ref),
             ),

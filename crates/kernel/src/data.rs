@@ -141,6 +141,12 @@ pub struct MaterialData {
     /// Absent when 0, as in files written before emission existed.
     #[serde(default, skip_serializing_if = "is_dark")]
     pub emission: f32,
+    /// Absent when 0, as in files written before material finish existed.
+    #[serde(default, skip_serializing_if = "is_dark")]
+    pub metalness: f32,
+    /// Absent when 1 (matte).
+    #[serde(default = "opaque", skip_serializing_if = "is_opaque")]
+    pub roughness: f32,
 }
 
 /// A material's texture: the file holding its image and the size it covers on the model, in
@@ -407,6 +413,8 @@ impl Scene {
                         image: Some(t.image.clone()),
                     }),
                     emission: m.emission,
+                    metalness: m.metalness,
+                    roughness: m.roughness,
                 })
                 .collect(),
             tags: self
@@ -504,6 +512,8 @@ impl Scene {
                 opacity: m.opacity,
                 texture,
                 emission: m.emission,
+                metalness: m.metalness,
+                roughness: m.roughness,
             };
             if materials.insert(MaterialId(m.id), material).is_some() {
                 return Err(format!("material m{} appears twice", m.id));

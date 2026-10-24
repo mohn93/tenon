@@ -417,6 +417,8 @@ mod tests {
                 opacity: None,
                 texture: None,
                 emission: None,
+                metalness: None,
+                roughness: None,
                 existing: Default::default(),
             })
             .unwrap();

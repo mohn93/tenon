@@ -561,6 +561,8 @@ struct FaceOut {
     // 1 on a glowing front (x) or back (y) side.
     @location(8) @interpolate(flat) glow: vec2<f32>,
     @location(9) @interpolate(flat) hovered: f32,
+    // The front side's metalness and roughness (xy) and the back side's (zw).
+    @location(10) @interpolate(flat) finish: vec4<f32>,
 };
 
 // `selected` (1 or 0) comes from the second vertex buffer, `hovered` from the third.
@@ -576,6 +578,7 @@ fn vs_face(
     @location(7) layer: vec2<f32>,
     @location(8) glow: vec2<f32>,
     @location(9) hovered: f32,
+    @location(10) finish: vec4<f32>,
 ) -> FaceOut {
     var out: FaceOut;
     out.pos = u.view_proj * vec4<f32>(pos, 1.0);
@@ -589,6 +592,7 @@ fn vs_face(
     out.layer = layer;
     out.glow = glow;
     out.hovered = hovered;
+    out.finish = finish;
     return out;
 }
 
@@ -664,6 +668,76 @@ fn sun_shade(p: vec3<f32>, n: vec3<f32>) -> f32 {
     return lighting.sun_levels.y + lighting.sun_levels.x * facing * lit;
 }
 
+// What a smooth or metallic surface adds to the matte shading (see `finished_color`). The
+// environment is a vertical gradient: the style's sky above the horizon and its ground below,
+// or these colors without a sky or ground.
+const DEFAULT_SKY: vec3<f32> = vec3<f32>(0.62, 0.74, 0.92);
+const DEFAULT_GROUND: vec3<f32> = vec3<f32>(0.38, 0.36, 0.34);
+// The ambient light of day (DAY in renderer.rs): the environment dims in proportion to the
+// ambient light, so it is dark at night.
+const DAY_AMBIENT: f32 = 0.6;
+
+// The environment seen in direction `dir`.
+fn environment(dir: vec3<f32>) -> vec3<f32> {
+    let sky = select(DEFAULT_SKY, lighting.sky.rgb, lighting.sky.w > 0.5);
+    let ground = select(DEFAULT_GROUND, lighting.ground.rgb, lighting.ground.w > 0.0);
+    return mix(ground, sky, smoothstep(-0.25, 0.25, dir.z));
+}
+
+// The highlight of a light of `level` toward `l` (a unit vector) on a surface facing `n` seen
+// along `v`: a Blinn-Phong lobe of exponent `shininess`, by the cosine of the light's angle. It
+// is 0 for a light behind the surface, and finite where the light is opposite the eye.
+fn highlight(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, shininess: f32, level: f32) -> f32 {
+    let facing = max(dot(n, l), 0.0);
+    let sum = l + v;
+    let h = sum / max(length(sum), 1e-4);
+    return level * facing * pow(max(dot(n, h), 0.0), shininess);
+}
+
+// The sun's highlight, stopped where the sun is in shadow (as `sun_shade` does).
+fn sun_highlight(p: vec3<f32>, n: vec3<f32>, v: vec3<f32>, shininess: f32) -> f32 {
+    let facing = max(dot(n, lighting.sun.xyz), 0.0);
+    var lit = 1.0;
+    if lighting.sun.w > 1.5 && facing > 0.0 {
+        lit = sun_lit(p, n, facing);
+    }
+    return highlight(n, v, lighting.sun.xyz, shininess, lighting.sun_levels.x * lit);
+}
+
+// The color of a surface that is not matte: `shown` its base color, `shade` the matte shading
+// at the point, `finish` its metalness (x) and roughness (y). The diffuse part is scaled by
+// 1 - metalness. The headlight (the sun when it shades) adds a highlight of strength
+// (1 - roughness)^2 tinted by the base color as far as the surface is metallic, and the
+// environment, seen in the reflected view direction, is added weighted by 1 - roughness and
+// the Fresnel reflectance (0.04 for a non-metal, the base color for a metal, 1 at grazing
+// angles).
+fn finished_color(
+    shown: vec3<f32>,
+    n: vec3<f32>,
+    to_eye: vec3<f32>,
+    p: vec3<f32>,
+    shade: f32,
+    finish: vec2<f32>,
+) -> vec3<f32> {
+    let metalness = finish.x;
+    let gloss = 1.0 - finish.y;
+    let diffuse = shown * (1.0 - metalness) * (vec3<f32>(shade) + lamp_light(p, n));
+    let tint = mix(vec3<f32>(1.0), shown, metalness);
+    let shininess = exp2(mix(3.0, 10.0, gloss));
+    var light = highlight(n, to_eye, to_eye, shininess, lighting.mode.z);
+    if lighting.sun.w > 0.5 {
+        light = sun_highlight(p, n, to_eye, shininess);
+    }
+    let spec = tint * (gloss * gloss * light);
+    let facing = max(dot(n, to_eye), 0.0);
+    let grazing = pow(1.0 - facing, 5.0);
+    let reflectance = mix(vec3<f32>(0.04), shown, metalness);
+    let fresnel = reflectance + (vec3<f32>(1.0) - reflectance) * grazing;
+    let dim = clamp(lighting.mode.y / DAY_AMBIENT, 0.0, 1.0);
+    let reflected = environment(reflect(-to_eye, n)) * fresnel * (gloss * dim);
+    return diffuse + spec + reflected;
+}
+
 // Each side shows its own color (its material's, or the default: light in front, blue-gray
 // behind), or its material's texture instead; ambient light, a headlight at the eye (from the
 // viewer, in a parallel view) and the glowing faces' lights shade both. A glowing side is shown
@@ -691,6 +765,10 @@ fn face_color(in: FaceOut, front: bool) -> vec3<f32> {
     var shade = lighting.mode.y + lighting.mode.z * max(dot(n, to_eye), 0.0);
     if lighting.sun.w > 0.5 {
         shade = sun_shade(in.world, n);
+    }
+    let finish = select(in.finish.zw, in.finish.xy, front);
+    if finish.x > 0.0 || finish.y < 1.0 {
+        return finished_color(shown, n, to_eye, in.world, shade, finish);
     }
     return shown * (vec3<f32>(shade) + lamp_light(in.world, n));
 }

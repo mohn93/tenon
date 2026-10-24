@@ -265,6 +265,8 @@ fn paint_all(d: &mut Document, opacity: f32) {
             opacity: Some(opacity),
             texture: None,
             emission: None,
+            metalness: None,
+            roughness: None,
             existing: Default::default(),
         },
     );

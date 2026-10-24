@@ -993,6 +993,8 @@ fn add_materials(
             opacity,
             texture,
             emission: 0.0,
+            metalness: kernel::DEFAULT_METALNESS,
+            roughness: kernel::DEFAULT_ROUGHNESS,
         };
         let had_texture = texture.is_some();
         let result = match document.scene_mut().add_material_from(material(texture)) {

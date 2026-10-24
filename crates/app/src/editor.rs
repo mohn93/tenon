@@ -643,6 +643,8 @@ impl Editor {
             opacity: None,
             texture: None,
             emission: None,
+            metalness: None,
+            roughness: None,
             existing: Default::default(),
         }) else {
             return true;
@@ -661,6 +663,8 @@ impl Editor {
             opacity: None,
             texture: None,
             emission: None,
+            metalness: None,
+            roughness: None,
         });
         true
     }
@@ -675,6 +679,8 @@ impl Editor {
             opacity: None,
             texture: None,
             emission: None,
+            metalness: None,
+            roughness: None,
         });
         true
     }
@@ -689,6 +695,8 @@ impl Editor {
             opacity: Some(f32::from(percent.min(100)) / 100.0),
             texture: None,
             emission: None,
+            metalness: None,
+            roughness: None,
         });
         true
     }
@@ -703,6 +711,40 @@ impl Editor {
             opacity: None,
             texture: None,
             emission: Some(f32::from(tenths.min(100)) / 10.0),
+            metalness: None,
+            roughness: None,
+        });
+        true
+    }
+
+    /// Sets a material's metalness, in percent (0 to 100).
+    pub fn set_material_metalness(&mut self, material: MaterialId, percent: u8) -> bool {
+        self.message = None;
+        self.run(Command::ChangeMaterial {
+            material,
+            name: None,
+            color: None,
+            opacity: None,
+            texture: None,
+            emission: None,
+            metalness: Some(f32::from(percent.min(100)) / 100.0),
+            roughness: None,
+        });
+        true
+    }
+
+    /// Sets a material's roughness, in percent (0 to 100: 100 is matte).
+    pub fn set_material_roughness(&mut self, material: MaterialId, percent: u8) -> bool {
+        self.message = None;
+        self.run(Command::ChangeMaterial {
+            material,
+            name: None,
+            color: None,
+            opacity: None,
+            texture: None,
+            emission: None,
+            metalness: None,
+            roughness: Some(f32::from(percent.min(100)) / 100.0),
         });
         true
     }
@@ -723,6 +765,8 @@ impl Editor {
                 height: None,
             })),
             emission: None,
+            metalness: None,
+            roughness: None,
         });
         true
     }
@@ -737,6 +781,8 @@ impl Editor {
             opacity: None,
             texture: Some(None),
             emission: None,
+            metalness: None,
+            roughness: None,
         });
         true
     }
@@ -756,6 +802,8 @@ impl Editor {
                 height: Some(height),
             })),
             emission: None,
+            metalness: None,
+            roughness: None,
         });
         true
     }
@@ -5754,6 +5802,29 @@ mod tests {
     /// The front and back materials of the open context's only face.
     fn face_paint(e: &Editor) -> [Option<MaterialId>; 2] {
         e.doc().model().faces().next().unwrap().1.paint()
+    }
+
+    #[test]
+    fn metalness_and_roughness_are_set_in_percent_as_undo_steps() {
+        let mut e = editor();
+        assert!(e.add_material());
+        let id = e.current_material().unwrap();
+        let finish = |e: &Editor| {
+            let m = e.doc().scene().material(id).unwrap();
+            (m.metalness, m.roughness)
+        };
+        assert_eq!(finish(&e), (0.0, 1.0));
+        e.set_material_metalness(id, 80);
+        e.set_material_roughness(id, 30);
+        assert_eq!(finish(&e), (0.8, 0.3));
+        e.set_material_roughness(id, 250);
+        assert_eq!(finish(&e).1, 1.0);
+        e.undo();
+        assert_eq!(finish(&e), (0.8, 0.3));
+        e.undo();
+        assert_eq!(finish(&e), (0.8, 1.0));
+        e.undo();
+        assert_eq!(finish(&e), (0.0, 1.0));
     }
 
     #[test]

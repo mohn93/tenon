@@ -1602,6 +1602,8 @@ impl State {
                 color: m.color,
                 opacity: m.opacity,
                 emission: m.emission,
+                metalness: m.metalness,
+                roughness: m.roughness,
             })
             .collect()
     }
@@ -2057,6 +2059,12 @@ impl State {
             }
             UiAction::SetMaterialEmission(material, tenths) => {
                 self.editor.set_material_emission(material, tenths);
+            }
+            UiAction::SetMaterialMetalness(material, percent) => {
+                self.editor.set_material_metalness(material, percent);
+            }
+            UiAction::SetMaterialRoughness(material, percent) => {
+                self.editor.set_material_roughness(material, percent);
             }
             UiAction::LoadTexture(material) => self.load_texture(material),
             UiAction::RemoveTexture(material) => {
