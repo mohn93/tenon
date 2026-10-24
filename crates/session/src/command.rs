@@ -1445,7 +1445,7 @@ impl Transform {
         }
         let linear = DMat3::from_cols(DVec3::from(x), DVec3::from(y), DVec3::from(z));
         let det = linear.determinant();
-        if !det.is_finite() || det.abs() < 1e-12 {
+        if !det.is_finite() || det.abs() < kernel::MIN_DETERMINANT {
             return Err(bad("the transform's axes are singular (zero volume)"));
         }
         Ok(DAffine3 {

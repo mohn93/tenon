@@ -301,7 +301,7 @@ fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
         || matches!(
             (key, command_type),
             ("item", Some("save_to_library"))
-                | ("definition", Some("rename_definition"))
+                | ("definition", Some("rename_definition" | "place_instance"))
                 | ("path", Some("open_path" | "follow_me"))
                 | ("a" | "b", Some("add_dimension"))
                 | ("edge", Some("add_edge_dimension" | "add_radial_dimension"))

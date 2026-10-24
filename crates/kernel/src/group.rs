@@ -393,24 +393,6 @@ impl Scene {
         (copy, SceneChange::join([change, added.into(), filled]))
     }
 
-    /// True when `from` is `target` or places it, directly or through nested instances.
-    pub fn definition_reaches(&self, from: DefinitionId, target: DefinitionId) -> bool {
-        let mut seen = BTreeSet::new();
-        let mut pending = vec![from];
-        while let Some(d) = pending.pop() {
-            if d == target {
-                return true;
-            }
-            if !seen.insert(d) {
-                continue;
-            }
-            if let Some(def) = self.definition(d) {
-                pending.extend(def.mesh.instances().map(|(_, i)| i.definition));
-            }
-        }
-        false
-    }
-
     /// Places a new instance of `definition` in mesh `parent` at `transform` (the same
     /// definition, shared, for a component or a group's). A missing mesh or definition is
     /// `DefinitionNotFound`; a non-finite transform is `NotFinite`; placing a definition
@@ -428,7 +410,7 @@ impl Scene {
             return Err(KernelError::DefinitionNotFound);
         }
         if let MeshId::Definition(open) = parent
-            && self.definition_reaches(definition, open)
+            && self.reaches(definition, open)
         {
             return Err(KernelError::InvalidImport(
                 "a definition cannot be placed inside itself".to_string(),

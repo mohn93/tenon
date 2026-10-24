@@ -304,3 +304,43 @@ fn batch_places_with_a_definition_reference_and_sets_a_placed_transform() {
     let placed = serde_json::to_value(&out[0]).unwrap()["placed"][0].clone();
     assert_eq!(matrix_of(&d, &placed)[9], 9.0);
 }
+
+#[test]
+fn batch_places_a_definition_made_by_make_unique() {
+    // make_component's outcome has no `definitions`, so the `$N:dI` form comes from make_unique.
+    let mut d = doc();
+    let (inst, _) = wrapped(&mut d, "make_component");
+    let copy = run(
+        &mut d,
+        json!({"type": "copy", "ids": [inst], "offset": [3, 0, 0]}),
+    )
+    .unwrap()["placed"][0]
+        .clone();
+    let commands: Vec<BatchCommand> = [
+        json!({"type": "make_unique", "ids": [copy]}),
+        json!({"type": "place_instance", "definition": "$0:d0", "transform": {"origin": [0, 5, 0]}}),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, v)| BatchCommand::parse(v, i).unwrap())
+    .collect();
+    let out = d.execute_batch(commands, true).unwrap();
+    let made = serde_json::to_value(&out[0]).unwrap()["definitions"][0].clone();
+    let placed = serde_json::to_value(&out[1]).unwrap()["placed"][0].clone();
+    let def = instances(&d).iter().find(|i| i["id"] == placed).unwrap()["definition"].clone();
+    assert_eq!(def, made);
+}
+
+#[test]
+fn an_unchanged_set_transform_makes_no_undo_step() {
+    let mut d = doc();
+    let (inst, _) = wrapped(&mut d, "make_component");
+    let same = matrix_of(&d, &inst);
+    let steps = depth(&d);
+    run(
+        &mut d,
+        json!({"type": "set_transform", "id": inst, "transform": {"matrix": same}}),
+    )
+    .unwrap();
+    assert_eq!(depth(&d), steps);
+}

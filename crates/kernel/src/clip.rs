@@ -226,7 +226,7 @@ impl Scene {
     }
 
     /// True when definition `from` is `to` or places it (directly or deeper).
-    fn reaches(&self, from: DefinitionId, to: DefinitionId) -> bool {
+    pub fn reaches(&self, from: DefinitionId, to: DefinitionId) -> bool {
         let mut seen = BTreeSet::new();
         let mut stack = vec![from];
         while let Some(d) = stack.pop() {
