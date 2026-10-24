@@ -155,6 +155,45 @@ pub(super) fn soften_window(ui: &mut Ui, angle: u8, actions: &mut Vec<UiAction>)
     }
 }
 
+/// The Check Interference window: the pairs found with their overlap volumes, each a button
+/// that selects both parts and zooms to them, or "No interference".
+pub(super) fn interference_window(
+    ui: &mut Ui,
+    report: &crate::editor::InterferenceReport,
+    actions: &mut Vec<UiAction>,
+) {
+    let mut open = true;
+    let title = "Check Interference";
+    let shown = egui::Window::new(title)
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ui.ctx().content_rect().center())
+        .show(ui.ctx(), |ui| {
+            if report.rows.is_empty() {
+                ui.label("No interference");
+            }
+            let list = egui::ScrollArea::vertical()
+                .max_height(300.0)
+                .show(ui, |ui| {
+                    for (i, row) in report.rows.iter().enumerate() {
+                        if ui.button(&row.label).clicked() {
+                            actions.push(UiAction::InterferencePair(i));
+                        }
+                    }
+                });
+            widgets::name_scroll_bars(ui.ctx(), list.id, "Interfering pairs");
+            if report.skipped > 0 {
+                ui.label(RichText::new(format!("{} not solid, skipped", report.skipped)).weak());
+            }
+        });
+    widgets::name_title_bar(ui.ctx(), &shown, title);
+    if !open {
+        actions.push(UiAction::CloseInterference);
+    }
+}
+
 /// The viewport's right-click menu, at `menu.at`: for a selected section plane Flip and Active
 /// Cut (checked while the plane is the active one), for faces and groups Intersect Faces with
 /// the model, the selection or the context, and Hide, Unhide, Reverse Faces and Orient Faces
