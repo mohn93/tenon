@@ -230,11 +230,12 @@ pub enum Command {
         activate: Option<bool>,
     },
     /// Negate a section plane's normal (the other side is kept), as one undo step. The point
-    /// and whether it is active stay. A plane not in the open context is `invalid_input`.
+    /// and whether it is active stay. A plane of another context is `not_found` (naming the path
+    /// to open); an unknown plane is `invalid_input`.
     FlipSectionPlane { plane: EntityId },
     /// Make a section plane the open context's active plane, as one undo step (the one that
     /// was active no longer is; already active changes nothing). A plane not in the open
-    /// context is `invalid_input`.
+    /// context is as for `flip_section_plane`.
     ActivateSectionPlane { plane: EntityId },
     /// Make no section plane of the open context active, as one undo step (none active
     /// changes nothing and makes no undo step). The planes stay.
@@ -1273,8 +1274,8 @@ pub struct Outcome {
     /// other commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purged: Option<usize>,
-    /// The definitions a `make_unique` made, in order (empty when it did nothing); absent for
-    /// other commands. Batch commands can refer to them as `$N:dI`.
+    /// The definitions a `make_unique` made, in order (empty when it did nothing), or the one a
+    /// `make_group` or `make_component` made; absent for other commands. Batch commands can refer to them as `$N:dI`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definitions: Option<Vec<DefinitionId>>,
     /// The instances a `copy`, `rotate` with copies, `make_group`, `make_component`,

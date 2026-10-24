@@ -239,18 +239,23 @@ fn flip_activate_and_deactivate_are_exact_undo_steps() {
 }
 
 #[test]
-fn planes_of_another_context_or_no_plane_are_invalid_input() {
+fn planes_of_another_context_are_not_found_and_no_plane_is_invalid_input() {
     let mut d = doc();
     let ids = cube(&mut d);
     let root_plane = plane(&mut d, [0.0; 3], [0.0, 0.0, 1.0], false);
     let out = run(&mut d, json!({"type": "make_group", "ids": ids})).unwrap();
     let i = made(&out, 'i');
     run(&mut d, json!({"type": "open_instance", "id": i})).unwrap();
-    for bad in [
+    for other in [
         json!({"type": "activate_section_plane", "plane": root_plane}),
+        json!({"type": "flip_section_plane", "plane": root_plane}),
+    ] {
+        let (kind, ..) = run(&mut d, other.clone()).unwrap_err();
+        assert_eq!(kind, ErrorKind::NotFound, "{other}");
+    }
+    for bad in [
         json!({"type": "activate_section_plane", "plane": "s999"}),
         json!({"type": "activate_section_plane", "plane": "f1"}),
-        json!({"type": "flip_section_plane", "plane": root_plane}),
     ] {
         let (kind, ..) = run(&mut d, bad.clone()).unwrap_err();
         assert_eq!(kind, ErrorKind::InvalidInput, "{bad}");

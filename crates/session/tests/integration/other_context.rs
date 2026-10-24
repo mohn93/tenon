@@ -232,3 +232,53 @@ fn batch_places_the_definition_of_a_component_it_just_made() {
     assert_eq!(a["definitions"].as_array().unwrap().len(), 1);
     assert_eq!(b["placed"].as_array().unwrap().len(), 1);
 }
+
+#[test]
+fn a_root_id_while_a_group_is_open_says_to_go_back() {
+    let mut d = doc();
+    let (g1, _, _, _, root_face) = nested(&mut d);
+    run(&mut d, json!({"type": "open_path", "path": [g1]})).unwrap();
+    let (kind, msg) = run(&mut d, json!({"type": "erase", "ids": [root_face]})).unwrap_err();
+    assert_eq!(kind, ErrorKind::NotFound);
+    assert_eq!(
+        msg,
+        format!(
+            "{} is in the root; go back to it first (open_path with [])",
+            root_face.as_str().unwrap()
+        )
+    );
+    // The advice works.
+    run(&mut d, json!({"type": "open_path", "path": []})).unwrap();
+    run(&mut d, json!({"type": "erase", "ids": [root_face]})).unwrap();
+}
+
+#[test]
+fn mixed_ids_name_the_path_and_list_the_unknown() {
+    let mut d = doc();
+    let (g1, g2, face, _, _) = nested(&mut d);
+    let (_, msg) = run(&mut d, json!({"type": "erase", "ids": [face, "f99999"]})).unwrap_err();
+    assert_eq!(
+        msg,
+        format!("{}; no such entities: f99999", hint(&face, &g1, &g2))
+    );
+}
+
+#[test]
+fn many_ids_elsewhere_are_capped() {
+    let mut d = doc();
+    let (g1, _, _, _, _) = nested(&mut d);
+    run(&mut d, json!({"type": "open_path", "path": [g1]})).unwrap();
+    let mut ids = Vec::new();
+    for k in 0..5 {
+        let o = run(
+            &mut d,
+            json!({"type": "add_rectangle", "corner": [20 + 3 * k, 0, 0], "opposite": [21 + 3 * k, 1, 0]}),
+        )
+        .unwrap();
+        ids.push(created(&o, 'f')[0].clone());
+    }
+    run(&mut d, json!({"type": "open_path", "path": []})).unwrap();
+    let (_, msg) = run(&mut d, json!({"type": "erase", "ids": ids})).unwrap_err();
+    assert_eq!(msg.matches("is inside").count(), 3, "{msg}");
+    assert!(msg.ends_with(". and 2 more"), "{msg}");
+}

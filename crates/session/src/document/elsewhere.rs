@@ -22,66 +22,105 @@ pub(super) fn holds(m: &Model, id: EntityId) -> bool {
     }
 }
 
+/// Most located ids a message spells out.
+const MAX_NOTES: usize = 3;
+
 impl Document {
-    /// The instances to open, from the root, to reach a mesh that holds `id` (any one path
-    /// when its definition has several instances). None when no mesh reachable from the root
-    /// holds it. Searches only when called, so keep it to error paths.
-    pub(super) fn path_to_entity(&self, id: EntityId) -> Option<Vec<InstanceId>> {
-        let target = self
-            .scene
-            .meshes()
-            .find(|(_, m)| holds(m, id))
-            .map(|(mesh, _)| mesh)?;
-        let mut seen = BTreeSet::new();
-        let mut queue = VecDeque::from([(MeshId::Root, Vec::new())]);
-        while let Some((mesh, path)) = queue.pop_front() {
-            if mesh == target {
-                return Some(path);
-            }
-            let Some(model) = self.scene.mesh(mesh) else {
-                continue;
-            };
-            for (instance, data) in model.instances() {
-                let next = MeshId::Definition(data.definition);
-                if seen.insert(data.definition) {
-                    let mut p = path.clone();
-                    p.push(instance);
-                    queue.push_back((next, p));
+    /// For each id, the note saying where it is when it is in a mesh other than the open
+    /// one's: "<id> is inside i1 > i2; open that path first (open_path)", or for the root
+    /// "<id> is in the root; go back to it first (open_path with [])". None when it exists
+    /// nowhere reachable. Finds each id's mesh once and runs one search from the root for all,
+    /// so keep it to error paths.
+    pub(super) fn elsewhere_notes(&self, ids: &[EntityId]) -> Vec<Option<String>> {
+        let targets: Vec<Option<MeshId>> = ids
+            .iter()
+            .map(|id| {
+                self.scene
+                    .meshes()
+                    .find(|(_, m)| holds(m, *id))
+                    .map(|(mesh, _)| mesh)
+            })
+            .collect();
+        let mut wanted: Vec<MeshId> = targets.iter().flatten().copied().collect();
+        wanted.dedup();
+        // Any one path to each wanted mesh: breadth first from the root.
+        let mut paths: Vec<(MeshId, Vec<InstanceId>)> = Vec::new();
+        if !wanted.is_empty() {
+            let mut seen = BTreeSet::new();
+            let mut queue = VecDeque::from([(MeshId::Root, Vec::new())]);
+            while let Some((mesh, path)) = queue.pop_front() {
+                if wanted.contains(&mesh) {
+                    paths.push((mesh, path.clone()));
+                    if paths.len() == wanted.len() {
+                        break;
+                    }
+                }
+                let Some(model) = self.scene.mesh(mesh) else {
+                    continue;
+                };
+                for (instance, data) in model.instances() {
+                    if seen.insert(data.definition) {
+                        let mut p = path.clone();
+                        p.push(instance);
+                        queue.push_back((MeshId::Definition(data.definition), p));
+                    }
                 }
             }
         }
-        None
+        ids.iter()
+            .zip(targets)
+            .map(|(id, target)| {
+                let path = &paths.iter().find(|(m, _)| Some(*m) == target)?.1;
+                if path.is_empty() {
+                    return Some(format!(
+                        "{id} is in the root; go back to it first (open_path with [])"
+                    ));
+                }
+                let path: Vec<String> = path
+                    .iter()
+                    .map(|i| EntityId::Instance(*i).to_string())
+                    .collect();
+                Some(format!(
+                    "{id} is inside {}; open that path first (open_path)",
+                    path.join(" > ")
+                ))
+            })
+            .collect()
     }
 
-    /// "<id> is inside i1 > i2; open that path first (open_path)" when `id` is in another
-    /// mesh reachable through instances, otherwise None.
+    /// `elsewhere_notes` for one id.
     pub(super) fn elsewhere_note(&self, id: EntityId) -> Option<String> {
-        let path = self.path_to_entity(id)?;
-        if path.is_empty() {
-            return None;
-        }
-        let path: Vec<String> = path
-            .into_iter()
-            .map(|i| EntityId::Instance(i).to_string())
-            .collect();
-        Some(format!(
-            "{id} is inside {}; open that path first (open_path)",
-            path.join(" > ")
-        ))
+        self.elsewhere_notes(&[id]).pop().flatten()
     }
 
     /// The `not_found` error for ids the open context lacks. `plain` is the message when none
-    /// of them exists elsewhere in the model; otherwise the message names, for each that does,
-    /// the path to open.
+    /// of them exists elsewhere in the model; otherwise the message names, for each that does
+    /// (the first few), where to go, and lists the ones that exist nowhere.
     pub(super) fn missing_error(&self, missing: Vec<EntityId>, plain: String) -> CommandError {
-        let notes: Vec<String> = missing
-            .iter()
-            .filter_map(|id| self.elsewhere_note(*id))
-            .collect();
+        let found = self.elsewhere_notes(&missing);
+        let notes: Vec<&String> = found.iter().flatten().collect();
         let message = if notes.is_empty() {
             plain
         } else {
-            notes.join(". ")
+            let mut text = notes
+                .iter()
+                .take(MAX_NOTES)
+                .map(|n| n.as_str())
+                .collect::<Vec<_>>()
+                .join(". ");
+            if notes.len() > MAX_NOTES {
+                text.push_str(&format!(". and {} more", notes.len() - MAX_NOTES));
+            }
+            let nowhere: Vec<String> = missing
+                .iter()
+                .zip(&found)
+                .filter(|(_, n)| n.is_none())
+                .map(|(id, _)| id.to_string())
+                .collect();
+            if !nowhere.is_empty() {
+                text.push_str(&format!("; no such entities: {}", nowhere.join(", ")));
+            }
+            text
         };
         CommandError::new(ErrorKind::NotFound, message).with_ids(missing)
     }

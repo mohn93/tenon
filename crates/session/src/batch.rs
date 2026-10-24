@@ -17,6 +17,17 @@ use kernel::{
 };
 use serde_json::Value;
 
+use crate::command::{AnchorInput, Command, CommandError, ErrorKind, Outcome};
+use crate::library::LibraryRef;
+
+/// What a batch needs to know about the open context to resolve references.
+pub trait OpenContext {
+    /// Whether the open context holds the entity.
+    fn holds(&self, id: EntityId) -> bool;
+    /// Why the open context lacks it, naming the path to open when it is elsewhere.
+    fn missing_text(&self, id: EntityId) -> String;
+}
+
 /// A context that holds every id (for paths, which `open_path` checks).
 struct AnyContext;
 
@@ -28,17 +39,6 @@ impl OpenContext for AnyContext {
     fn missing_text(&self, id: EntityId) -> String {
         format!("{id} is not in the open context")
     }
-}
-
-use crate::command::{AnchorInput, Command, CommandError, ErrorKind, Outcome};
-use crate::library::LibraryRef;
-
-/// What a batch needs to know about the open context to resolve references.
-pub trait OpenContext {
-    /// Whether the open context holds the entity.
-    fn holds(&self, id: EntityId) -> bool;
-    /// Why the open context lacks it, naming the path to open when it is elsewhere.
-    fn missing_text(&self, id: EntityId) -> String;
 }
 
 /// The first stand-in id number. The ids a document makes come from one counter that never gets

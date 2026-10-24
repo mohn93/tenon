@@ -938,7 +938,7 @@ Ids are unique across the whole model, but a command sees only the open context.
 names an id (written out or through a batch reference) that is not in the open context but exists
 elsewhere, `not_found` says where: `s129810 is inside i95934 > i85590; open that path first
 (open_path)`. The path is from the root; for a definition with several instances it is any one
-of them. An id that exists nowhere keeps the plain message (`no such entities`, `no entity f9`).
+of them; an id of the root while a group is open is `f3 is in the root; go back to it first (open_path with [])`. At most three such ids are spelled out (then `and N more`), and ids that exist nowhere are listed after `no such entities:`. When none exists anywhere the plain message stays (`no such entities`, `no entity f9`).
 A section plane of another context given to `flip_section_plane` or `activate_section_plane` is
 reported this way too (an unknown plane id stays `invalid_input`).
 

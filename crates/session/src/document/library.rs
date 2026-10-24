@@ -102,7 +102,8 @@ impl Document {
     /// with its rotation and scale, and the component's name.
     fn component_item(&self, id: kernel::InstanceId) -> Result<(Scene, String), CommandError> {
         let instance = self.model().instance(id).ok_or_else(|| {
-            CommandError::new(ErrorKind::NotFound, format!("no instance i{}", id.0))
+            let id = EntityId::Instance(id);
+            self.missing_error(vec![id], format!("no instance {id}"))
         })?;
         let definition = self.scene.definition(instance.definition).ok_or_else(|| {
             CommandError::new(ErrorKind::NotFound, "the instance's definition is missing")
