@@ -775,6 +775,7 @@ impl Document {
             | Command::AddEdgeDimension { .. }
             | Command::AddRadialDimension { .. }
             | Command::AddNote { .. }
+            | Command::AddLabel { .. }
             | Command::AddScreenNote { .. }
             | Command::ChangeNote { .. }
             | Command::AddSectionPlane { .. }
@@ -969,6 +970,11 @@ impl Document {
                 position,
                 text,
             } => self.add_note_changes(*anchor, *position, text.clone()),
+            Command::AddLabel {
+                target,
+                text,
+                position,
+            } => self.add_label_changes(*target, text, *position),
             Command::AddScreenNote { at, text } => self.add_screen_note_changes(*at, text),
             Command::ChangeNote { note, text } => self.change_note_changes(*note, text.clone()),
             Command::AddSectionPlane {

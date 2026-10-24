@@ -328,6 +328,7 @@ fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
                 | ("a" | "b", Some("add_dimension" | "solid_split"))
                 | ("edge", Some("add_edge_dimension" | "add_radial_dimension"))
                 | ("anchor", Some("add_note"))
+                | ("target", Some("add_label"))
                 | ("note", Some("change_note"))
                 | ("style", Some("change_style" | "delete_style" | "set_style"))
                 | ("from", Some("add_style"))
@@ -726,6 +727,7 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
             f(Slot::One(edge))
         }
         Command::ChangeNote { note, .. } => f(Slot::One(note)),
+        Command::AddLabel { target, .. } => f(Slot::One(target)),
         Command::FlipSectionPlane { plane } | Command::ActivateSectionPlane { plane } => {
             f(Slot::One(plane))
         }

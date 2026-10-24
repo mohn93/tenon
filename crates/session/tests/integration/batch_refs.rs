@@ -247,6 +247,7 @@ fn reference_keys_cover_every_id_field() {
                         | ("a" | "b", "add_dimension" | "solid_split")
                         | ("edge", "add_edge_dimension" | "add_radial_dimension")
                         | ("anchor", "add_note")
+                        | ("target", "add_label")
                         | ("note", "change_note")
                         | ("plane", "flip_section_plane" | "activate_section_plane")
                 );

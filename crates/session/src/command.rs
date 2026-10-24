@@ -226,6 +226,20 @@ pub enum Command {
         #[serde(default)]
         text: Option<String>,
     },
+    /// Label `target` (a face, edge, vertex or instance of the open context), as one undo
+    /// step: a leader note with `text` anchored on it. The anchor is a vertex's position (the
+    /// note follows it), an edge's midpoint, the point of a face's interior nearest its
+    /// centroid, or for an instance its bounding box center moved onto its surface toward the
+    /// camera when that is hit. Without `position` the note goes outward from the open
+    /// context's box center through the anchor, 15% of the box diagonal away and raised by
+    /// 5% of it. Text rules as `add_note`.
+    AddLabel {
+        target: EntityId,
+        text: String,
+        #[serde(default)]
+        #[schemars(with = "Option<ModelPoint>")]
+        position: Option<[f64; 3]>,
+    },
     /// Add a note fixed to the view, as one undo step: `text` at `at`, fractions (0 to 1) of
     /// the view's width and height from its top left corner. Only the root holds screen notes:
     /// refused while an instance is open.
