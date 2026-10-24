@@ -453,7 +453,7 @@ impl Solid {
         }
         // The inner equator is the tightest ring.
         if 2.0 * (radius - tube_radius) * (PI / segments as f64).sin() < MIN_LENGTH {
-            return invalid("radius is too small for that many segments");
+            return invalid("tube_radius is too close to radius for that many segments");
         }
         let mut s = Solid::default();
         let rings: Vec<Vec<usize>> = (0..tube_segments)

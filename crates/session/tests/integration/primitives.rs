@@ -811,6 +811,7 @@ fn sphere_and_torus_frames_and_options() {
     )
     .unwrap();
     assert_eq!(entities(&d)["faces"].as_array().unwrap().len(), 24 * 12);
+    d.model().validate().unwrap();
     let mut d = doc();
     run(&mut d, json!({"type": "add_torus", "center": [0, 0, 0], "radius": 2, "tube_radius": 0.5, "as": "geometry"})).unwrap();
     assert_eq!(entities(&d)["faces"].as_array().unwrap().len(), 24 * 12);
