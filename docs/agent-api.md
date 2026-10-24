@@ -1164,6 +1164,12 @@ about the point).
 
 `{"type": "joints"}` gives `{"joints": [{"id": "j42", "name": "Crank", "kind": "revolute", "a": "i3", "b": "i4", "value": 0.0, "limits": [-90.0, 90.0], "point": [2.0, 0.0, 0.0], "axis": [0.0, 0.0, 1.0]}], "revision": 12}`; `value` and `limits` are degrees for revolute and cylindrical joints and meters for the others (0 for fixed and ball), and `point` and `axis` are the joint's frame on part `a` (the world's for the ground) in the root's coordinates. Joint commands change the revision, mark the model modified and list the joint in `changes.joints`. A model with joints is saved as schema version 25 (the model's `joints`; older builds refuse the file).
 
+The window's Joints tab (beside Scenes) lists the joints with their kind, value and limits. A
+click on a name selects the joint's parts; a slider (degrees, or the model's length units) drives
+the joint while it is dragged, solving each frame, and the end of the drag is one `drive` undo
+step (the frames leave none); a value that cannot be met leaves the last pose and shows the reason
+in the status line. A minus button deletes the joint.
+
 ### Groups and components
 
 The window's Circle, Polygon and Rectangle tools pass the drawing plane's normal, so a shape drawn off a face with a non-canonical normal, or with tilted axes in empty space, faces that normal.

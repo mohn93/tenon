@@ -51,8 +51,9 @@ use crate::touch::{self, TouchEvent, Touches};
 use crate::ui::PhoneView;
 use crate::ui::theme::UiScale;
 use crate::ui::{
-    Agents, DockTab, LibrarySave, LibraryView, MaterialRow, RecoverRow, RecoverView, SceneRow,
-    SettingsView, Sheet, StartCard, StyleRow, TagRow, TexturePosition, TextureRow, UiAction, View,
+    Agents, DockTab, JointRow, LibrarySave, LibraryView, MaterialRow, RecoverRow, RecoverView,
+    SceneRow, SettingsView, Sheet, StartCard, StyleRow, TagRow, TexturePosition, TextureRow,
+    UiAction, View,
 };
 use crate::ui::{ViewerPanel, ViewerView};
 use crate::ui::{theme, viewport};
@@ -2241,6 +2242,20 @@ impl State {
             UiAction::DeleteScene(scene) => {
                 self.editor.delete_scene(scene);
             }
+            UiAction::SelectJoint(joint) => {
+                self.editor.select_joint(joint);
+            }
+            UiAction::DeleteJoint(joint) => {
+                self.editor.delete_joint(joint);
+            }
+            UiAction::DriveJoint {
+                joint,
+                value,
+                slide,
+                done,
+            } => {
+                self.editor.drive_joint(joint, value, slide, done);
+            }
             UiAction::GoToScene(scene) => {
                 self.editor.go_to_scene(scene);
             }
@@ -2627,6 +2642,15 @@ impl State {
         // Built every frame: going to a scene selects it without a new revision, and there are
         // few of them.
         let scenes = scene_rows(self.editor.doc());
+        let joints: Vec<JointRow> = self
+            .editor
+            .joint_infos()
+            .into_iter()
+            .map(|info| JointRow {
+                selected: self.editor.joint_selected(&info),
+                info,
+            })
+            .collect();
         let styles = style_rows(self.editor.doc());
         let context: Vec<EntityId> = self
             .editor
@@ -2769,6 +2793,7 @@ impl State {
             location: self.editor.doc().scene().location(),
             viewport_menu,
             scenes: &scenes,
+            joints: &joints,
             documents: self.editor.documents(),
             selection_tag: self.editor.selection_tag(),
             outliner: self.outliner.as_ref().map(|(_, t)| t).expect("built above"),

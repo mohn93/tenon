@@ -38,6 +38,7 @@ mod clip;
 mod input;
 mod intersect;
 pub use input::{DriveError, Driven, Stopped};
+mod joints;
 mod labels;
 mod library;
 mod notes;
@@ -214,6 +215,8 @@ pub struct Editor {
     doc: Document,
     /// The scene transition being drawn, if any (see `scenes::Transition`).
     transition: Option<scenes::Transition>,
+    /// The Joints tab's slider drag in progress, if any (see `joints::JointDrag`).
+    joint_drag: Option<joints::JointDrag>,
     /// For each style the Styles tab added: the style chosen before, which undoing the add
     /// goes back to (the choice is a view setting and is not itself undone).
     style_before_add: std::collections::BTreeMap<kernel::StyleId, Option<kernel::StyleId>>,
@@ -363,6 +366,7 @@ impl Editor {
         Self {
             doc: Document::new(viewport),
             transition: None,
+            joint_drag: None,
             nav,
             touch_pivot: None,
             measure: None,
@@ -467,6 +471,7 @@ impl Editor {
     /// styles in the next model.
     fn document_replaced(&mut self) {
         self.documents += 1;
+        self.joint_drag = None;
         self.style_before_add.clear();
     }
 

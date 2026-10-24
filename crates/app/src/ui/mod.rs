@@ -8,7 +8,8 @@ use std::path::PathBuf;
 
 use egui::{Panel, Ui};
 use kernel::{
-    DefinitionId, EntityId, InstanceId, PageId, StyleId, StyleSettings, TagId, TexturePlacement,
+    DefinitionId, EntityId, InstanceId, JointId, PageId, StyleId, StyleSettings, TagId,
+    TexturePlacement,
 };
 use session::{
     Camera, FlipAxis, FlipFrame, IntersectScope, LibraryKind, Lighting, MaterialId, OutlinerTable,
@@ -27,6 +28,7 @@ mod dialogs;
 mod dock;
 mod fonts;
 mod icons;
+mod joints;
 mod library;
 mod materials;
 mod menu_bar;
@@ -252,6 +254,20 @@ pub enum UiAction {
     MoveScene(PageId, usize),
     /// Delete a scene, at once (it is undoable).
     DeleteScene(PageId),
+    /// The Joints tab: select the joint's two parts.
+    SelectJoint(JointId),
+    /// The Joints tab: delete a joint, at once (it is undoable).
+    DeleteJoint(JointId),
+    /// The Joints tab's sliders: drive a joint to `value` (degrees or meters) and, for a
+    /// cylindrical joint's slide slider, `slide` (meters). While a slider is dragged each new
+    /// value comes with `done` false (the pose follows without an undo step); the drag's end,
+    /// or a value entered, comes with `done` true and makes the one undo step.
+    DriveJoint {
+        joint: JointId,
+        value: f64,
+        slide: Option<f64>,
+        done: bool,
+    },
     GoToScene(PageId),
     /// Go to the scene before the selected one, wrapping around (Page Up).
     PreviousScene,
@@ -501,6 +517,14 @@ pub struct SceneRow {
     pub selected: bool,
 }
 
+/// A joint as the Joints tab lists it: the session's description and whether both its parts
+/// are selected.
+#[derive(Clone, Debug, PartialEq)]
+pub struct JointRow {
+    pub info: session::JointInfo,
+    pub selected: bool,
+}
+
 /// A material's texture as the Materials list shows it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextureRow {
@@ -583,6 +607,8 @@ pub struct View<'a> {
     pub viewport_menu: Option<ViewportMenu>,
     /// Every scene, in order: the scene tabs show while there is one.
     pub scenes: &'a [SceneRow],
+    /// Every joint, in the order they were made (the Joints tab).
+    pub joints: &'a [JointRow],
     /// How many times the document was replaced (`Editor::documents`): what a panel holds by
     /// id from before names other things after.
     pub documents: u64,
