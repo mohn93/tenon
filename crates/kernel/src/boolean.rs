@@ -691,7 +691,7 @@ fn classes(m: &Model, own: &Model, other: &Model) -> Result<Vec<(FaceId, Class)>
 
 /// A point well inside face `f`: the centroid of its triangle with the largest inscribed
 /// circle.
-fn interior_point(m: &Model, f: FaceId) -> Option<DVec3> {
+pub(crate) fn interior_point(m: &Model, f: FaceId) -> Option<DVec3> {
     m.triangulate(f)?
         .iter()
         .filter_map(|[a, b, c]| {
@@ -748,6 +748,16 @@ fn classify(p: DVec3, n: DVec3, s: &Model) -> Option<Class> {
         std::cmp::Ordering::Greater => Some(Class::Inside),
         std::cmp::Ordering::Less => Some(Class::Outside),
         std::cmp::Ordering::Equal => None,
+    }
+}
+
+/// Whether `p` lies inside the closed mesh `s` (by the parity of rays, as `classify`); None
+/// when it lies on its surface or no ray is clear.
+pub(crate) fn point_inside(p: DVec3, s: &Model) -> Option<bool> {
+    match classify(p, DVec3::Z, s)? {
+        Class::Inside => Some(true),
+        Class::Outside => Some(false),
+        Class::Same | Class::Opposite => None,
     }
 }
 

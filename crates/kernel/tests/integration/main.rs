@@ -17,6 +17,7 @@ mod guides;
 mod hide;
 mod import_tree;
 mod index;
+mod interfere;
 mod intersect;
 mod location;
 mod materials;

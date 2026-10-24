@@ -104,6 +104,8 @@ Queries:
 | `{"type": "units"}` | the model's display units: `length`, `precision`, `length_snap`, `angle_precision` and `angle_snap`; see Dimensions and notes below |
 | `{"type": "curve", "id": "e3"}` | the curve (circle or arc) edge `e3` is part of; see Curves below |
 | `{"type": "solid", "id": "i4"}` | whether group or component `i4` is a solid: its own geometry (hidden faces included) has at least one face and is closed (every edge bounds exactly two faces, one traversing it each way, no edge bounds no face), encloses a volume (faces pointing inward still count), and it holds no nested groups or components. Returns `{"type": "solid", "solid": bool, "volume": m3, "reason": "..."}`; `volume` is positive, in cubic meters of the open context (the definition's volume times the absolute determinant of the instance's transform) and only present for a solid; `reason` only otherwise (e.g. "edge e12 bounds 1 face", "it encloses no volume"). An id that is not an instance is `invalid_input`; an unknown one `not_found`. |
+| `{"type": "interference", "ids": ["i4", "i9"], "touching": true}` | which solid parts of the open context overlap; see Interference and clearance below |
+| `{"type": "clearance", "a": "i4", "b": "i9"}` | the minimum distance between two parts' surfaces (or every pair among `ids`) with the nearest points; see Interference and clearance below |
 | `{"type": "stats"}` | counts for the open context (plus the number of definitions) and revision |
 | `{"type": "history"}` | `undo_depth` and `redo_depth`, and the steps as labels, next first: `undo` (what `undo` would undo, then the step before it) and `redo` (what `redo` would redo first). A step's label is the `type` of the command that made it (`add_edge`, `push_pull`); an atomic batch is labeled by its edit commands' type when they share one, else `batch`. Window edits are labeled the same way. Plus `undo_origins` and `redo_origins`, who made each step in the same order: `user` (in the window) or `agent` (through the API); and `revision` |
 | `{"type": "camera"}` | the view: `eye`, `target`, `up`, `fov_y_deg`, `projection`, `view_height`, `lighting`, `color_by_tag`, `x_ray`, `hidden_geometry`, `shadows`, `axes`; see Camera below |
@@ -545,6 +547,29 @@ refused the same way: leave a small clearance (0.1 mm is plenty). A pass whose s
 than 200,000 face pairs or 100,000 crossing segments (the limits of `intersect_faces`) is
 `invalid_input` ("too many faces cross to combine at once") and changes nothing. A batch can refer
 to `ids`, `target`, `tools`, and `a` and `b` of `solid_split`.
+
+### Interference and clearance
+
+Queries only: they never change the model, the selection or the history. A part is a group or
+component instance of the open context with everything it places at any depth: its own geometry
+(when it has faces) and every nested instance's geometry, each of which must be closed and enclose
+a volume (as the `solid` query, but nested instances are allowed and count as part of the
+instance holding them). Hidden faces and instances count. Coordinates and volumes are those of
+the open context (meters, cubic meters).
+
+| Query | Answer |
+|---|---|
+| `{"type": "interference"}` | every pair of solid parts among the open context's groups and components that share a volume: `{"type": "interference", "pairs": [{"a", "b", "volume", "point"}], "skipped": [{"id", "reason"}], "revision"}`. `pairs` is sorted by `volume`, largest first (`a` is the lower id of the two); `point` lies inside the shared volume. `ids` limits the parts to those listed. With `touching: true` the answer also has `touching: [{"a", "b", "point"}]`: pairs whose surfaces meet (shared faces or edges, a pin in a bore of its own size) with no volume in common, sorted by ids; `point` is where they meet. `skipped` lists the parts that are not solid parts with why (e.g. "edge e12 bounds 1 face", "i7 inside it: it encloses no volume"). `failed: [{"a", "b", "reason"}]` appears only when a pair's overlap could not be measured (the boolean's reason). |
+| `{"type": "clearance", "a": "i4", "b": "i9"}` | how near two parts come: `{"type": "clearance", "pairs": [{"a", "b", "distance", "point_a", "point_b", "overlap"}], "skipped", "revision"}` with the minimum distance between their surfaces and the nearest point on each. `distance` is 0 when they touch or overlap (`overlap: true` when they share a volume; a part wholly inside another is 0 apart, both points at a vertex of the inner one); use `interference` for how much. `{"type": "clearance", "ids": [...]}` gives every pair among `ids` (2 to 200 parts) in the order named. A part that is not a solid part is in `skipped` and in no pair. |
+
+Overlap is decided exactly on the faces as modelled (circles are their polygons): two parts
+interfere when their surfaces cross or one lies inside the other, and the shared volume (from the
+`solid_intersect` boolean run on copies) exceeds 1e-12 m3; less than that is touching. Surfaces
+within 0.001 mm of each other meet. When a part places several solids, its volumes against the
+other part are added up (solids overlapping within one part count each). Ids that are not
+instances are `invalid_input`, unknown ones `not_found`; `clearance` with neither `a` and `b`
+nor `ids`, both, only one of `a` and `b`, `a` equal to `b`, or fewer than 2 or more than 200
+distinct `ids` is `invalid_input`.
 
 ### Chamfer
 

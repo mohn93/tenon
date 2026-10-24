@@ -42,6 +42,7 @@ mod groups;
 mod hide;
 mod import;
 mod instances;
+mod interference;
 mod intersect;
 mod library;
 mod materials;
@@ -2658,6 +2659,8 @@ impl Document {
                     },
                 }
             }
+            Query::Interference { ids, touching } => self.interference_query(ids, *touching)?,
+            Query::Clearance { a, b, ids } => self.clearance_query(*a, *b, ids)?,
             Query::Camera {} => QueryResult::Camera {
                 eye: self.camera.eye.to_array(),
                 target: self.camera.target.to_array(),

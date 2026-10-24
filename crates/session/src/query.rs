@@ -44,6 +44,27 @@ pub enum Query {
     Solid {
         id: EntityId,
     },
+    /// Which solid parts of the open context overlap: `ids` are its groups and components
+    /// (every one when empty), each a part with all it places at any depth. Pairs sharing a
+    /// volume, largest first; with `touching`, also pairs whose surfaces meet with no volume
+    /// in common. Parts that are not solid are skipped with why. Never changes the model.
+    Interference {
+        #[serde(default)]
+        ids: Vec<EntityId>,
+        #[serde(default)]
+        touching: bool,
+    },
+    /// How near parts come: the minimum distance between the surfaces of `a` and `b`, or of
+    /// every pair among `ids` (2 to `MAX_CLEARANCE_IDS`), with the nearest points; 0 when
+    /// they touch or overlap. Never changes the model.
+    Clearance {
+        #[serde(default)]
+        a: Option<EntityId>,
+        #[serde(default)]
+        b: Option<EntityId>,
+        #[serde(default)]
+        ids: Vec<EntityId>,
+    },
     Camera {},
     /// Where the model stands (see `set_location`).
     Location {},
@@ -100,6 +121,54 @@ pub enum Query {
     Library {
         folder: String,
     },
+}
+
+/// Most parts a `clearance` query compares pairwise.
+pub const MAX_CLEARANCE_IDS: usize = 200;
+
+/// Two overlapping parts: the volume they share in cubic meters of the open context and a
+/// point inside it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct InterferencePair {
+    pub a: EntityId,
+    pub b: EntityId,
+    pub volume: f64,
+    pub point: [f64; 3],
+}
+
+/// Two parts whose surfaces meet (at `point`) with no volume in common.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TouchingPair {
+    pub a: EntityId,
+    pub b: EntityId,
+    pub point: [f64; 3],
+}
+
+/// A pair whose overlap could not be measured, and why.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct FailedPair {
+    pub a: EntityId,
+    pub b: EntityId,
+    pub reason: String,
+}
+
+/// A part left out because it is not a solid part, and why.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SkippedPart {
+    pub id: EntityId,
+    pub reason: String,
+}
+
+/// The minimum distance between two parts' surfaces and the nearest point on each; 0 when
+/// they touch or overlap (`overlap` says they share a volume).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ClearancePair {
+    pub a: EntityId,
+    pub b: EntityId,
+    pub distance: f64,
+    pub point_a: [f64; 3],
+    pub point_b: [f64; 3],
+    pub overlap: bool,
 }
 
 /// An axis-aligned box, bounds included.
@@ -642,6 +711,23 @@ pub enum QueryResult {
         volume: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+    },
+    /// The `interference` query: overlapping pairs, largest volume first; `touching` only
+    /// when asked; `failed` only when a pair's overlap could not be measured.
+    Interference {
+        pairs: Vec<InterferencePair>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        touching: Option<Vec<TouchingPair>>,
+        skipped: Vec<SkippedPart>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        failed: Vec<FailedPair>,
+        revision: u64,
+    },
+    /// The `clearance` query: one entry per pair of solid parts, in the order asked.
+    Clearance {
+        pairs: Vec<ClearancePair>,
+        skipped: Vec<SkippedPart>,
+        revision: u64,
     },
     /// The view: `up` is the screen's up direction (+Z, except in a view straight down or
     /// up); `view_height` is the height the view spans at the target (in a parallel view, the

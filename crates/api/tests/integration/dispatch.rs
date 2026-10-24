@@ -298,6 +298,8 @@ fn describe_lists_methods_and_schemas() {
         "units",
         "section_planes",
         "section_display",
+        "interference",
+        "clearance",
     ] {
         assert!(
             query_schema.contains(variant),
