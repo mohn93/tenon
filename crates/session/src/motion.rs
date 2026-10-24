@@ -169,24 +169,38 @@ impl Motion {
     /// A copy of `scene` with the instances moved to where they are at `t` (0 to 1, not
     /// eased) and then the joints driven to their values at `t` (parts they move go along,
     /// couplings and cam followers solved); an instance `scene` lacks is skipped, and joints
-    /// that cannot be met at `t` stay where they were.
+    /// that cannot be met at `t` stay where `scene` has them.
     pub fn scene_at(&self, scene: &Scene, t: f64) -> Scene {
-        let mut out = scene.clone();
+        self.scene_after(scene, None, t)
+    }
+
+    /// [`Motion::scene_at`] solved on from `last`, a frame of this motion over `scene` drawn
+    /// before (None: the first frame, solved from `scene`): the joints are driven from where
+    /// that frame had them, a small step, rather than from `scene`'s pose. Joints that cannot
+    /// be met at `t` keep `last`'s pose.
+    pub fn scene_after(&self, scene: &Scene, last: Option<&Scene>, t: f64) -> Scene {
+        let joints_move = self.joints.iter().any(|(_, a, b)| a != b);
+        let mut out = match last {
+            Some(frame) if joints_move => frame.clone(),
+            _ => scene.clone(),
+        };
         for (i, a, b) in &self.moves {
             // A missing instance or a non-finite result leaves that instance where it is.
             let _ = out.set_instance_transform(MeshId::Root, *i, lerp_transform(a, b, t));
         }
-        if self.joints.iter().any(|(_, a, b)| a != b) {
+        if joints_move {
             let t = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) };
-            let values: Vec<(JointId, f64, f64)> = self
+            let values: Vec<(JointId, f64, Option<f64>)> = self
                 .joints
                 .iter()
                 .map(|(j, a, b)| {
                     let at = |x: f64, y: f64| if t >= 1.0 { y } else { x + (y - x) * t };
-                    (*j, at(a.0, b.0), at(a.1, b.1))
+                    (*j, at(a.0, b.0), Some(at(a.1, b.1)))
                 })
                 .collect();
-            let _ = out.drive_joints(&values);
+            // Values interpolated one by one need not agree (a scene storing every joint of a
+            // linkage): each is driven in turn, the last word the later joint's.
+            let _ = out.drive_frame_joints(&values);
         }
         out
     }

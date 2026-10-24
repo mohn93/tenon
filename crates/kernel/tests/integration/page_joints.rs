@@ -116,7 +116,7 @@ fn drive_joints_drives_in_turn_through_couplings_and_is_all_or_nothing() {
     .unwrap();
     let before = s.clone();
     let change = s
-        .drive_joints(&[(a, FRAC_PI_2, 0.0), (b, FRAC_PI_2 * 2.0, 0.0)])
+        .drive_joints(&[(a, FRAC_PI_2, None), (b, FRAC_PI_2 * 2.0, None)])
         .unwrap();
     assert!((value(&s, a) - FRAC_PI_2).abs() < 1e-9);
     assert!((value(&s, b) - 2.0 * FRAC_PI_2).abs() < 1e-9);
@@ -127,7 +127,7 @@ fn drive_joints_drives_in_turn_through_couplings_and_is_all_or_nothing() {
     limited.limits = Some((-2.0, 2.0));
     s.change_joint(a, limited).unwrap();
     let before = s.clone();
-    let err = s.drive_joints(&[(a, 1.0, 0.0), (b, 5.0, 0.0)]);
+    let err = s.drive_joints(&[(a, 1.0, None), (b, 5.0, None)]);
     assert!(err.is_err());
     assert!(s == before);
 }

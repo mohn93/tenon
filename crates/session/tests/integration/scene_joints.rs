@@ -448,3 +448,156 @@ fn render_frames_solve_joints_without_changing_the_document() {
     assert_eq!(err.kind, ErrorKind::InvalidInput);
     assert!(err.message.contains("limits"), "{}", err.message);
 }
+
+#[test]
+fn render_values_a_coupling_does_not_allow_are_refused() {
+    let mut d = doc();
+    let r = rig(&mut d);
+    ok(
+        &mut d,
+        json!({"type": "add_coupling", "driver": r.ja, "driven": r.jb, "ratio": 0.5}),
+    );
+    let ja: JointId = serde_json::from_value(r.ja.clone()).unwrap();
+    let jb: JointId = serde_json::from_value(r.jb.clone()).unwrap();
+    // The cam's 0 turns the crank back off its 90, whichever order they are given in.
+    for values in [[(ja, 90.0), (jb, 0.0)], [(jb, 0.0), (ja, 90.0)]] {
+        let err = d.scene_with_joints(d.scene().clone(), &values).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::InvalidInput);
+        assert!(
+            err.message.contains("cannot stand at 90 degrees"),
+            "{}",
+            err.message
+        );
+    }
+    // Values it allows render.
+    let frame = d
+        .scene_with_joints(d.scene().clone(), &[(jb, 45.0), (ja, 90.0)])
+        .unwrap();
+    assert!((frame.joint(jb).unwrap().value - 45f64.to_radians()).abs() < 1e-9);
+    // A scene that stored values before the coupling came cannot be gone to now.
+    let mut d = doc();
+    let r = rig(&mut d);
+    drive(&mut d, &r.ja, 90.0);
+    let s = scene_id(&ok(&mut d, json!({"type": "add_scene", "joints": true})));
+    drive(&mut d, &r.ja, 0.0);
+    ok(
+        &mut d,
+        json!({"type": "add_coupling", "driver": r.ja, "driven": r.jb, "ratio": 0.5, "offset": 0}),
+    );
+    let before = (transform(&d, &r.a), transform(&d, &r.b));
+    let e = run(&mut d, json!({"type": "go_to_scene", "scene": s})).unwrap_err();
+    assert_eq!(e.0, ErrorKind::InvalidInput, "{}", e.1);
+    assert!(e.1.contains("cannot stand at 90 degrees"), "{}", e.1);
+    assert_eq!((transform(&d, &r.a), transform(&d, &r.b)), before);
+}
+
+/// A joint through `add_joint`; its id.
+fn joint_cmd(
+    d: &mut Document,
+    kind: &str,
+    a: Option<&Value>,
+    b: &Value,
+    point: glam::DVec3,
+    axis: glam::DVec3,
+    reference: glam::DVec3,
+) -> Value {
+    let mut cmd = json!({"type": "add_joint", "kind": kind, "b": b, "point": point.to_array(),
+        "axis": axis.to_array(), "reference": reference.to_array()});
+    if let Some(a) = a {
+        cmd["a"] = a.clone();
+    }
+    ok(d, cmd)["changes"]["joints"][0].clone()
+}
+
+/// A V6 along X: a crank turning about X, per cylinder a rod on a crank pin (pins 120 degrees
+/// apart, shared in pairs) and a piston sliding along its bank's bore (+/-30 degrees from Z),
+/// and a cam shaft coupled 1:2 to the crank. The crank's joint.
+fn v6(d: &mut Document) -> Value {
+    use glam::DVec3;
+    use std::f64::consts::{PI, TAU};
+    let (r, l) = (0.04, 0.14);
+    let mut n = 0.0;
+    let mut part = |d: &mut Document| {
+        n += 1.0;
+        ok(
+            d,
+            json!({"type": "add_box", "corner": [n, 5.0, 5.0], "size": [0.01, 0.01, 0.01]}),
+        )["placed"][0]
+            .clone()
+    };
+    let crank = part(d);
+    let crank_joint = joint_cmd(d, "revolute", None, &crank, DVec3::ZERO, DVec3::X, DVec3::Z);
+    for c in 0..6 {
+        let (rod, piston) = (part(d), part(d));
+        let throw = (c / 2) as f64 * TAU / 3.0;
+        let bank = if c % 2 == 0 { PI / 6.0 } else { -PI / 6.0 };
+        let base = DVec3::new(0.1 * c as f64, 0.0, 0.0);
+        let pin = base + DVec3::new(0.0, r * throw.sin(), r * throw.cos());
+        let dir = DVec3::new(0.0, bank.sin(), bank.cos());
+        let rel = pin - base;
+        let along = rel.dot(dir) + (l * l - rel.length_squared() + rel.dot(dir).powi(2)).sqrt();
+        let wrist = base + dir * along;
+        joint_cmd(d, "revolute", Some(&crank), &rod, pin, DVec3::X, DVec3::Z);
+        joint_cmd(
+            d,
+            "revolute",
+            Some(&rod),
+            &piston,
+            wrist,
+            DVec3::X,
+            DVec3::Z,
+        );
+        joint_cmd(d, "prismatic", None, &piston, wrist, dir, DVec3::X);
+    }
+    let cam = part(d);
+    let cam_joint = joint_cmd(
+        d,
+        "revolute",
+        None,
+        &cam,
+        DVec3::new(0.0, 0.1, 0.2),
+        DVec3::X,
+        DVec3::Z,
+    );
+    ok(
+        d,
+        json!({"type": "add_coupling", "driver": crank_joint, "driven": cam_joint, "ratio": 0.5}),
+    );
+    crank_joint
+}
+
+#[test]
+fn transition_frames_solve_on_from_the_last_frame() {
+    let mut d = doc();
+    let crank = v6(&mut d);
+    let s = scene_id(&ok(&mut d, json!({"type": "add_scene", "joints": [crank]})));
+    drive(&mut d, &crank, 270.0);
+    let id: PageId = serde_json::from_value(s.clone()).unwrap();
+    let motion = d.motion_between(None, id).unwrap();
+    // As the window does: the document goes to the scene, then the frames run from 270 to 0.
+    ok(&mut d, json!({"type": "go_to_scene", "scene": s}));
+    let poses = |scene: &kernel::Scene| -> Vec<DAffine3> {
+        scene.root().instances().map(|(_, i)| i.transform).collect()
+    };
+    let steps = kernel::solve_steps_taken();
+    let mut last: Option<kernel::Scene> = None;
+    let mut frames = Vec::new();
+    for k in 0..=20 {
+        let t = f64::from(k) / 20.0;
+        let frame = motion.scene_after(d.scene(), last.as_ref(), t);
+        frames.push(poses(&frame));
+        last = Some(frame);
+    }
+    let taken = kernel::solve_steps_taken() - steps;
+    // The first frame drives 270 degrees from the document (27 steps); each later one 13.5
+    // (2 steps). Driving each from the document would take some 290.
+    assert!(taken <= 27 + 20 * 2, "{taken} steps");
+    // The poses are the one-shot solve's.
+    for k in [5u32, 10, 15, 20] {
+        let t = f64::from(k) / 20.0;
+        let once = poses(&motion.scene_at(d.scene(), t));
+        for (a, b) in frames[k as usize].iter().zip(&once) {
+            assert!(a.abs_diff_eq(*b, 1e-6), "frame {k}: {a:?} vs {b:?}");
+        }
+    }
+}

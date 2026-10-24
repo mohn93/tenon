@@ -51,7 +51,8 @@ fn joint_row(ui: &mut Ui, row: &JointRow, units: Units, actions: &mut Vec<UiActi
     let info = &row.info;
     let angular = info.kind.is_angular();
     ui.horizontal(|ui| {
-        let delete = ui.available_width() - 28.0 - if info.kind.has_value() { 28.0 } else { 0.0 };
+        let play = info.kind.has_value() && !row.follows;
+        let delete = ui.available_width() - 28.0 - if play { 28.0 } else { 0.0 };
         let name = ui.add(
             egui::Button::selectable(row.selected, &info.name)
                 .truncate()
@@ -73,7 +74,7 @@ fn joint_row(ui: &mut Ui, row: &JointRow, units: Units, actions: &mut Vec<UiActi
             kind_name(info.kind).to_string()
         };
         ui.label(RichText::new(shown).weak());
-        if info.kind.has_value()
+        if play
             && widgets::icon_button(
                 ui,
                 icons::PLAY,

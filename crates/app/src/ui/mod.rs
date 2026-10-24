@@ -541,6 +541,8 @@ pub struct SceneRow {
 pub struct JointRow {
     pub info: session::JointInfo,
     pub selected: bool,
+    /// The joint follows a cam: its value comes from the cam, so it has no Play button.
+    pub follows: bool,
 }
 
 /// A material's texture as the Materials list shows it.

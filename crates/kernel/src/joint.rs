@@ -185,6 +185,24 @@ pub struct Coupling {
     pub offset: f64,
 }
 
+/// The least and greatest size of a coupling's ratio (in the joints' own units) between two
+/// joints that both turn or both slide: a 1000:1 gearbox either way.
+pub const COUPLING_RATIO_LIKE: (f64, f64) = (1e-3, 1e3);
+
+/// The least and greatest size of a coupling's ratio (meters per radian, or radians per meter)
+/// between a joint that turns and one that slides: a rack on a pinion of a micrometer's to a
+/// kilometer's radius.
+pub const COUPLING_RATIO_MIXED: (f64, f64) = (1e-6, 1e6);
+
+/// The least and greatest size of a coupling's ratio from a `driver` joint to a `driven` one.
+pub fn coupling_ratio_range(driver: JointKind, driven: JointKind) -> (f64, f64) {
+    if driver.is_angular() == driven.is_angular() {
+        COUPLING_RATIO_LIKE
+    } else {
+        COUPLING_RATIO_MIXED
+    }
+}
+
 /// Fails, saying why, when a joint name is blank (after trimming) or too long.
 pub(crate) fn check_name(name: &str) -> Result<(), String> {
     let name = name.trim();
@@ -322,7 +340,8 @@ impl Scene {
     }
 
     /// Why `coupling` is not valid, if it is not: a ratio that is not finite or is zero, an
-    /// offset that is not finite, a joint that does not exist or has no value (fixed, ball),
+    /// offset that is not finite, a joint that does not exist or has no value (fixed, ball), a
+    /// ratio outside [`coupling_ratio_range`],
     /// the same joint twice, a joint that follows a cam, or two joints another coupling (but
     /// `except`) already couples.
     pub(crate) fn coupling_problem(
@@ -346,6 +365,16 @@ impl Scene {
             if !joint.kind.has_value() {
                 return Err(format!(
                     "the {label} joint {id} is fixed or ball: it has no value to couple"
+                ));
+            }
+        }
+        let kind = |id: JointId| self.joint(id).map(|j| j.kind);
+        if let (Some(from), Some(to)) = (kind(coupling.driver), kind(coupling.driven)) {
+            let (lo, hi) = coupling_ratio_range(from, to);
+            if !(lo..=hi).contains(&coupling.ratio.abs()) {
+                return Err(format!(
+                    "a coupling's ratio must be from {lo} to {hi} in size (in the joints' own \
+                     units: radians or meters)"
                 ));
             }
         }

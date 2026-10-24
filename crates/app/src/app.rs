@@ -2667,6 +2667,7 @@ impl State {
             .into_iter()
             .map(|info| JointRow {
                 selected: self.editor.joint_selected(&info),
+                follows: self.editor.doc().scene().follower_of(info.id).is_some(),
                 info,
             })
             .collect();

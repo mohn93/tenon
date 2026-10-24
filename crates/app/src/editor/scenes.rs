@@ -16,8 +16,16 @@ pub(super) struct Transition {
 }
 
 enum Kind {
-    Motion(Box<Motion>),
+    Motion(Box<Glide>),
     Play(Play),
+}
+
+/// A scene transition that moves parts.
+struct Glide {
+    motion: Motion,
+    /// The frame drawn last, its joints solved at their values then: each frame solves on
+    /// from it, a small step, rather than from the document's pose (None before the first).
+    frame: Option<kernel::Scene>,
 }
 
 /// A joint played from one value to another (radians or meters).
@@ -26,9 +34,14 @@ struct Play {
     from: f64,
     to: f64,
     looping: bool,
+    /// A copy of the model with the joint at `from`: a looping play starts each pass again
+    /// from it rather than driving back over the whole range.
+    start: Box<kernel::Scene>,
     /// The frame drawn last, a copy of the model with the joint at its value then: each frame
     /// solves on from it, a small step, rather than from the document's pose.
-    frame: Option<Box<kernel::Scene>>,
+    frame: Box<kernel::Scene>,
+    /// How far along the pass (0 to 1) the last frame was.
+    along: f64,
 }
 
 /// The longest a play may take, in seconds.
@@ -85,30 +98,35 @@ impl Editor {
             return None;
         }
         match &mut t.kind {
-            Kind::Motion(motion) => {
+            Kind::Motion(glide) => {
                 let eased = smoothstep(x);
-                let mut camera = motion.camera_at(eased);
+                let mut camera = glide.motion.camera_at(eased);
                 camera.viewport = self.doc.camera.viewport;
                 // A camera-only transition draws the document's scene: no copy, no model
                 // rebuild.
-                Some(TransitionFrame {
-                    camera,
-                    scene: motion
-                        .moves_parts()
-                        .then(|| motion.scene_at(self.doc.scene(), eased)),
-                })
+                let scene = glide.motion.moves_parts().then(|| {
+                    let frame =
+                        glide
+                            .motion
+                            .scene_after(self.doc.scene(), glide.frame.as_ref(), eased);
+                    glide.frame = Some(frame.clone());
+                    frame
+                });
+                Some(TransitionFrame { camera, scene })
             }
             Kind::Play(play) => {
                 let along = if looping { x.fract() } else { x };
+                if along < play.along {
+                    // A new pass starts from the start, not by driving back over the range.
+                    play.frame.clone_from(&play.start);
+                }
+                play.along = along;
                 let value = play.from + (play.to - play.from) * along;
-                let frame = play
-                    .frame
-                    .get_or_insert_with(|| Box::new(self.doc.scene().clone()));
                 // A value that cannot be met leaves the frame as the last one drew it.
-                let _ = frame.drive_joint(play.joint, value, None);
+                let _ = play.frame.drive_joint(play.joint, value, None);
                 Some(TransitionFrame {
                     camera: self.doc.camera.clone(),
-                    scene: Some((**frame).clone()),
+                    scene: Some((*play.frame).clone()),
                 })
             }
         }
@@ -147,8 +165,10 @@ impl Editor {
             return Err(invalid("seconds must be above 0 and at most 600"));
         }
         // Both ends are solved on a copy first: the play then only meets what it was told.
-        self.doc
-            .scene_with_joints(self.doc.scene().clone(), &[(joint, from), (joint, to)])?;
+        let start = self
+            .doc
+            .scene_with_joints(self.doc.scene().clone(), &[(joint, from)])?;
+        self.doc.scene_with_joints(start.clone(), &[(joint, to)])?;
         let angular = self
             .doc
             .scene()
@@ -162,7 +182,9 @@ impl Editor {
                 from: from * unit,
                 to: to * unit,
                 looping,
-                frame: None,
+                frame: Box::new(start.clone()),
+                start: Box::new(start),
+                along: 0.0,
             }),
             started: now,
             seconds,
@@ -346,7 +368,10 @@ impl Editor {
             && !motion.is_still()
         {
             self.transition = Some(Transition {
-                kind: Kind::Motion(Box::new(motion)),
+                kind: Kind::Motion(Box::new(Glide {
+                    motion,
+                    frame: None,
+                })),
                 started: now,
                 seconds: setting.seconds,
             });
@@ -842,6 +867,23 @@ mod tests {
         })
         .unwrap();
         assert!(!e.transitioning());
+    }
+
+    #[test]
+    fn a_looping_play_starts_each_pass_from_the_start_without_driving_back() {
+        use std::time::Duration;
+        let mut e = editor();
+        let (part, joint) = hinged_box(&mut e);
+        let t0 = web_time::Instant::now();
+        e.play_joint_at(joint, 0.0, 90.0, 2.0, true, t0).unwrap();
+        let at = |ms| t0 + Duration::from_millis(ms);
+        let frame = e.transition_frame(at(1900)).expect("playing");
+        assert!((turn_of(frame.scene.as_ref().unwrap(), part) - 85.5).abs() < 1e-6);
+        // Into the next pass: one small step from the start, not 9 back over the range.
+        let steps = kernel::solve_steps_taken();
+        let frame = e.transition_frame(at(2100)).expect("playing");
+        assert!((turn_of(frame.scene.as_ref().unwrap(), part) - 4.5).abs() < 1e-6);
+        assert_eq!(kernel::solve_steps_taken() - steps, 1);
     }
 
     #[test]

@@ -22,6 +22,7 @@ fn info(id: JointId, name: &str, kind: JointKind, value: f64) -> JointRow {
             axis: [0.0, 0.0, 1.0],
         },
         selected: false,
+        follows: false,
     }
 }
 
@@ -101,6 +102,16 @@ fn play_plays_the_joint() {
     let mut h = tall(joints_tab());
     assert_eq!(click(&mut h, "Play Rail"), [UiAction::PlayJoint(SLIDER)]);
     assert_eq!(click(&mut h, "Play Hinge"), [UiAction::PlayJoint(HINGE)]);
+}
+
+#[test]
+fn a_joint_that_follows_a_cam_has_no_play_button() {
+    let mut f = joints_tab();
+    f.joints[1].follows = true;
+    let h = tall(f);
+    assert!(h.query_by_label("Play Rail").is_none());
+    h.get_by_label("Play Hinge");
+    h.get_by_label("Delete Rail");
 }
 
 #[test]

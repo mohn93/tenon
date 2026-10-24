@@ -81,8 +81,8 @@ pub use import_tree::{
 };
 pub use index::{Index, Shape, ray_hits_triangle};
 pub use joint::{
-    Coupling, JOINT_NAME_BASE, Joint, JointFrame, JointKind, MAX_JOINT_NAME, measure_joint,
-    perpendicular,
+    COUPLING_RATIO_LIKE, COUPLING_RATIO_MIXED, Coupling, JOINT_NAME_BASE, Joint, JointFrame,
+    JointKind, MAX_JOINT_NAME, coupling_ratio_range, measure_joint, perpendicular,
 };
 pub use location::Location;
 pub use material::{
@@ -101,7 +101,7 @@ pub use section::SectionPlane;
 pub use section_loops::{SectionLoops, section_loops, triangulate_section};
 pub use smooth::{ShadedTriangle, SmoothNormals};
 pub use soften::SoftenReport;
-pub use solver::DRIVE_TOLERANCE;
+pub use solver::{DRIVE_TOLERANCE, MAX_DRIVE_STEPS, solve_steps_taken};
 pub use style::{
     AO_RADIUS, AO_STRENGTH, AmbientOcclusion, ENDPOINT_LENGTH, EdgeColorMode, EdgeStyle, Fog,
     FogColor, Ground, MAX_STYLE_NAME, PROFILE_WIDTH, SKETCHY_EXTENSION, SKETCHY_JITTER,

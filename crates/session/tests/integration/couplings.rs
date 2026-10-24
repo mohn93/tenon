@@ -393,3 +393,88 @@ fn a_batch_couples_joints_made_earlier_and_deletes_the_coupling() {
     );
     assert!(parse(json!({"type": "erase", "ids": ["$0:k0"]})).is_err());
 }
+
+#[test]
+fn tiny_ratios_are_refused_and_a_ten_millimeter_pinion_drives_its_rack() {
+    let mut d = doc();
+    let (_, j) = shafts(&mut d, 2);
+    for ratio in [1e-300, 1e-4, -1e-9] {
+        let e = run(
+            &mut d,
+            json!({"type": "add_coupling", "driver": j[0], "driven": j[1], "ratio": ratio}),
+        )
+        .unwrap_err();
+        assert_eq!(e.0, ErrorKind::InvalidInput, "{ratio}");
+        assert!(e.1.contains("from 0.001 to 1000"), "{}", e.1);
+    }
+    assert!(couplings(&d).is_empty());
+    // A 10 mm pinion moves its rack 0.01 m per radian: about 0.000175 m per degree.
+    let pinion = part(&mut d, 0.5);
+    let rack = part(&mut d, 0.6);
+    let jp = ground_joint(&mut d, "revolute", &pinion, 0.5, Z);
+    let jr = ground_joint(&mut d, "prismatic", &rack, 0.6, [1.0, 0.0, 0.0]);
+    let per_degree = 0.01 * 1f64.to_radians();
+    couple(&mut d, &jp, &jr, per_degree);
+    ok(&mut d, json!({"type": "drive", "joint": jp, "value": 90}));
+    near(value(&d, &jr), 0.01 * std::f64::consts::FRAC_PI_2);
+}
+
+#[test]
+fn offsets_past_half_a_turn_are_accepted_and_met() {
+    for offset in [190.0, 270.0, -270.0, 360.0] {
+        let mut d = doc();
+        let (_, j) = shafts(&mut d, 2);
+        ok(
+            &mut d,
+            json!({"type": "add_coupling", "driver": j[0], "driven": j[1], "ratio": 0.5, "offset": offset}),
+        );
+        ok(
+            &mut d,
+            json!({"type": "drive", "joint": j[0], "value": 100}),
+        );
+        let want = 50.0 + offset;
+        let off = value(&d, &j[1]) - want;
+        assert!(
+            (off - 360.0 * (off / 360.0).round()).abs() < 1e-9,
+            "{offset}: {off}"
+        );
+        let x = transforms(&d)[1].matrix3 * glam::DVec3::X;
+        let turned = x.y.atan2(x.x).to_degrees() - want;
+        assert!(
+            (turned - 360.0 * (turned / 360.0).round()).abs() < 1e-6,
+            "{offset}: {turned}"
+        );
+    }
+}
+
+#[test]
+fn a_coupling_keeps_working_after_going_to_a_scene_with_positions() {
+    let mut d = doc();
+    let (_, j) = shafts(&mut d, 2);
+    couple(&mut d, &j[0], &j[1], 0.5);
+    let s =
+        ok(&mut d, json!({"type": "add_scene", "positions": true}))["changes"]["scenes"][0].clone();
+    ok(
+        &mut d,
+        json!({"type": "drive", "joint": j[0], "value": 200}),
+    );
+    near(value(&d, &j[1]), 100.0);
+    ok(&mut d, json!({"type": "go_to_scene", "scene": s}));
+    // The parts stand as at crank 0; the values read back whichever turn is nearest.
+    for crank in [30.0, 250.0, -90.0, 0.0] {
+        ok(
+            &mut d,
+            json!({"type": "drive", "joint": j[0], "value": crank}),
+        );
+        let x = transforms(&d)[1].matrix3 * glam::DVec3::X;
+        let cam = x.y.atan2(x.x).to_degrees();
+        let off = value(&d, &j[1]) - 0.5 * value(&d, &j[0]);
+        let off = off - 360.0 * (off / 360.0).round();
+        assert!(off.abs() < 1e-6, "crank {crank}: {off}");
+        let shown = value(&d, &j[1]) - cam;
+        assert!(
+            (shown - 360.0 * (shown / 360.0).round()).abs() < 1e-6,
+            "crank {crank}: the cam stands at its value"
+        );
+    }
+}

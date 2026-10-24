@@ -396,8 +396,10 @@ impl Document {
         if let Some(stored) = &page.joints {
             // The stored joint values are then solved for, on the parts as the positions left
             // them. A pose that cannot be met refuses the whole go-to: nothing changes.
-            let values: Vec<(JointId, f64, f64)> =
-                stored.iter().map(|(j, (v, s))| (*j, *v, *s)).collect();
+            let values: Vec<(JointId, f64, Option<f64>)> = stored
+                .iter()
+                .map(|(j, (v, s))| (*j, *v, Some(*s)))
+                .collect();
             match self.scene.drive_joints(&values) {
                 Ok(change) => changes.push(change),
                 Err(e) => {

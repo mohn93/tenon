@@ -13,17 +13,25 @@
 //! A coupling between two joints of the assembly adds one residual, the driven joint's value
 //! less the ratio times the driver's less the offset, both values measured from the pose as
 //! the turn nearest their values at the start of the step (so a value counts on past a full
-//! turn: a cam coupled 1:2 to a crank turns once in two). Joints linked only through a coupling
-//! (a crank and a cam on separate shafts) are one assembly.
+//! turn: a cam coupled 1:2 to a crank turns once in two). For a driven joint that turns, the
+//! residual is taken less the whole turns that bring it nearest 0: a part stands the same
+//! after a whole turn, so the coupling holds whichever turn the driven joint's stored value
+//! counts (after going to a scene that stores positions, say, or with an offset past half a
+//! turn). Joints linked only through a coupling (a crank and a cam on separate shafts) are one
+//! assembly. A drive whose steps (of at most 10 degrees for every joint coupled to it) would
+//! number more than [`MAX_DRIVE_STEPS`] is refused before any work.
 //!
 //! A cam follower in the assembly (its joint's part is reached from the cam, or through its
 //! own joints) is met in a second pass of each step: once the other residuals are met with
 //! the parts where they stand, its residual, the follower joint's value less the value where
 //! its axis line touches the cam in the pose the first pass left it in (see [`crate::cam`]),
-//! is added and the step solved again from there; the follower does not pull on the cam. A cam the drive does not move is held where it is. A
-//! follower whose axis line misses the cam once the other joints are met refuses the drive.
+//! is added and the step solved again from there; the follower does not pull on the cam. A
+//! cam the drive does not move is held where it is. A follower whose axis line misses the cam
+//! once the other joints are met refuses the drive.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::rc::Rc;
 
 use glam::{DAffine3, DQuat, DVec3};
 
@@ -31,7 +39,7 @@ use crate::MeshId;
 use crate::bvh::Bvh;
 use crate::cam::contact;
 use crate::edit::KernelError;
-use crate::ids::{CamFollowerId, InstanceId, JointId};
+use crate::ids::{CamFollowerId, DefinitionId, InstanceId, JointId};
 use crate::joint::{
     Joint, JointFrame, JointKind, VALUE_TOLERANCE, frame_angle, frame_distance, measure_joint,
     wrap_angle,
@@ -47,6 +55,25 @@ const LIMIT_TOLERANCE: f64 = 1e-9;
 
 /// The largest turn of one drive step (10 degrees).
 const MAX_ANGLE_STEP: f64 = 10.0 * std::f64::consts::PI / 180.0;
+
+/// The most steps one drive may take: more is refused before any work (a ratio coupling a
+/// joint that turns many times for each turn of the driven one, or a drive of many turns).
+pub const MAX_DRIVE_STEPS: usize = 20_000;
+
+/// How close (radians or meters) a joint of [`Scene::drive_joints`] must stand to its value
+/// once every joint of the call is driven.
+const HELD_TOLERANCE: f64 = 1e-6;
+
+thread_local! {
+    /// How many drive steps this thread has solved.
+    static STEPS_SOLVED: Cell<u64> = const { Cell::new(0) };
+}
+
+/// How many drive steps (see [`Scene::drive_joint`]) this thread has solved so far: tests
+/// measure the work a sequence of drives does.
+pub fn solve_steps_taken() -> u64 {
+    STEPS_SOLVED.with(Cell::get)
+}
 
 /// How many steps a sliding drive is taken in.
 const SLIDE_STEPS: usize = 10;
@@ -99,7 +126,8 @@ struct Rider {
     link: usize,
     cam: Body,
     cam_id: InstanceId,
-    tree: Bvh,
+    /// Shared by the riders of one cam definition.
+    tree: Rc<Bvh>,
     preload: f64,
     roller_radius: f64,
     /// The cam's pose once the other residuals are met: the second pass touches the cam
@@ -291,6 +319,7 @@ impl System {
     /// Solves one step: the joints and couplings, then (with any riders) everything again
     /// with the riders' residuals.
     fn solve_step(&mut self, target: Target) -> Outcome {
+        STEPS_SOLVED.with(|n| n.set(n.get() + 1));
         let met = |cost: f64| !cost.is_nan() && cost.sqrt() <= DRIVE_TOLERANCE;
         self.riding = false;
         if !met(self.solve(target)) {
@@ -331,11 +360,17 @@ impl System {
         measure_joint(link.kind, &a, &b, value, slide).0
     }
 
-    /// The residual of a coupling with the parts at `pose`: zero when it holds.
+    /// The residual of a coupling with the parts at `pose`: zero when it holds. A driven joint
+    /// that turns compares less whole turns, the residual in [-pi, pi].
     fn bond_residual(&self, bond: &Bond, pose: &dyn Fn(Body) -> DAffine3) -> f64 {
-        self.link_value(bond.driven, pose)
+        let r = self.link_value(bond.driven, pose)
             - bond.ratio * self.link_value(bond.driver, pose)
-            - bond.offset
+            - bond.offset;
+        if self.links[bond.driven].kind.is_angular() {
+            wrap_angle(r)
+        } else {
+            r
+        }
     }
 
     /// The normal equations `J^T J` (row-major, 6 unknowns per part) and `J^T r` at the
@@ -667,6 +702,13 @@ impl Scene {
             .collect();
         let steps =
             drive_steps(&driven, value, slide).max(system.coupled_steps(value - driven.value));
+        if steps > MAX_DRIVE_STEPS {
+            return Err(refuse(format!(
+                "driving to {} would take more than {MAX_DRIVE_STEPS} steps (of at most 10 \
+                 degrees for the joint and every joint coupled to it): drive it in smaller moves",
+                shown(driven.kind, value)
+            )));
+        }
         let unmet = || {
             refuse(format!(
                 "the joints cannot all be met at {}",
@@ -772,33 +814,100 @@ impl Scene {
         Ok(change)
     }
 
-    /// Drives each joint of `values` (id, value, slide: radians or meters) in turn, as
-    /// [`Scene::drive_joint`] does; the joints that follow a cam, and those that no longer
-    /// exist or have no value, are skipped. The steps, applied. A joint that cannot be driven
-    /// refuses the whole call and changes nothing.
+    /// Drives each joint of `values` (id, value, slide: radians or meters; no slide keeps it)
+    /// in turn, as [`Scene::drive_joint`] does, in the order of their ids (a joint named twice
+    /// takes its last value); the joints that follow a cam, and those that no longer exist or
+    /// have no value, are skipped. Once all are driven, each must still stand at its value
+    /// (within 1e-6; an angle of a coupled joint a whole number of turns off counts): a later
+    /// drive that moved an earlier joint (two coupled joints asked for values the coupling does
+    /// not allow) refuses. The steps, applied. A joint that cannot be driven or held refuses
+    /// the whole call and changes nothing.
     pub fn drive_joints(
         &mut self,
-        values: &[(JointId, f64, f64)],
+        values: &[(JointId, f64, Option<f64>)],
     ) -> Result<SceneChange, KernelError> {
+        self.drive_joints_held(values, true)
+    }
+
+    /// [`Scene::drive_joints`] without the check that each joint still stands at its value
+    /// at the end: a frame between two sets of joint values (a scene transition), where
+    /// values interpolated one by one need not agree with each other.
+    pub fn drive_frame_joints(
+        &mut self,
+        values: &[(JointId, f64, Option<f64>)],
+    ) -> Result<SceneChange, KernelError> {
+        self.drive_joints_held(values, false)
+    }
+
+    fn drive_joints_held(
+        &mut self,
+        values: &[(JointId, f64, Option<f64>)],
+        held: bool,
+    ) -> Result<SceneChange, KernelError> {
+        let wanted: BTreeMap<JointId, (f64, Option<f64>)> = values
+            .iter()
+            .filter(|(id, _, _)| {
+                self.joint(*id).is_some_and(|j| j.kind.has_value())
+                    && self.follower_of(*id).is_none()
+            })
+            .map(|(id, v, s)| (*id, (*v, *s)))
+            .collect();
         let mut changes: Vec<SceneChange> = Vec::new();
-        for (id, value, slide) in values {
-            let Some(joint) = self.joint(*id) else {
-                continue;
-            };
-            if !joint.kind.has_value() || self.follower_of(*id).is_some() {
-                continue;
-            }
-            let slide = (joint.kind == JointKind::Cylindrical).then_some(*slide);
-            match self.drive_joint(*id, *value, slide) {
+        let mut result = Ok(());
+        for (id, (value, slide)) in &wanted {
+            let cylindrical = self.joints[id].kind == JointKind::Cylindrical;
+            match self.drive_joint(*id, *value, slide.filter(|_| cylindrical)) {
                 Ok(change) => changes.push(change),
                 Err(e) => {
-                    let done = SceneChange::join(changes);
-                    self.apply(&done.inverse());
-                    return Err(e);
+                    result = Err(e);
+                    break;
                 }
             }
         }
-        Ok(SceneChange::join(changes))
+        if held && result.is_ok() {
+            result = self.check_joint_values(&wanted);
+        }
+        let done = SceneChange::join(changes);
+        if let Err(e) = result {
+            self.apply(&done.inverse());
+            return Err(e);
+        }
+        Ok(done)
+    }
+
+    /// Fails, naming the first, when a joint of `wanted` (value, slide: radians or meters; no
+    /// slide is not checked) does not stand at its value within [`HELD_TOLERANCE`]; an angle of
+    /// a coupled joint compares less whole turns.
+    fn check_joint_values(
+        &self,
+        wanted: &BTreeMap<JointId, (f64, Option<f64>)>,
+    ) -> Result<(), KernelError> {
+        for (id, (value, slide)) in wanted {
+            let j = &self.joints[id];
+            let coupled = self
+                .couplings()
+                .any(|(_, c)| c.driver == *id || c.driven == *id);
+            let off = j.value - value;
+            let off = if coupled && j.kind.is_angular() {
+                wrap_angle(off)
+            } else {
+                off
+            };
+            let slid = match slide {
+                Some(s) if j.kind == JointKind::Cylindrical => (j.slide - s).abs(),
+                _ => 0.0,
+            };
+            if off.abs() > HELD_TOLERANCE || slid > HELD_TOLERANCE {
+                return Err(refuse(format!(
+                    "joint {:?} cannot stand at {} with the other values asked for: driving \
+                     the others (through its couplings) moved it to {}",
+                    j.name,
+                    shown(j.kind, *value),
+                    shown(j.kind, j.value)
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// The parts connected to `driven` through joints (not through the ground) and couplings,
@@ -898,17 +1007,23 @@ impl Scene {
                 })
             })
             .collect();
+        // One tree per cam definition, however many followers ride on it.
+        let mut trees: BTreeMap<DefinitionId, Rc<Bvh>> = BTreeMap::new();
         let riders: Vec<Rider> = self
             .cam_followers()
             .filter_map(|(w, c)| {
                 let link = *link_index.get(&c.follower)?;
                 let cam = self.root().instance(c.cam)?;
+                let tree = trees
+                    .entry(cam.definition)
+                    .or_insert_with(|| Rc::new(self.cam_tree(cam.definition)))
+                    .clone();
                 Some(Rider {
                     id: w,
                     link,
                     cam: body(Some(c.cam)),
                     cam_id: c.cam,
-                    tree: self.cam_tree(cam.definition),
+                    tree,
                     preload: c.preload,
                     roller_radius: c.roller_radius,
                     frozen: None,

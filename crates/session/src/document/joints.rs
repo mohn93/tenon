@@ -36,6 +36,16 @@ fn unit(kind: JointKind) -> f64 {
     }
 }
 
+/// A bound as people read it: plain down to a thousandth, in e notation below.
+fn short(x: f64) -> String {
+    if x >= 1e-3 {
+        let text = format!("{x:.6}");
+        text.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        format!("{x:.3e}")
+    }
+}
+
 fn invalid(why: impl Into<String>) -> CommandError {
     CommandError::new(ErrorKind::InvalidInput, why)
 }
@@ -176,17 +186,19 @@ impl Document {
             .map_err(|e| joint_error(e, Some(id)))
     }
 
-    /// `scene` with each joint of `values` driven in turn to its value (degrees or meters) and
-    /// the parts connected to it moved, couplings and cam followers solved: the frame a render
-    /// at those joint values draws. The document is not changed. `not_found` for a joint that
-    /// is not there; `invalid_input` for a value that cannot be met (outside the joint's
-    /// limits, or the joints cannot all hold there), a joint with no value, or one that
-    /// follows a cam.
+    /// `scene` with each joint of `values` driven to its value (degrees or meters), in the
+    /// order of their ids, and the parts connected to it moved, couplings and cam followers
+    /// solved: the frame a render at those joint values draws. The document is not changed.
+    /// `not_found` for a joint that is not there; `invalid_input` for a value that cannot be
+    /// met (outside the joint's limits, the joints cannot all hold there, or a later joint's
+    /// drive moves an earlier one off its value through a coupling), a joint with no value, or
+    /// one that follows a cam.
     pub fn scene_with_joints(
         &self,
         mut scene: kernel::Scene,
         values: &[(JointId, f64)],
     ) -> Result<kernel::Scene, CommandError> {
+        let mut radians = Vec::with_capacity(values.len());
         for (id, value) in values {
             let joint = self.joint_ref(*id)?;
             if !joint.kind.has_value() {
@@ -194,14 +206,20 @@ impl Document {
                     "joint {id} is fixed or ball: it has no value to set"
                 )));
             }
+            if let Some((w, c)) = self.scene.follower_of(*id) {
+                return Err(invalid(format!(
+                    "joint {id} follows cam i{} ({w}): its value comes from the cam",
+                    c.cam.0
+                )));
+            }
             if !value.is_finite() {
                 return Err(invalid("joint values must be finite numbers"));
             }
-            let value = value * unit(joint.kind);
-            scene
-                .drive_joint(*id, value, None)
-                .map_err(|e| joint_error(e, Some(*id)))?;
+            radians.push((*id, value * unit(joint.kind), None));
         }
+        scene
+            .drive_joints(&radians)
+            .map_err(|e| joint_error(e, None))?;
         Ok(scene)
     }
 
@@ -215,15 +233,20 @@ impl Document {
         offset: Option<f64>,
     ) -> Result<SceneChange, CommandError> {
         let (driver_joint, driven_joint) = (self.joint_ref(driver)?, self.joint_ref(driven)?);
-        if !ratio.is_finite() || ratio == 0.0 || ratio.abs() > MAX_COUPLING_RATIO {
+        let (from, to) = (unit(driver_joint.kind), unit(driven_joint.kind));
+        // The kernel's bounds, in these joints' API units, and never above the API's own.
+        let (lo, hi) = kernel::coupling_ratio_range(driver_joint.kind, driven_joint.kind);
+        let (lo, hi) = (lo * from / to, (hi * from / to).min(MAX_COUPLING_RATIO));
+        if !ratio.is_finite() || ratio.abs() < lo || ratio.abs() > hi {
             return Err(invalid(format!(
-                "ratio must be a finite number other than 0, at most {MAX_COUPLING_RATIO} in size"
+                "ratio must be a finite number from {} to {} in size for these joints",
+                short(lo),
+                short(hi)
             )));
         }
         if offset.is_some_and(|o| !o.is_finite()) {
             return Err(invalid("offset must be a finite number"));
         }
-        let (from, to) = (unit(driver_joint.kind), unit(driven_joint.kind));
         let ratio = ratio * (to / from);
         let offset = match offset {
             Some(o) => o * to,

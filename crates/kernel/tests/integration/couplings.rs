@@ -412,3 +412,116 @@ fn perf_a_v6_with_two_coupled_cams_turns_720_degrees() {
     eprintln!("720 degree drive with two cams: {:.1} ms", took * 1e3);
     assert!(took < 0.25, "{took}");
 }
+
+#[test]
+fn ratios_too_small_or_too_large_are_refused_and_a_small_pinion_is_not() {
+    for ratio in [1e-300, -1e-300, 1e-4, 2000.0, -1e300] {
+        let (mut s, _, [jc, jm]) = two_shafts();
+        let before = s.clone();
+        let e = s
+            .add_coupling(Coupling {
+                driver: jc,
+                driven: jm,
+                ratio,
+                offset: 0.0,
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("ratio"), "{ratio}: {e}");
+        assert_eq!(s, before);
+    }
+    // 1000:1 either way is a gearbox.
+    for ratio in [1e-3, -1e3] {
+        let (mut s, _, [jc, jm]) = two_shafts();
+        couple(&mut s, jc, jm, ratio, 0.0);
+    }
+    // A rack on a 10 mm pinion: 0.01 m per radian.
+    let (mut s, ids) = parts(2);
+    let jp = join(
+        &mut s,
+        JointKind::Revolute,
+        None,
+        ids[0],
+        DVec3::ZERO,
+        DVec3::Z,
+        DVec3::X,
+    );
+    let jr = join(
+        &mut s,
+        JointKind::Prismatic,
+        None,
+        ids[1],
+        p(0.0, -0.01, 0.0),
+        DVec3::X,
+        DVec3::Y,
+    );
+    couple(&mut s, jp, jr, 0.01, 0.0);
+    s.drive_joint(jp, deg(90.0), None).unwrap();
+    assert_near(value(&s, jr), 0.01 * PI / 2.0, "rack");
+}
+
+#[test]
+fn a_drive_needing_too_many_steps_is_refused_before_any_work() {
+    let (mut s, _, [jc, jm]) = two_shafts();
+    couple(&mut s, jc, jm, 1000.0, 0.0);
+    let before = s.clone();
+    let steps = kernel::solve_steps_taken();
+    let t = Instant::now();
+    // 1000 degrees of crank turn the cam a million: 100000 steps of 10 degrees.
+    let e = s
+        .drive_joint(jc, deg(1000.0), None)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("20000 steps"), "{e}");
+    // So does driving the cam back through a ratio that turns the crank many times.
+    let e = s.drive_joint(jm, deg(-1e7), None).unwrap_err().to_string();
+    assert!(e.contains("steps"), "{e}");
+    // And a drive of many turns on its own.
+    let (mut lone, _, [jl, _]) = two_shafts();
+    assert!(lone.drive_joint(jl, deg(200_010.0), None).is_err());
+    assert_eq!(kernel::solve_steps_taken(), steps, "no step was solved");
+    assert!(t.elapsed().as_secs_f64() < 1.0);
+    assert_eq!(s, before);
+    // Within the limit it drives: 10 degrees of crank turn the cam 10000.
+    s.drive_joint(jc, deg(10.0), None).unwrap();
+    assert_near(value(&s, jm), deg(10_000.0), "cam");
+}
+
+#[test]
+fn offsets_past_half_a_turn_are_met() {
+    for offset in [190.0, 270.0, -270.0, 360.0] {
+        let (mut s, [_, cam], [jc, jm]) = two_shafts();
+        couple(&mut s, jc, jm, 0.5, deg(offset));
+        for crank in [60.0, 400.0, -100.0] {
+            s.drive_joint(jc, deg(crank), None)
+                .unwrap_or_else(|e| panic!("offset {offset}, crank {crank}: {e}"));
+            let want = deg(0.5 * crank + offset);
+            let off = value(&s, jm) - want;
+            let off = off - std::f64::consts::TAU * (off / std::f64::consts::TAU).round();
+            assert!(off.abs() < 1e-9, "offset {offset}, crank {crank}: {off}");
+            assert!(
+                transform(&s, cam).abs_diff_eq(turned_about(CAM_AT, want), 1e-9),
+                "offset {offset}, crank {crank}"
+            );
+        }
+    }
+}
+
+#[test]
+fn driven_values_a_coupling_does_not_allow_are_refused_together() {
+    let (mut s, _, [jc, jm]) = two_shafts();
+    couple(&mut s, jc, jm, 0.5, 0.0);
+    let before = s.clone();
+    // Driving the cam to 0 after the crank to 90 turns the crank back: refused, nothing moved.
+    let e = s
+        .drive_joints(&[(jm, 0.0, None), (jc, deg(90.0), None)])
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("cannot stand at 90 degrees"), "{e}");
+    assert_eq!(s, before);
+    // Values the coupling allows go, in either order given.
+    s.drive_joints(&[(jm, deg(45.0), None), (jc, deg(90.0), None)])
+        .unwrap();
+    assert_near(value(&s, jc), deg(90.0), "crank");
+    assert_near(value(&s, jm), deg(45.0), "cam");
+}
