@@ -35,11 +35,13 @@ pub const FORMAT: &str = "sketchup-alt";
 /// and the style a view chooses, and version 19 material metalness and roughness, and version
 /// 20 studio lighting, and version 21 ambient occlusion in a style, and version 22 the material
 /// section fill and instances left whole by section planes, version 23 the instance positions a
-/// scene stores, and version 24 the scene transition setting; older files still open
+/// scene stores, and version 24 the scene transition setting, and version 25 material density; older files still open
 /// (untagged before version 10, without scenes before version 11, without annotations and in
 /// the default units before version 12, without section planes and with the default section
 /// display before version 13).
-pub const SCHEMA_VERSION: u32 = 24;
+pub const SCHEMA_VERSION: u32 = 25;
+/// The version written when a material has a density.
+pub const DENSITY_SCHEMA_VERSION: u32 = 25;
 /// The version written when the scene transition is not the default.
 pub const TRANSITION_SCHEMA_VERSION: u32 = 24;
 /// The version written when a scene stores instance positions.
@@ -344,6 +346,7 @@ pub(crate) fn write_bytes(
         .materials
         .iter()
         .any(|m| m.metalness > 0.0 || m.roughness < 1.0);
+    let weighed = model.materials.iter().any(|m| m.density.is_some());
     let textured = model.materials.iter().any(|m| m.texture.is_some());
     let translucent = model.materials.iter().any(|m| m.opacity < 1.0);
     let mut images: Vec<(String, Arc<TextureImage>)> = model
@@ -358,7 +361,9 @@ pub(crate) fn write_bytes(
     images.dedup_by(|a, b| a.0 == b.0);
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: if model.transition.is_some() {
+        schema_version: if weighed {
+            DENSITY_SCHEMA_VERSION
+        } else if model.transition.is_some() {
             TRANSITION_SCHEMA_VERSION
         } else if moving_scenes {
             SCENE_POSITIONS_SCHEMA_VERSION

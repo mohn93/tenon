@@ -102,6 +102,7 @@ fn scene() -> Document {
             emission: Some(3.0),
             metalness: None,
             roughness: None,
+            density: None,
             existing: Default::default(),
         },
     )
@@ -252,6 +253,7 @@ fn time_house_renders() {
                 emission: Some(3.0),
                 metalness: None,
                 roughness: None,
+                density: None,
             },
         );
     }

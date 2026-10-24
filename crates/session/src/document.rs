@@ -1205,6 +1205,7 @@ impl Document {
                 emission,
                 metalness,
                 roughness,
+                density,
                 existing,
             } => self.add_material_changes(
                 name.as_deref(),
@@ -1212,6 +1213,7 @@ impl Document {
                 *opacity,
                 texture.as_ref(),
                 (*emission, *metalness, *roughness),
+                *density,
                 *existing,
             ),
             Command::ChangeMaterial {
@@ -1223,6 +1225,7 @@ impl Document {
                 emission,
                 metalness,
                 roughness,
+                density,
             } => self.change_material_changes(
                 *material,
                 MaterialEdit {
@@ -1233,6 +1236,7 @@ impl Document {
                     emission: *emission,
                     metalness: *metalness,
                     roughness: *roughness,
+                    density: *density,
                 },
                 texture.as_ref().map(Option::as_ref),
             ),
@@ -2656,6 +2660,45 @@ impl Document {
                         volume: None,
                         reason: Some(reason),
                     },
+                }
+            }
+            Query::MassProperties { ids } => {
+                let mut instances = Vec::new();
+                for id in ids {
+                    match id {
+                        EntityId::Instance(i) if m.instance(*i).is_some() => instances.push(*i),
+                        EntityId::Instance(_) => {
+                            return Err(self.missing_error(vec![*id], format!("no entity {id}")));
+                        }
+                        _ => {
+                            return Err(CommandError::new(
+                                ErrorKind::InvalidInput,
+                                format!("{id} is not a group or component"),
+                            )
+                            .with_ids(vec![*id]));
+                        }
+                    }
+                }
+                let report = kernel::mass::mass_report(&self.scene, m, &instances)
+                    .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e))?;
+                QueryResult::MassProperties {
+                    instances: report
+                        .instances
+                        .iter()
+                        .map(|(i, p)| crate::query::InstanceMassInfo {
+                            id: EntityId::Instance(*i),
+                            mass: p.into(),
+                        })
+                        .collect(),
+                    total: report.total.as_ref().map(Into::into),
+                    skipped: report
+                        .skipped
+                        .into_iter()
+                        .map(|s| crate::query::SkippedInfo {
+                            path: s.path,
+                            reason: s.reason,
+                        })
+                        .collect(),
                 }
             }
             Query::Camera {} => QueryResult::Camera {

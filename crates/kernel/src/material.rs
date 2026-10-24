@@ -36,7 +36,15 @@ pub struct Material {
     /// How rough the surface is, from 0 (a mirror) to 1 (matte, the default: no highlight and
     /// no reflection).
     pub roughness: f32,
+    /// The material's density in kg/m³ (`MIN_DENSITY` to `MAX_DENSITY`), used to weigh solids
+    /// painted with it; None when unknown.
+    pub density: Option<f64>,
 }
+
+/// The lowest density a material may have, in kg/m³.
+pub const MIN_DENSITY: f64 = 1.0;
+/// The highest density a material may have, in kg/m³.
+pub const MAX_DENSITY: f64 = 30_000.0;
 
 /// A material's default metalness.
 pub const DEFAULT_METALNESS: f32 = 0.0;
@@ -66,6 +74,8 @@ pub struct MaterialEdit<'a> {
     pub emission: Option<f32>,
     pub metalness: Option<f32>,
     pub roughness: Option<f32>,
+    /// `Some(None)` clears the density.
+    pub density: Option<Option<f64>>,
 }
 
 /// Which side of a face to paint.
@@ -113,6 +123,18 @@ pub(crate) fn check_unit(what: &str, value: f32) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("{what} must be a number from 0 to 1, not {value}"))
+    }
+}
+
+/// Fails, saying why, when a density is not a finite number from [`MIN_DENSITY`] to
+/// [`MAX_DENSITY`] (kg/m³).
+pub fn check_density(density: f64) -> Result<(), String> {
+    if density.is_finite() && (MIN_DENSITY..=MAX_DENSITY).contains(&density) {
+        Ok(())
+    } else {
+        Err(format!(
+            "density must be a number from {MIN_DENSITY} to {MAX_DENSITY} kg/m³, not {density}"
+        ))
     }
 }
 
@@ -227,6 +249,7 @@ impl Scene {
             emission: 0.0,
             metalness: DEFAULT_METALNESS,
             roughness: DEFAULT_ROUGHNESS,
+            density: None,
         })
     }
 
@@ -265,6 +288,9 @@ impl Scene {
         check_emission(material.emission).map_err(KernelError::MaterialEmission)?;
         check_unit("metalness", material.metalness).map_err(KernelError::MaterialFinish)?;
         check_unit("roughness", material.roughness).map_err(KernelError::MaterialFinish)?;
+        if let Some(d) = material.density {
+            check_density(d).map_err(KernelError::MaterialDensity)?;
+        }
         if let Some(t) = &material.texture {
             self.check_new_texture(t, None)?;
         }
@@ -306,6 +332,7 @@ impl Scene {
                 emission: None,
                 metalness: None,
                 roughness: None,
+                density: None,
             },
         )
     }
@@ -337,6 +364,9 @@ impl Scene {
         if let Some(r) = edit.roughness {
             check_unit("roughness", r).map_err(KernelError::MaterialFinish)?;
         }
+        if let Some(Some(d)) = edit.density {
+            check_density(d).map_err(KernelError::MaterialDensity)?;
+        }
         if let Some(Some(t)) = &edit.texture {
             self.check_new_texture(t, Some(id))?;
         }
@@ -348,6 +378,7 @@ impl Scene {
             emission: edit.emission.unwrap_or(from.emission),
             metalness: edit.metalness.unwrap_or(from.metalness),
             roughness: edit.roughness.unwrap_or(from.roughness),
+            density: edit.density.unwrap_or(from.density),
         };
         if to == from {
             return Ok(SceneChange::default());

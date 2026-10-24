@@ -20,6 +20,7 @@ use crate::texture::{
 const DEFAULT_MATERIAL_NAME: &str = "Material";
 
 impl Document {
+    #[allow(clippy::too_many_arguments)]
     /// Adds a material; without `color` it takes the texture's average color.
     pub(super) fn add_material_changes(
         &mut self,
@@ -28,6 +29,7 @@ impl Document {
         opacity: Option<f32>,
         texture: Option<&TextureSource>,
         (emission, metalness, roughness): (Option<f32>, Option<f32>, Option<f32>),
+        density: Option<f64>,
         existing: ExistingMaterial,
     ) -> Result<SceneChange, CommandError> {
         self.existing_material = None;
@@ -56,6 +58,7 @@ impl Document {
                     emission,
                     metalness,
                     roughness,
+                    density: density.map(Some),
                 },
                 texture.map(Some),
             )?;
@@ -66,6 +69,10 @@ impl Document {
             // Only the ranges of what is given are checked; a texture is not read.
             Scene::check_material_ranges(opacity, emission, metalness, roughness)
                 .map_err(|e| material_error(e, None))?;
+            if let Some(d) = density {
+                kernel::check_density(d)
+                    .map_err(|e| material_error(KernelError::MaterialDensity(e), None))?;
+            }
             self.existing_material = Some(id);
             return Ok(SceneChange::default());
         }
@@ -96,6 +103,7 @@ impl Document {
             emission: emission.unwrap_or(0.0),
             metalness: metalness.unwrap_or(DEFAULT_METALNESS),
             roughness: roughness.unwrap_or(DEFAULT_ROUGHNESS),
+            density,
         };
         self.scene
             .add_material_from(material)
@@ -205,6 +213,7 @@ impl Document {
                     emission: m.emission,
                     metalness: m.metalness,
                     roughness: m.roughness,
+                    density: m.density,
                     texture: m.texture.as_ref().map(|t| TextureInfo {
                         width: t.width,
                         height: t.height,

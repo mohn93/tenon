@@ -22,6 +22,7 @@ mod import_tree;
 mod index;
 pub mod intersect;
 mod location;
+pub mod mass;
 mod material;
 mod mesh;
 mod model;
@@ -73,8 +74,8 @@ pub use import_tree::{
 pub use index::{Index, Shape, ray_hits_triangle};
 pub use location::Location;
 pub use material::{
-    DEFAULT_METALNESS, DEFAULT_ROUGHNESS, MAX_EMISSION, MAX_MATERIAL_NAME, Material, MaterialEdit,
-    Side,
+    DEFAULT_METALNESS, DEFAULT_ROUGHNESS, MAX_DENSITY, MAX_EMISSION, MAX_MATERIAL_NAME,
+    MIN_DENSITY, Material, MaterialEdit, Side, check_density,
 };
 pub use model::{ChangeSet, ChangeSummary, Edge, Face, Guide, Instance, Model, Op, Vertex};
 pub use orient::OrientReport;

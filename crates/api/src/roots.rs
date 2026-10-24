@@ -527,6 +527,7 @@ mod tests {
                 emission: None,
                 metalness: None,
                 roughness: None,
+                density: None,
                 existing: Default::default(),
             },
             Command::ChangeMaterial {
@@ -538,6 +539,7 @@ mod tests {
                 emission: None,
                 metalness: None,
                 roughness: None,
+                density: None,
             },
         ];
         let expected = ["m.skr", "s.skr", "e.obj", "a.obj", "t.png", "t.png"];

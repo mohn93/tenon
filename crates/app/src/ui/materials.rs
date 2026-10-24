@@ -174,6 +174,38 @@ fn material_controls(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
         UiAction::SetMaterialRoughness,
         actions,
     );
+    density_field(ui, m, actions);
+}
+
+/// A material's Density field in kg/m³; 0 means none. One change when editing ends.
+fn density_field(ui: &mut Ui, m: &MaterialRow, actions: &mut Vec<UiAction>) {
+    ui.horizontal(|ui| {
+        let label = ui.label("Density");
+        let mut value = m.density.unwrap_or(0.0);
+        let r = ui
+            .add(
+                egui::DragValue::new(&mut value)
+                    .range(0.0..=kernel::MAX_DENSITY)
+                    .speed(10.0)
+                    .suffix(" kg/m³")
+                    .custom_formatter(|v, _| {
+                        if v == 0.0 {
+                            "none".into()
+                        } else {
+                            format!("{v:.0}")
+                        }
+                    })
+                    .custom_parser(|s| s.trim().parse::<f64>().ok().or(Some(0.0))),
+            )
+            .labelled_by(label.id)
+            .on_hover_text("Steel 7850, aluminium 2700, copper 8960; 0 for none");
+        if r.changed() && !r.dragged() || r.drag_stopped() {
+            let density = (value >= kernel::MIN_DENSITY).then_some(value);
+            if density != m.density {
+                actions.push(UiAction::SetMaterialDensity(m.id, density));
+            }
+        }
+    });
 }
 
 /// A material's Glow slider, its emission from 0 to 10 in tenths; like the opacity, one change

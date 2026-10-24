@@ -14,6 +14,7 @@ fn metal(metalness: f32, roughness: f32) -> Material {
         emission: 0.0,
         metalness,
         roughness,
+        density: None,
     }
 }
 

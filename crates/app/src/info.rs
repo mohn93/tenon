@@ -13,15 +13,17 @@ use session::{AnnotationShape, Document, Units, format_angle, format_length, not
 #[cfg(test)]
 pub fn entity_info(doc: &Document) -> Vec<String> {
     entity_info_with(doc, &|i| {
-        kernel::solid::instance_volume(doc.scene(), i).ok()
+        kernel::solid::instance_volume(doc.scene(), i)
+            .ok()
+            .and_then(|_| kernel::mass::instance_mass(doc.scene(), i))
     })
 }
 
-/// As `entity_info`, with `volume` giving a lone selected instance's solid volume (None: not
-/// a solid), so the window can keep the answer between frames.
+/// As `entity_info`, with `volume` giving a lone selected instance's solid volume and mass
+/// properties (None: not a solid), so the window can keep the answer between frames.
 pub fn entity_info_with(
     doc: &Document,
-    volume: &dyn Fn(&kernel::Instance) -> Option<f64>,
+    volume: &dyn Fn(&kernel::Instance) -> Option<kernel::mass::MassProps>,
 ) -> Vec<String> {
     let mut lines = editing(doc).into_iter().collect::<Vec<_>>();
     lines.extend(selection_info(doc, &doc.units(), volume));
@@ -44,7 +46,7 @@ fn editing(doc: &Document) -> Option<String> {
 fn selection_info(
     doc: &Document,
     units: &Units,
-    volume: &dyn Fn(&kernel::Instance) -> Option<f64>,
+    volume: &dyn Fn(&kernel::Instance) -> Option<kernel::mass::MassProps>,
 ) -> Vec<String> {
     let m = doc.model();
     let (mut edges, mut faces, mut instances) = (Vec::new(), Vec::new(), Vec::new());
@@ -145,7 +147,7 @@ fn selection_info(
             _ => vec!["1 group".into()],
         };
         if let (Some(d), Some(i)) = (d, instance)
-            && let Some(volume) = volume(i)
+            && let Some(props) = volume(i)
         {
             lines.push(
                 match d.kind {
@@ -154,7 +156,17 @@ fn selection_info(
                 }
                 .into(),
             );
-            lines.push(format!("Volume: {} m³", number(volume)));
+            lines.push(format!("Volume: {} m³", number(props.volume)));
+            if let Some(mass) = props.mass {
+                lines.push(format!("Mass: {} kg", number(mass)));
+                let g = props.centroid;
+                lines.push(format!(
+                    "Center of gravity: {}, {}, {}",
+                    format_length(g.x, units),
+                    format_length(g.y, units),
+                    format_length(g.z, units)
+                ));
+            }
         }
         lines.extend(instance.map_or_else(Vec::new, |i| placement(i.transform, units)));
         if let Some(material) = instance.and_then(|i| i.material) {
@@ -447,6 +459,7 @@ mod tests {
                 emission: None,
                 metalness: None,
                 roughness: None,
+                density: None,
                 existing: Default::default(),
             })
             .unwrap();
@@ -648,6 +661,42 @@ mod tests {
             .to_vec();
         d.execute(Command::MakeGroup { ids, name: None }).unwrap();
         assert_eq!(entity_info(&d), ["1 group"]);
+    }
+
+    #[test]
+    fn a_solid_with_density_shows_mass_and_center_of_gravity() {
+        let mut d = Document::new(DVec2::new(800.0, 600.0));
+        let m = d
+            .execute(
+                serde_json::from_value(serde_json::json!({
+                    "type": "add_material", "name": "Steel", "color": [9, 9, 9], "density": 1000
+                }))
+                .unwrap(),
+            )
+            .unwrap()
+            .changes
+            .materials[0];
+        let out = d
+            .execute(
+                serde_json::from_value(serde_json::json!({
+                    "type": "add_box", "corner": [0, 0, 0], "size": [2, 3, 4], "as": "group",
+                    "material": m
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        d.execute(Command::Select {
+            ids: out.placed.clone().unwrap(),
+            mode: SelectMode::Replace,
+            all: false,
+        })
+        .unwrap();
+        let lines = entity_info(&d);
+        assert!(lines.contains(&"Mass: 24000 kg".to_string()), "{lines:?}");
+        assert!(
+            lines.contains(&"Center of gravity: 1 m, 1.5 m, 2 m".to_string()),
+            "{lines:?}"
+        );
     }
 
     #[test]

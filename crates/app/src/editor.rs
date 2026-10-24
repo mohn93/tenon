@@ -274,7 +274,7 @@ pub struct Editor {
     unique_cache: RefCell<Option<UniqueCache>>,
     /// The Solid Tools items' state for the revision, context and selection (`solid_tools`).
     solid_cache: RefCell<Option<solids::SolidCache>>,
-    /// The lone selected instance's volume for the revision, context and selection (`selected_volume`).
+    /// The lone selected instance's volume for the revision, context and selection (`selected_solid`).
     volume_cache: RefCell<Option<solids::VolumeCache>>,
     /// Text typed into the measurements box, not yet submitted.
     typed: String,
@@ -658,6 +658,7 @@ impl Editor {
             emission: None,
             metalness: None,
             roughness: None,
+            density: None,
             existing: Default::default(),
         }) else {
             return true;
@@ -678,6 +679,7 @@ impl Editor {
             emission: None,
             metalness: None,
             roughness: None,
+            density: None,
         });
         true
     }
@@ -694,6 +696,7 @@ impl Editor {
             emission: None,
             metalness: None,
             roughness: None,
+            density: None,
         });
         true
     }
@@ -710,6 +713,7 @@ impl Editor {
             emission: None,
             metalness: None,
             roughness: None,
+            density: None,
         });
         true
     }
@@ -726,6 +730,7 @@ impl Editor {
             emission: Some(f32::from(tenths.min(100)) / 10.0),
             metalness: None,
             roughness: None,
+            density: None,
         });
         true
     }
@@ -742,6 +747,25 @@ impl Editor {
             emission: None,
             metalness: Some(f32::from(percent.min(100)) / 100.0),
             roughness: None,
+            density: None,
+        });
+        true
+    }
+
+    /// Sets a material's density in kg/m³ (None clears it); out-of-range values are refused
+    /// with a message.
+    pub fn set_material_density(&mut self, material: MaterialId, density: Option<f64>) -> bool {
+        self.message = None;
+        self.run(Command::ChangeMaterial {
+            material,
+            name: None,
+            color: None,
+            opacity: None,
+            texture: None,
+            emission: None,
+            metalness: None,
+            roughness: None,
+            density: Some(density),
         });
         true
     }
@@ -758,6 +782,7 @@ impl Editor {
             emission: None,
             metalness: None,
             roughness: Some(f32::from(percent.min(100)) / 100.0),
+            density: None,
         });
         true
     }
@@ -780,6 +805,7 @@ impl Editor {
             emission: None,
             metalness: None,
             roughness: None,
+            density: None,
         });
         true
     }
@@ -796,6 +822,7 @@ impl Editor {
             emission: None,
             metalness: None,
             roughness: None,
+            density: None,
         });
         true
     }
@@ -817,6 +844,7 @@ impl Editor {
             emission: None,
             metalness: None,
             roughness: None,
+            density: None,
         });
         true
     }

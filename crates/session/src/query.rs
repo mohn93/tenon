@@ -44,6 +44,18 @@ pub enum Query {
     Solid {
         id: EntityId,
     },
+    /// Volume, mass, centre of gravity and inertia of instances of the open context (`ids`:
+    /// instances; empty means every instance of it), each and in total, in the context's
+    /// coordinates. A part's density is its instance's own material's, else an enclosing
+    /// instance's, else the material most of its faces show on their front. `mass`, `inertia`
+    /// and `principal` are absent when a contributing solid has no density; without a mass
+    /// `centroid` is the volume's centroid. `inertia` is about the centroid, in kg m2;
+    /// `principal` gives its moments (ascending) and axes. Loose geometry that is not closed is
+    /// listed in `skipped` and ignored.
+    MassProperties {
+        #[serde(default)]
+        ids: Vec<EntityId>,
+    },
     Camera {},
     /// Where the model stands (see `set_location`).
     Location {},
@@ -524,6 +536,61 @@ impl OutlinerTable {
     }
 }
 
+/// Mass properties of one instance or of a sum of instances (see `Query::MassProperties`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MassInfo {
+    /// Cubic meters.
+    pub volume: f64,
+    /// Kilograms; absent when a contributing solid has no density.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mass: Option<f64>,
+    pub centroid: [f64; 3],
+    /// The 3x3 inertia tensor about the centroid (rows), kg m2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inertia: Option<[[f64; 3]; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<PrincipalInfo>,
+}
+
+/// The principal moments of inertia, ascending, and their unit axes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PrincipalInfo {
+    pub moments: [f64; 3],
+    pub axes: [[f64; 3]; 3],
+}
+
+/// An instance's mass properties.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct InstanceMassInfo {
+    pub id: EntityId,
+    #[serde(flatten)]
+    pub mass: MassInfo,
+}
+
+/// A part left out of a mass sum.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SkippedInfo {
+    /// The instance path, "i3/i7"; "i3" alone for its own loose geometry.
+    pub path: String,
+    pub reason: String,
+}
+
+impl From<&kernel::mass::MassProps> for MassInfo {
+    fn from(p: &kernel::mass::MassProps) -> Self {
+        MassInfo {
+            volume: p.volume,
+            mass: p.mass,
+            centroid: p.centroid.to_array(),
+            // glam matrices are column major and this one is symmetric; rows are written.
+            inertia: p.inertia.map(|i| i.transpose().to_cols_array_2d()),
+            principal: p.principal.map(|pr| PrincipalInfo {
+                moments: pr.moments,
+                axes: pr.axes.map(|a| a.to_array()),
+            }),
+        }
+    }
+}
+
 /// A material and how much of the model uses it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct MaterialInfo {
@@ -539,6 +606,9 @@ pub struct MaterialInfo {
     pub metalness: f32,
     /// How rough its surface is, from 0 (a mirror) to 1 (matte). Always present.
     pub roughness: f32,
+    /// Its density in kg/m³; absent when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub density: Option<f64>,
     /// The texture faces painted with it show; absent for none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub texture: Option<TextureInfo>,
@@ -642,6 +712,14 @@ pub enum QueryResult {
         volume: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+    },
+    /// The `mass_properties` query: each instance that counts and the sum (absent when none
+    /// does).
+    MassProperties {
+        instances: Vec<InstanceMassInfo>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        total: Option<MassInfo>,
+        skipped: Vec<SkippedInfo>,
     },
     /// The view: `up` is the screen's up direction (+Z, except in a view straight down or
     /// up); `view_height` is the height the view spans at the target (in a parallel view, the

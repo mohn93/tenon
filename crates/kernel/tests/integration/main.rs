@@ -7,6 +7,7 @@ mod clip;
 mod connected;
 mod curves;
 mod data;
+mod density;
 mod edges;
 mod emission;
 mod erase;

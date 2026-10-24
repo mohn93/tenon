@@ -30,6 +30,7 @@ mod intersect;
 mod isolate;
 mod library;
 mod lights;
+mod mass;
 mod materials;
 mod modeling;
 mod offset;

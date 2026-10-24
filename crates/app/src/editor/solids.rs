@@ -95,12 +95,12 @@ pub(super) type SolidCache = (
     SolidTools,
 );
 
-/// What `Editor::selected_volume` was worked out for, and its answer.
+/// What `Editor::selected_solid` was worked out for, and its answer.
 pub(super) type VolumeCache = (
     u64,
     Vec<kernel::InstanceId>,
     std::collections::BTreeSet<EntityId>,
-    Option<f64>,
+    Option<kernel::mass::MassProps>,
 );
 
 const PLURAL: &str = "Select two or more solid groups or components";
@@ -175,9 +175,10 @@ impl Editor {
         tools
     }
 
-    /// The volume of `instance` (the selected one) if it is a solid, kept for the revision,
-    /// context and selection it was worked out for: Entity Info asks every frame.
-    pub fn selected_volume(&self, instance: &kernel::Instance) -> Option<f64> {
+    /// The volume and mass properties of `instance` (the selected one) if it is a solid, kept
+    /// for the revision, context and selection they were worked out for: Entity Info asks every
+    /// frame.
+    pub fn selected_solid(&self, instance: &kernel::Instance) -> Option<kernel::mass::MassProps> {
         let key = (
             self.doc.revision(),
             self.doc.context().to_vec(),
@@ -188,7 +189,9 @@ impl Editor {
         {
             return *v;
         }
-        let v = kernel::solid::instance_volume(self.doc.scene(), instance).ok();
+        let v = kernel::solid::instance_volume(self.doc.scene(), instance)
+            .ok()
+            .and_then(|_| kernel::mass::instance_mass(self.doc.scene(), instance));
         *self.volume_cache.borrow_mut() = Some((key.0, key.1, key.2, v));
         v
     }

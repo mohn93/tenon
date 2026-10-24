@@ -1641,6 +1641,7 @@ impl State {
                 emission: m.emission,
                 metalness: m.metalness,
                 roughness: m.roughness,
+                density: m.density,
             })
             .collect()
     }
@@ -2105,6 +2106,9 @@ impl State {
             }
             UiAction::SetMaterialRoughness(material, percent) => {
                 self.editor.set_material_roughness(material, percent);
+            }
+            UiAction::SetMaterialDensity(material, density) => {
+                self.editor.set_material_density(material, density);
             }
             UiAction::LoadTexture(material) => self.load_texture(material),
             UiAction::RemoveTexture(material) => {
@@ -2612,7 +2616,7 @@ impl State {
             self.edited = modified;
         }
         let status = self.editor.status_parts();
-        let info = entity_info_with(self.editor.doc(), &|i| self.editor.selected_volume(i));
+        let info = entity_info_with(self.editor.doc(), &|i| self.editor.selected_solid(i));
         let materials = self.material_rows();
         // Thumbnails tiles in view asked for last frame; more wait for the next.
         self.make_thumbnails();

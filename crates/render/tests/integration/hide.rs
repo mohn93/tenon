@@ -327,6 +327,7 @@ fn lamp_scene() -> (Scene, Vec<InstanceId>) {
             emission: 2.0,
             metalness: 0.0,
             roughness: 1.0,
+            density: None,
         })
         .unwrap();
     let face = s.mesh(def).unwrap().faces().next().unwrap().0;

@@ -211,6 +211,9 @@ pub struct MaterialData {
     /// Absent when 1 (matte).
     #[serde(default = "opaque", skip_serializing_if = "is_opaque")]
     pub roughness: f32,
+    /// kg/m³; absent when unknown (and in files written before density existed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub density: Option<f64>,
 }
 
 /// A material's texture: the file holding its image and the size it covers on the model, in
@@ -491,6 +494,7 @@ impl Scene {
                     emission: m.emission,
                     metalness: m.metalness,
                     roughness: m.roughness,
+                    density: m.density,
                 })
                 .collect(),
             tags: self
@@ -605,6 +609,7 @@ impl Scene {
                 emission: m.emission,
                 metalness: m.metalness,
                 roughness: m.roughness,
+                density: m.density,
             };
             if materials.insert(MaterialId(m.id), material).is_some() {
                 return Err(format!("material m{} appears twice", m.id));
