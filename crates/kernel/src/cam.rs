@@ -9,7 +9,9 @@
 //! of some radius stands that far back along the line (an approximation of the offset
 //! surface that is exact where the cam's surface is square to the line).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+use std::sync::{Arc, Mutex};
 
 use glam::DAffine3;
 
@@ -33,6 +35,39 @@ pub struct CamFollower {
     /// Meters, not negative; 0 for a flat or knife follower touching at its axis line.
     pub roller_radius: f64,
     pub preload: f64,
+}
+
+/// The cam trees built so far, by cam definition, each with the definitions it was gathered
+/// from and their meshes' stamps then (see `Model::stamp`): a tree is used again while every
+/// one of them stands as it did. Not part of the model: a copy of the scene starts with the
+/// same trees, and equality leaves them out.
+#[derive(Default)]
+pub(crate) struct CamTrees(Mutex<BTreeMap<DefinitionId, CamTree>>);
+
+/// A built cam tree and the (definition, stamp) of each mesh it was gathered from; no stamp
+/// for a definition that was missing.
+#[derive(Clone)]
+struct CamTree {
+    tree: Arc<Bvh>,
+    from: Vec<(DefinitionId, Option<u64>)>,
+}
+
+impl Clone for CamTrees {
+    fn clone(&self) -> Self {
+        CamTrees(Mutex::new(self.lock().clone()))
+    }
+}
+
+impl fmt::Debug for CamTrees {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "CamTrees({})", self.lock().len())
+    }
+}
+
+impl CamTrees {
+    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<DefinitionId, CamTree>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
 }
 
 /// The follower joint's value at which it touches the cam whose tree `tree` is placed by
@@ -129,11 +164,30 @@ impl Scene {
     }
 
     /// The triangles of definition `d` and the instances nested in it at any depth, in `d`'s
-    /// coordinates.
-    pub(crate) fn cam_tree(&self, d: DefinitionId) -> Bvh {
+    /// coordinates: the tree built before while the meshes it came from are unchanged.
+    pub(crate) fn cam_tree(&self, d: DefinitionId) -> Arc<Bvh> {
+        let fresh = |t: &CamTree| {
+            t.from
+                .iter()
+                .all(|(m, stamp)| self.definition(*m).map(|x| x.mesh.stamp()) == *stamp)
+        };
+        if let Some(t) = self.cam_trees.lock().get(&d).filter(|t| fresh(t)) {
+            return t.tree.clone();
+        }
         let mut tris = Vec::new();
-        self.gather_triangles(d, DAffine3::IDENTITY, &mut tris, 0);
-        Bvh::new(tris)
+        let mut from = Vec::new();
+        self.gather_triangles(d, DAffine3::IDENTITY, &mut tris, 0, &mut from);
+        let tree = Arc::new(Bvh::new(tris));
+        let mut trees = self.cam_trees.lock();
+        trees.retain(|k, _| self.definition(*k).is_some());
+        trees.insert(
+            d,
+            CamTree {
+                tree: tree.clone(),
+                from,
+            },
+        );
+        tree
     }
 
     fn gather_triangles(
@@ -142,8 +196,11 @@ impl Scene {
         place: DAffine3,
         out: &mut Vec<[glam::DVec3; 3]>,
         depth: usize,
+        from: &mut Vec<(DefinitionId, Option<u64>)>,
     ) {
-        let Some(def) = self.definition(d) else {
+        let def = self.definition(d);
+        from.push((d, def.map(|x| x.mesh.stamp())));
+        let Some(def) = def else {
             return;
         };
         if depth > MAX_DEPTH {
@@ -155,7 +212,13 @@ impl Scene {
             }
         }
         for (_, child) in def.mesh.instances() {
-            self.gather_triangles(child.definition, place * child.transform, out, depth + 1);
+            self.gather_triangles(
+                child.definition,
+                place * child.transform,
+                out,
+                depth + 1,
+                from,
+            );
         }
     }
 

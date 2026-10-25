@@ -31,7 +31,7 @@
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use glam::{DAffine3, DQuat, DVec3};
 
@@ -127,7 +127,7 @@ struct Rider {
     cam: Body,
     cam_id: InstanceId,
     /// Shared by the riders of one cam definition.
-    tree: Rc<Bvh>,
+    tree: Arc<Bvh>,
     preload: f64,
     roller_radius: f64,
     /// The cam's pose once the other residuals are met: the second pass touches the cam
@@ -461,6 +461,21 @@ impl System {
                 parts.dedup();
                 let mut cols: Vec<(usize, f64)> = Vec::with_capacity(6 * parts.len());
                 for i in parts {
+                    // Moving a part that holds neither the axis line (the joint's part `a`)
+                    // nor a cam that is not frozen leaves the contact where it is: it is
+                    // found once, and each nudge measures only the joint's value.
+                    let moves = |b: Body| matches!(b, Body::Part(j) if j == i);
+                    let still = !moves(link.a) && (rider.frozen.is_some() || !moves(rider.cam));
+                    let line = link.frame_a.world(&self.pose(link.a));
+                    let touch = still.then(|| {
+                        contact(
+                            &rider.tree,
+                            &rider.frozen.unwrap_or_else(|| self.pose(rider.cam)),
+                            &line,
+                            rider.preload,
+                            rider.roller_radius,
+                        )
+                    });
                     for k in 0..6 {
                         let at = |h: f64| {
                             let (w, t) = unknown(k, h);
@@ -469,7 +484,13 @@ impl System {
                                 Body::Part(j) if j == i => moved,
                                 b => self.pose(b),
                             };
-                            self.rider_residual(rider, &pose)
+                            match touch {
+                                Some(touch) => {
+                                    let b = link.frame_b.world(&pose(link.b));
+                                    touch.map(|touch| frame_distance(&line, &b) - touch)
+                                }
+                                None => self.rider_residual(rider, &pose),
+                            }
                         };
                         // A nudge off the cam's edge gives no slope that way.
                         let slope = match (at(NUDGE), at(-NUDGE)) {
@@ -589,10 +610,18 @@ impl System {
 
 /// Solves `a x = b` for a symmetric positive definite `a` (row-major `n` x `n`, overwritten
 /// by its Cholesky factor); `b` becomes `x`. False when `a` is not positive definite.
+///
+/// The factor of a row is zero before the row's first nonzero entry (its envelope), so the
+/// sums start there: the terms left out are products with zero, and the order of the others
+/// is kept, so the factor is the same to the bit. A part's rows reach only the parts it is
+/// joined to, which leaves most of an assembly's matrix outside the envelopes.
 fn cholesky_solve(a: &mut [f64], n: usize, b: &mut [f64]) -> bool {
+    let first: Vec<usize> = (0..n)
+        .map(|i| (0..i).find(|k| a[i * n + k] != 0.0).unwrap_or(i))
+        .collect();
     for j in 0..n {
         let mut d = a[j * n + j];
-        for k in 0..j {
+        for k in first[j]..j {
             d -= a[j * n + k] * a[j * n + k];
         }
         if d.is_nan() || d <= 0.0 {
@@ -601,8 +630,12 @@ fn cholesky_solve(a: &mut [f64], n: usize, b: &mut [f64]) -> bool {
         let d = d.sqrt();
         a[j * n + j] = d;
         for i in j + 1..n {
+            // Before its envelope the row stays zero.
+            if first[i] > j {
+                continue;
+            }
             let mut s = a[i * n + j];
-            for k in 0..j {
+            for k in first[i].max(first[j])..j {
                 s -= a[i * n + k] * a[j * n + k];
             }
             a[i * n + j] = s / d;
@@ -1008,7 +1041,7 @@ impl Scene {
             })
             .collect();
         // One tree per cam definition, however many followers ride on it.
-        let mut trees: BTreeMap<DefinitionId, Rc<Bvh>> = BTreeMap::new();
+        let mut trees: BTreeMap<DefinitionId, Arc<Bvh>> = BTreeMap::new();
         let riders: Vec<Rider> = self
             .cam_followers()
             .filter_map(|(w, c)| {
@@ -1016,7 +1049,7 @@ impl Scene {
                 let cam = self.root().instance(c.cam)?;
                 let tree = trees
                     .entry(cam.definition)
-                    .or_insert_with(|| Rc::new(self.cam_tree(cam.definition)))
+                    .or_insert_with(|| self.cam_tree(cam.definition))
                     .clone();
                 Some(Rider {
                     id: w,
@@ -1097,6 +1130,72 @@ mod tests {
         assert!((b[0] - 0.5).abs() < 1e-15 && b[1].abs() < 1e-15);
         let mut singular = vec![1.0, 1.0, 1.0, 1.0];
         assert!(!cholesky_solve(&mut singular, 2, &mut [1.0, 1.0]));
+    }
+
+    #[test]
+    fn a_sparse_system_solves_as_the_dense_factor_does_to_the_bit() {
+        // Blocks joined in a chain and to a hub, as parts are by joints, with rows that
+        // start at different columns.
+        let n = 12;
+        let mut a = vec![0.0; n * n];
+        for i in 0..n {
+            a[i * n + i] = 10.0 + i as f64 * 0.37;
+        }
+        let mut link = |i: usize, j: usize, x: f64| {
+            a[i * n + j] = x;
+            a[j * n + i] = x;
+        };
+        for i in 1..n {
+            link(i, 0, 0.1 * i as f64 - 0.55);
+        }
+        for i in (5..n).step_by(2) {
+            link(i, i - 1, 1.0 / (i as f64 + 0.3));
+        }
+        link(9, 4, -0.77);
+        let b: Vec<f64> = (0..n).map(|i| (i as f64 * 0.91).sin()).collect();
+        // The plain factor: every term summed.
+        let dense = |mut a: Vec<f64>, mut b: Vec<f64>| {
+            for j in 0..n {
+                let mut d = a[j * n + j];
+                for k in 0..j {
+                    d -= a[j * n + k] * a[j * n + k];
+                }
+                let d = d.sqrt();
+                a[j * n + j] = d;
+                for i in j + 1..n {
+                    let mut s = a[i * n + j];
+                    for k in 0..j {
+                        s -= a[i * n + k] * a[j * n + k];
+                    }
+                    a[i * n + j] = s / d;
+                }
+            }
+            for i in 0..n {
+                let mut s = b[i];
+                for k in 0..i {
+                    s -= a[i * n + k] * b[k];
+                }
+                b[i] = s / a[i * n + i];
+            }
+            for i in (0..n).rev() {
+                let mut s = b[i];
+                for k in i + 1..n {
+                    s -= a[k * n + i] * b[k];
+                }
+                b[i] = s / a[i * n + i];
+            }
+            (a, b)
+        };
+        let (fa, fb) = dense(a.clone(), b.clone());
+        let mut x = b;
+        assert!(cholesky_solve(&mut a, n, &mut x));
+        let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&x), bits(&fb));
+        for i in 0..n {
+            for j in 0..=i {
+                assert_eq!(a[i * n + j].to_bits(), fa[i * n + j].to_bits(), "{i} {j}");
+            }
+        }
     }
 
     #[test]

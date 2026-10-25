@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Range;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
@@ -542,6 +543,16 @@ pub struct Model {
     /// The vertices in each cell of a `VERTEX_CELL` grid, kept in step by `apply_op`, so
     /// lookups by position visit only the vertices nearby.
     vertex_cells: HashMap<[i64; 3], Vec<VertexId>>,
+    /// Changes with every change to the mesh and is kept by a copy, so two meshes with the
+    /// same stamp hold the same entities; see `Model::stamp`.
+    stamp: u64,
+}
+
+/// The next mesh stamp: each is handed out once in the process.
+static NEXT_STAMP: AtomicU64 = AtomicU64::new(1);
+
+fn next_stamp() -> u64 {
+    NEXT_STAMP.fetch_add(1, Ordering::Relaxed)
 }
 
 /// Side of the cells of the vertex grid, in meters.
@@ -604,6 +615,7 @@ impl Model {
             dimensions,
             notes,
             next_id,
+            stamp: next_stamp(),
             ..Model::default()
         };
         for (id, v) in &vertices {
@@ -633,10 +645,18 @@ impl Model {
         }
         self.sections = sections;
         self.active_section = active;
+        self.stamp = next_stamp();
         self
     }
 
     // ---- read access ----
+
+    /// Names the mesh's content: a new stamp with every change (and for a mesh built from
+    /// parts), the same in a copy. 0 for a new, empty mesh. What is worked out from a mesh can
+    /// be kept with its stamp and used again while the stamp is the same.
+    pub(crate) fn stamp(&self) -> u64 {
+        self.stamp
+    }
 
     /// The spatial index over the current geometry, built on first use after a change.
     pub fn index(&self) -> &Index {
@@ -786,6 +806,7 @@ impl Model {
     }
 
     pub(crate) fn apply_op(&mut self, op: Op) {
+        self.stamp = next_stamp();
         // The index holds vertex, edge and face positions only: tags, paint, instances,
         // guides and annotations leave it valid.
         if matches!(

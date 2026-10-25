@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::annotation::Note;
 use crate::axes::Axes;
-use crate::cam::CamFollower;
+use crate::cam::{CamFollower, CamTrees};
 use crate::edit::KernelError;
 use crate::ids::{
     CamFollowerId, CouplingId, CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId,
@@ -355,6 +355,9 @@ pub struct Scene {
     /// Root instances a viewer hides for now (see [`Scene::set_view_hidden`]): not part of the
     /// model, never saved, and left out of equality.
     pub(crate) view_hidden: BTreeSet<InstanceId>,
+    /// The cam trees drives have built, kept while their meshes are unchanged (see
+    /// [`Scene::cam_tree`]); not part of the model, and left out of equality.
+    pub(crate) cam_trees: CamTrees,
 }
 
 /// Two scenes are equal when they hold the same entities, definitions, materials, tags and
@@ -398,6 +401,7 @@ impl Scene {
             location: Location::DEFAULT,
             transition: SceneTransition::DEFAULT,
             view_hidden: BTreeSet::new(),
+            cam_trees: CamTrees::default(),
         }
     }
 
@@ -437,6 +441,7 @@ impl Scene {
             transition: SceneTransition::DEFAULT,
             next_id: used,
             view_hidden: BTreeSet::new(),
+            cam_trees: CamTrees::default(),
         }
     }
 
