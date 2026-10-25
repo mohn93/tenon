@@ -492,9 +492,15 @@ impl Scene {
     fn prune(&mut self) -> SceneChange {
         let mut steps = Vec::new();
         loop {
+            // What is placed, gathered once a round rather than counted per definition.
+            let placed: BTreeSet<DefinitionId> = self
+                .meshes()
+                .flat_map(|(_, m)| m.instances())
+                .map(|(_, i)| i.definition)
+                .collect();
             let unused = self
                 .definitions()
-                .find(|(id, d)| d.kind == DefinitionKind::Group && self.instance_count(*id) == 0)
+                .find(|(id, d)| d.kind == DefinitionKind::Group && !placed.contains(id))
                 .map(|(id, _)| id);
             let Some(id) = unused else { break };
             steps.push(self.remove_definition(id));
