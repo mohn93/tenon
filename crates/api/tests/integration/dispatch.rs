@@ -311,6 +311,7 @@ fn describe_lists_methods_and_schemas() {
         "section_planes",
         "section_display",
         "interference",
+        "cut_list",
         "clearance",
         "sweep_check",
     ] {

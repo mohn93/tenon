@@ -9,6 +9,7 @@ mod cam;
 mod clip;
 mod connected;
 mod curves;
+pub mod cutlist;
 mod data;
 mod edit;
 mod erase;

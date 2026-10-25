@@ -59,6 +59,20 @@ pub enum Query {
         #[serde(default)]
         ids: Vec<EntityId>,
     },
+    /// The cut list of the open context: its groups and components (`ids`: those listed; every
+    /// one when empty) broken down to parts, each a definition's own faces; a group holding
+    /// groups or components lists the ones inside, not itself. Each row has the part's name,
+    /// material, length, width and thickness (the part's own box along its own axes, scaled by
+    /// its placement, longest first), quantity and whether it is a solid (with a note why not).
+    /// `group_by` `definition` (default) merges parts of one definition, material and size;
+    /// `none` has a row per part. Rows are ordered by material, then size. Never changes the
+    /// model.
+    CutList {
+        #[serde(default)]
+        ids: Vec<EntityId>,
+        #[serde(default)]
+        group_by: CutListGrouping,
+    },
     /// Measure the model, exactly one of `distance`, `angle` and `round`. Entities are named by
     /// id in the open context, or by a path of instances from it ending in the entity
     /// (`["i1", "i2", "f3"]`), in which case the placements of the instances apply and results
@@ -755,6 +769,38 @@ pub struct RoundInfo {
     pub samples: usize,
 }
 
+/// How the `cut_list` query merges parts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CutListGrouping {
+    /// Parts of one definition, material and size are one row.
+    #[default]
+    Definition,
+    /// A row per part.
+    None,
+}
+
+/// One row of the cut list.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CutRowInfo {
+    pub name: String,
+    /// The material's name; absent when the part has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<String>,
+    /// Meters, the longest side of the part's own box.
+    pub length: f64,
+    pub width: f64,
+    pub thickness: f64,
+    pub quantity: usize,
+    /// Whether the part is a closed solid.
+    pub solid: bool,
+    /// Why it is not a solid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// The groups and components of the open context the parts belong to.
+    pub ids: Vec<EntityId>,
+}
+
 /// Mass properties of one instance or of a sum of instances (see `Query::MassProperties`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct MassInfo {
@@ -996,6 +1042,10 @@ pub enum QueryResult {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         total: Option<MassInfo>,
         skipped: Vec<SkippedInfo>,
+    },
+    /// The `cut_list` query.
+    CutList {
+        rows: Vec<CutRowInfo>,
     },
     /// The `measure` query: the one of `distance`, `angle` and `round` asked for.
     Measure {

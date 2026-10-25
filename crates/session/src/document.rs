@@ -33,6 +33,7 @@ mod axes;
 mod camera;
 mod clip;
 mod copy_along_path;
+mod cut_list;
 mod elsewhere;
 mod files;
 mod fillet;
@@ -2914,6 +2915,9 @@ impl Document {
                 }
                 out
             }
+            Query::CutList { ids, group_by } => QueryResult::CutList {
+                rows: self.cut_list(ids, *group_by)?,
+            },
             Query::Interference { ids, touching } => self.interference_query(ids, *touching)?,
             Query::Clearance { a, b, ids } => self.clearance_query(*a, *b, ids)?,
             Query::SweepCheck {

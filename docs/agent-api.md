@@ -107,6 +107,7 @@ Queries:
 | `{"type": "solid", "id": "i4"}` | whether group or component `i4` is a solid: its own geometry (hidden faces included) has at least one face and is closed (every edge bounds exactly two faces, one traversing it each way, no edge bounds no face), encloses a volume (faces pointing inward still count), and it holds no nested groups or components. Returns `{"type": "solid", "solid": bool, "volume": m3, "reason": "..."}`; `volume` is positive, in cubic meters of the open context (the definition's volume times the absolute determinant of the instance's transform) and only present for a solid; `reason` only otherwise (e.g. "edge e12 bounds 1 face", "it encloses no volume"). An id that is not an instance is `invalid_input`; an unknown one `not_found`. |
 | `{"type": "mass_properties", "ids": ["i4"]}` | volume, mass, centre of gravity and inertia of instances of the open context; `ids` lists instances (repeats count once), empty or absent means every instance of the context. Returns `{"type": "mass_properties", "instances": [{"id", "volume", "mass", "centroid", "inertia", "principal"}], "total": {...}, "skipped": [{"path", "reason"}]}` with each instance and their sum (`total` absent when nothing counts). `volume` is m3, `mass` kg, `centroid` the centre of gravity in open-context coordinates (the volume centroid when there is no mass), `inertia` the 3x3 tensor (rows) about the centroid in kg m2, `principal` `{"moments": [..ascending..], "axes": [[x,y,z]x3]}`. `mass`, `inertia` and `principal` are absent when any contributing solid has no density. A part's density is that of the material most (over half) of its faces show on the outside (their front; their back when the faces point inward), else its instance's own material's, else the nearest enclosing instance's (the instances the open context sits in included), else none; materials without a density are passed over at each step, so the mass does not depend on which context is open. Nested instances count, each with its own material; loose geometry that is not closed, or has a face that cannot be triangulated, is listed in `skipped` (`path` like `"i3/i7"`, with the reason) and ignored. Scaled, rotated and mirrored instances are exact (volume by the absolute determinant). Ids that are not instances are `invalid_input`, unknown ones `not_found`. |
 | `{"type": "measure", "distance": ["i4", "f9"]}` | exactly one of `distance`, `angle` (both `[a, b]`) or `round` (one entity). An entity is an id of the open context or a path of instances ending in the entity, `["i1", "i2", "f3"]`, placed by the instances' transforms (scale, rotation and mirroring included); results are in open-context coordinates. `distance`: between vertices, edges, faces, instances and guides (a guide line is infinite): `{"type": "measure", "distance": {"distance": m, "points": [[x,y,z],[x,y,z]]}}`, the minimum distance (0 when they touch or cross) and the closest point on each; exact for points, segments and planar faces (holes respected); an instance is measured through its faces (nested ones included, hidden ones too), pruned by bounding boxes, so distances are surface to surface: an instance inside another reports the gap between its faces and the outer one's, not 0. Faces of an instance that cannot be triangulated are left out and listed in `distance.skipped` as paths from the instance (`"i4/i7/f12"`; absent when none). `angle`: between two edges (their directions, first vertex to second) or two faces (their normals): `{"angle": {"degrees": 0-180, "acute": 0-90}}`, `acute` ignoring which way each points. `round`: the circle or cylinder a face or edge is on, fitted by least squares: `{"round": {"kind": "circle"|"cylinder", "center", "axis", "radius", "length"?, "max_deviation", "samples"}}`. An edge of a circle or arc, or a flat face whose outline is a circle, gives a `circle` (`center`, unit `axis`); a face joined by soft edges to others around one axis (primitives, pulled circles, revolves, boolean bores) gives a `cylinder` whose `center` is the middle of its axis and `length` its extent. `axis` points up (positive z, else y, else x). `max_deviation` is the largest distance of a vertex from the fit, so the faceting error of a faceted surface and the error of a non-uniformly scaled instance show. Flat faces, spheres, cones and polygon sides are `invalid_input`, as are zero or several of the three fields, a path through a non-instance, and entities that are not measurable (dimensions, notes, section planes); unknown ids are `not_found`. |
+| `{"type": "cut_list", "ids": ["i4"], "group_by": "definition"}` | the parts of the open context as a cut list; see Cut list below |
 | `{"type": "interference", "ids": ["i4", "i9"], "touching": true}` | which solid parts of the open context overlap; see Interference and clearance below |
 | `{"type": "clearance", "a": "i4", "b": "i9"}` | the minimum distance between two parts' surfaces (or every pair among `ids`) with the nearest points; see Interference and clearance below |
 | `{"type": "sweep_check", "joint": "j3", "from": 0, "to": 360, "steps": 73}` | turns a joint through a range on a copy of the model and reports which parts hit or come near, and where; see Interference and clearance below |
@@ -602,6 +603,41 @@ overlapping steps; use fewer steps or ids"}`, with the pairs found so far. An un
 outside 2 to 10000, a negative `report_within`, `slide` on a joint that is not cylindrical, or
 an id that is not an instance is `invalid_input`; an id that is no instance of the root is
 `not_found`.
+
+
+### Cut list
+
+`{"type": "cut_list", "ids": ["i4"], "group_by": "definition"}` lists the parts of the open
+context for the shop. A query only: no model change, no history step. `ids` limits the
+groups and components considered (every one when absent or empty); an id that is not an instance
+is `invalid_input`, an unknown one `not_found`. `group_by` is `"definition"` (default) or `"none"`.
+The answer is `{"type": "cut_list", "rows": [{"name", "material", "length", "width", "thickness",
+"quantity", "solid", "note", "ids"}], "revision"}`.
+
+- A part is one definition's own faces placed by an instance. A group or component that holds
+  other groups or components (a cabinet) lists the parts inside it, to any depth, not itself; if it
+  also has faces of its own those are one more part under its name. Hidden instances (themselves or
+  by tag) are not listed; definitions without faces are not parts. `ids` of a row are the
+  instances of the open context that hold the parts (the cabinet, not its shelves), sorted.
+- `length`, `width` and `thickness` (meters, longest to shortest) are the part's own box: the
+  extent of its geometry along the definition's axes times the length of each axis of its
+  placement (all the nested placements multiplied). A board turned 30 degrees reads its true
+  size, a scaled instance its scaled size; a shear is not followed.
+- `material` is the name of the material most faces of the part show outside, else the
+  instance's, else the nearest enclosing instance's; absent when none.
+- `solid` is false for a part whose geometry is not closed or encloses no volume; `note` says why
+  (such parts are listed, never dropped).
+- With `definition`, parts of one definition, material, solidity and size (to 0.1 micrometer) are
+  one row and `quantity` counts them (two instances of one component at different scales are two
+  rows). With `none` every part is its own row with quantity 1.
+- Rows are ordered by material name (case blind, no material last), then length, width and
+  thickness (largest first), then name.
+
+`export` to a `.csv` path (or `format: "csv"`) writes the open model's cut list (the root, grouped
+by definition) as RFC 4180 text with a header `Name,Material,Length (mm),Width (mm),Thickness (mm),Quantity,Solid,Note`:
+sizes are plain numbers in the model's display unit (decimal inches for feet and inches), the unit
+named in the header; a text cell that starts with `=`, `+`, `-` or `@` gets a leading apostrophe.
+`export_pdf` with `cut_list: true` adds the table as pages after the view's sheets.
 
 ### Chamfer
 
