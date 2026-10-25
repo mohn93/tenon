@@ -360,7 +360,7 @@ impl Scene {
     /// whatever their tags, as an open instance stays drawn. None when it shows nothing. With
     /// no tag hidden and nothing hidden itself, `bounds`.
     pub fn shown_bounds(&self, mesh: MeshId, open: &[InstanceId]) -> Option<[DVec3; 2]> {
-        self.shown_bounds_in(mesh, open, &mut HashMap::new())
+        self.shown_bounds_in(mesh, open, &mut HashMap::new(), &mut HashMap::new())
     }
 
     /// The box around what instance `instance` shows, in the coordinates of the mesh holding
@@ -370,12 +370,35 @@ impl Scene {
         enclose(&placed_box(instance.transform, b))
     }
 
-    /// `shown_bounds`, with the meshes found to hold hidden entities kept in `flagged`.
+    /// `shown_bounds`, with the meshes found to hold hidden entities kept in `flagged` and the
+    /// boxes of meshes with nothing open in them in `boxes` (a mesh placed many times is
+    /// measured once).
     fn shown_bounds_in(
         &self,
         mesh: MeshId,
         open: &[InstanceId],
         flagged: &mut HashMap<MeshId, bool>,
+        boxes: &mut HashMap<MeshId, Option<[DVec3; 2]>>,
+    ) -> Option<[DVec3; 2]> {
+        if open.is_empty()
+            && let Some(&b) = boxes.get(&mesh)
+        {
+            return b;
+        }
+        let b = self.shown_bounds_measured(mesh, open, flagged, boxes);
+        if open.is_empty() {
+            boxes.insert(mesh, b);
+        }
+        b
+    }
+
+    /// `shown_bounds_in`, measured.
+    fn shown_bounds_measured(
+        &self,
+        mesh: MeshId,
+        open: &[InstanceId],
+        flagged: &mut HashMap<MeshId, bool>,
+        boxes: &mut HashMap<MeshId, Option<[DVec3; 2]>>,
     ) -> Option<[DVec3; 2]> {
         if self.view_hidden.is_empty()
             && self.tags().all(|(_, t)| t.visible)
@@ -397,8 +420,8 @@ impl Scene {
                 _ if self.instance_shown(mesh, id, i) => &[],
                 _ => continue,
             };
-            if let Some(b) = self.shown_bounds_in(MeshId::Definition(i.definition), below, flagged)
-            {
+            let def = MeshId::Definition(i.definition);
+            if let Some(b) = self.shown_bounds_in(def, below, flagged, boxes) {
                 points.extend(placed_box(i.transform, b));
             }
         }
