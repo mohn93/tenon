@@ -10,8 +10,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The short git hash of the commit this program was built from, when the build knew it.
 pub const GIT_HASH: Option<&str> = option_env!("SKETCHUP_ALT_GIT_HASH");
 
-/// The repository's pages start with this; a release link outside it is not trusted.
-const RELEASE_PAGE_PREFIX: &str = "https://github.com/mohn93/sketchup/";
+/// A release's page: this and its tag. A link of any other shape is not trusted.
+const RELEASE_TAG_PREFIX: &str = "https://github.com/mohn93/sketchup/releases/tag/";
 
 #[cfg(not(target_arch = "wasm32"))]
 const LATEST_URL: &str = "https://api.github.com/repos/mohn93/sketchup/releases/latest";
@@ -41,22 +41,23 @@ pub enum Outcome {
     Failed(String),
 }
 
-/// A version as `major.minor.patch` and whether it is a pre-release (`1.2.0-beta.1`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Version {
+/// A version as `major.minor.patch` and its pre-release identifiers (`1.2.0-beta.1`: `beta`,
+/// `1`; none for a release).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Version<'a> {
     core: (u64, u64, u64),
-    pre: bool,
+    pre: Vec<&'a str>,
 }
 
-impl Version {
+impl<'a> Version<'a> {
     /// Accepts a leading `v`, one to three numeric parts, a `-pre-release` and `+build` suffix.
-    fn parse(text: &str) -> Option<Self> {
+    fn parse(text: &'a str) -> Option<Self> {
         let text = text.trim();
         let text = text.strip_prefix(['v', 'V']).unwrap_or(text);
         let text = text.split('+').next()?;
         let (numbers, pre) = match text.split_once('-') {
-            Some((numbers, _)) => (numbers, true),
-            None => (text, false),
+            Some((numbers, pre)) => (numbers, pre.split('.').collect()),
+            None => (text, Vec::new()),
         };
         let mut parts = numbers.split('.');
         let mut next = |required: bool| match parts.next() {
@@ -68,13 +69,62 @@ impl Version {
     }
 }
 
+impl Ord for Version<'_> {
+    /// Semantic versioning's precedence: by number, a pre-release before its release, and
+    /// pre-releases by identifier (numbers by value and before words, a longer list after its
+    /// own beginning). Build metadata is ignored.
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+
+        let identifier = |a: &str, b: &str| match (a.parse::<u64>(), b.parse::<u64>()) {
+            (Ok(a), Ok(b)) => a.cmp(&b),
+            (Ok(_), Err(_)) => Ordering::Less,
+            (Err(_), Ok(_)) => Ordering::Greater,
+            (Err(_), Err(_)) => a.cmp(b),
+        };
+        self.core
+            .cmp(&other.core)
+            .then_with(|| match (self.pre.is_empty(), other.pre.is_empty()) {
+                (true, true) => Ordering::Equal,
+                (true, false) => Ordering::Greater,
+                (false, true) => Ordering::Less,
+                (false, false) => self
+                    .pre
+                    .iter()
+                    .zip(&other.pre)
+                    .map(|(a, b)| identifier(a, b))
+                    .find(|o| o.is_ne())
+                    .unwrap_or_else(|| self.pre.len().cmp(&other.pre.len())),
+            })
+    }
+}
+
+impl PartialOrd for Version<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 /// Whether `latest` names a newer version than `current`. A version that cannot be read is
 /// never newer. A pre-release is older than its release.
 pub fn is_newer(latest: &str, current: &str) -> bool {
     let (Some(latest), Some(current)) = (Version::parse(latest), Version::parse(current)) else {
         return false;
     };
-    (latest.core, !latest.pre) > (current.core, !current.pre)
+    latest > current
+}
+
+/// Whether `url` is a release page of the repository: the tag page, with a tag of letters,
+/// digits and `.`, `-`, `_`, `+` only, so the browser cannot be led elsewhere by `..`, an
+/// escape, a backslash, a query or a host trick.
+fn is_release_page(url: &str) -> bool {
+    url.strip_prefix(RELEASE_TAG_PREFIX).is_some_and(|tag| {
+        !tag.is_empty()
+            && tag.chars().any(|c| c != '.')
+            && tag
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+'))
+    })
 }
 
 /// The outcome of the GitHub response `status`/`body` for a program at `current`.
@@ -99,7 +149,7 @@ pub fn interpret(status: u16, body: &str, current: &str) -> Outcome {
     let url = json
         .get("html_url")
         .and_then(|u| u.as_str())
-        .filter(|u| u.starts_with(RELEASE_PAGE_PREFIX))
+        .filter(|u| is_release_page(u))
         .unwrap_or(RELEASES_PAGE);
     Outcome::Available {
         version: tag.trim_start_matches(['v', 'V']).to_string(),
@@ -206,6 +256,42 @@ mod tests {
                 url: RELEASES_PAGE.into()
             }
         );
+    }
+
+    #[test]
+    fn only_a_release_page_of_the_repository_is_trusted() {
+        let offered = |url: &str| match interpret(200, &release("v9.0.0", url), "0.1.0") {
+            Outcome::Available { url, .. } => url,
+            other => panic!("{other:?}"),
+        };
+        let good = "https://github.com/mohn93/sketchup/releases/tag/v9.0.0-rc.1+b2";
+        assert_eq!(offered(good), good);
+        for bad in [
+            "https://github.com/mohn93/sketchup-evil/releases/tag/v9.0.0",
+            "https://github.com/mohn93/sketchup@evil.example/releases/tag/v9.0.0",
+            "https://github.com/mohn93/sketchup/releases/tag/../../../evil/repo",
+            "https://github.com/mohn93/sketchup/releases/tag/%2e%2e",
+            "https://github.com/mohn93/sketchup/releases/tag/..",
+            "https://github.com/mohn93/sketchup/releases/tag/v9\\@evil.example",
+            "https://github.com/mohn93/sketchup/releases/tag/v9 x",
+            "https://github.com/mohn93/sketchup/releases/tag/v9?x=1",
+            "https://github.com/mohn93/sketchup/releases/tag/",
+            "https://github.com/mohn93/sketchup/pulls",
+            "http://github.com/mohn93/sketchup/releases/tag/v9.0.0",
+        ] {
+            assert_eq!(offered(bad), RELEASES_PAGE, "{bad}");
+        }
+    }
+
+    #[test]
+    fn pre_releases_compare_by_their_identifiers() {
+        assert!(is_newer("1.0.0-beta.2", "1.0.0-beta.1"));
+        assert!(is_newer("1.0.0-beta.11", "1.0.0-beta.2"));
+        assert!(is_newer("1.0.0-beta", "1.0.0-alpha.9"));
+        assert!(is_newer("1.0.0-alpha.1", "1.0.0-alpha"));
+        assert!(is_newer("1.0.0-alpha.beta", "1.0.0-alpha.1"));
+        assert!(!is_newer("1.0.0-beta.1", "1.0.0-beta.1"));
+        assert!(!is_newer("1.0.0-beta.1+b7", "1.0.0-beta.1"));
     }
 
     #[test]
