@@ -384,7 +384,8 @@ impl Document {
 
     /// Hides every part but `keep` (root groups and components) from every view of the model:
     /// drawing, picking, snapping and Zoom Extents, with the root's leader notes that point at
-    /// a hidden part (their anchor lies nearest it). This is for looking only: the model, the
+    /// a hidden part (their anchor lies nearest it) and the dimensions that measure one (an end
+    /// or the circle lies nearest it). This is for looking only: the model, the
     /// undo history and the saved file are untouched, but the revision moves so what is derived
     /// from the model is rebuilt. False (nothing changes) when none of `keep` is a root
     /// instance, or when the document is not read only (only a viewer hides parts).
@@ -405,13 +406,15 @@ impl Document {
             return false;
         }
         let notes = isolate::notes_pointing_at(&self.scene, &hidden);
+        let dimensions = isolate::dimensions_measuring(&self.scene, &hidden);
         self.scene.set_view_hidden(hidden);
         self.scene.set_view_hidden_notes(notes);
+        self.scene.set_view_hidden_dimensions(dimensions);
         self.view_changed();
         true
     }
 
-    /// Shows every part (and note) again after [`Document::isolate`]. False when none was
+    /// Shows every part (and its notes and dimensions) again after [`Document::isolate`]. False when none was
     /// hidden.
     pub fn show_all(&mut self) -> bool {
         if self.scene.view_hidden().is_empty() {
@@ -419,6 +422,7 @@ impl Document {
         }
         self.scene.set_view_hidden(BTreeSet::new());
         self.scene.set_view_hidden_notes(BTreeSet::new());
+        self.scene.set_view_hidden_dimensions(BTreeSet::new());
         self.view_changed();
         true
     }
@@ -753,7 +757,7 @@ impl Document {
                         )
                         .chain(
                             m.dimensions()
-                                .filter(|(_, a)| shown(a.tag()))
+                                .filter(|(id, a)| self.scene.dimension_shown(*id, a))
                                 .map(|(id, _)| EntityId::Dimension(id)),
                         )
                         .chain(

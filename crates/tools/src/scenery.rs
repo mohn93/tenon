@@ -428,12 +428,16 @@ impl Layout {
             })
             .collect();
         let mut layout = Layout::new(meshes, &models, parts, paths, cuts, hidden, strict_parts);
-        // Notes a viewer hides with the parts they point at are neither drawn nor picked.
+        // Notes and dimensions a viewer hides with the parts they point at or measure are
+        // neither drawn nor picked.
         let notes = scene.view_hidden_notes();
-        if !notes.is_empty() {
-            layout
-                .annotations
-                .retain(|(_, id, _)| !matches!(id, EntityId::Note(n) if notes.contains(n)));
+        let dimensions = scene.view_hidden_dimensions();
+        if !notes.is_empty() || !dimensions.is_empty() {
+            layout.annotations.retain(|(_, id, _)| match id {
+                EntityId::Note(n) => !notes.contains(n),
+                EntityId::Dimension(d) => !dimensions.contains(d),
+                _ => true,
+            });
             layout.strict_annotations = layout
                 .annotations
                 .iter()

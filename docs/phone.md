@@ -105,7 +105,8 @@ The Parts button opens a list, every part with its size; a component's instances
 with their count ("Crate x3"). Rows are at least 44 points tall. Tapping a row selects its parts
 and frames them, and closes the list.
 
-Isolate hides every other part, for looking only: nothing is saved or undone and the model
+Isolate hides every other part, with the notes that point at them and the dimensions that
+measure them (an end, or the circle, lies nearest a hidden part), for looking only: nothing is saved or undone and the model
 is not marked changed (its own bytes are the same), and what is hidden is hidden from drawing, picking,
 snapping and Zoom Extents. While parts are hidden the card shows Show all instead (and a bar
 with Show all stays when nothing is selected). Selecting a row of the parts list shows

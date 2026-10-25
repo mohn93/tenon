@@ -8,7 +8,7 @@
 //! outlines; dimensions and notes add their lines and label text.
 
 use glam::{DAffine3, DVec2, DVec3};
-use kernel::{EntityId, MeshId, Model, Scene, SectionPlane, TagId, ray_hits_triangle};
+use kernel::{EntityId, MeshId, Model, Scene, SectionPlane, ray_hits_triangle};
 
 use crate::annotation_shape::AnnotationShape;
 use crate::camera::Camera;
@@ -589,10 +589,9 @@ pub fn extent_points(doc: &Document) -> Vec<DVec3> {
                 out.extend(cut.edges.into_iter().flatten());
             }
         }
-        let shown = |tag: Option<TagId>| scene.tag_shown(tag);
         let shapes = model
             .dimensions()
-            .filter(|(_, d)| shown(d.tag()))
+            .filter(|(id, d)| scene.dimension_shown(*id, d))
             .map(|(id, _)| EntityId::Dimension(id))
             .chain(
                 model
@@ -683,12 +682,11 @@ fn annotations(doc: &Document, camera: &Camera, parts: &[Placement<'_>], drawing
     let projector = camera.projector();
     let size = camera.viewport;
     let in_view = |p: DVec2| p.cmpge(DVec2::ZERO).all() && p.cmple(size).all();
-    let shown = |tag: Option<TagId>| scene.tag_shown(tag);
     for part in parts {
         let model = part.model;
         let shapes = model
             .dimensions()
-            .filter(|(_, d)| shown(d.tag()))
+            .filter(|(id, d)| scene.dimension_shown(*id, d))
             .map(|(id, _)| EntityId::Dimension(id))
             .chain(
                 model
