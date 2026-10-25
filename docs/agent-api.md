@@ -617,10 +617,11 @@ The answer is `{"type": "cut_list", "rows": [{"name", "material", "length", "wid
 - A part is one definition's own faces placed by an instance. A group or component that holds
   other groups or components (a cabinet) lists the parts inside it, to any depth, not itself; if it
   also has faces of its own those are one more part under its name. Hidden instances (themselves or
-  by tag) are not listed; definitions without faces are not parts. `ids` of a row are the
+  by tag) are not listed; definitions without shown faces (none, or all hidden themselves or by
+  tag) are not parts. `ids` of a row are the
   instances of the open context that hold the parts (the cabinet, not its shelves), sorted.
 - `length`, `width` and `thickness` (meters, longest to shortest) are the part's own box: the
-  extent of its geometry along the definition's axes times the length of each axis of its
+  extent of its shown geometry (hidden edges and faces do not count) along the definition's axes times the length of each axis of its
   placement (all the nested placements multiplied). A board turned 30 degrees reads its true
   size, a scaled instance its scaled size; a shear is not followed.
 - `material` is the name of the material most faces of the part show outside, else the

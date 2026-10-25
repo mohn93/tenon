@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 
 use glam::{DAffine3, DMat3, DVec3};
 
-use crate::ids::{DefinitionId, InstanceId, MaterialId};
+use crate::ids::{DefinitionId, InstanceId, MaterialId, TagId};
 use crate::mass::dominant_material;
 use crate::model::{Instance, Model};
 use crate::scene::{DefinitionKind, MeshId, Scene};
@@ -94,14 +94,23 @@ fn sized(extent: DVec3, linear: DMat3) -> [f64; 3] {
     size
 }
 
-/// The extent of the vertices of `m` along its axes.
-fn extent(m: &Model) -> Option<DVec3> {
+/// The positions of the vertices of `m` that show (on a shown edge or face, with `hidden` the
+/// hidden tags).
+fn shown_points<'a>(m: &'a Model, hidden: &'a BTreeSet<TagId>) -> impl Iterator<Item = DVec3> + 'a {
+    let all_shown = hidden.is_empty() && !m.has_hidden_edge_or_face();
+    m.vertices()
+        .filter(move |(id, _)| all_shown || m.vertex_shown(*id, hidden, false))
+        .map(|(_, v)| v.pos)
+}
+
+/// The extent of the shown vertices of `m` along its axes.
+fn extent(m: &Model, hidden: &BTreeSet<TagId>) -> Option<DVec3> {
     let mut lo = DVec3::splat(f64::INFINITY);
     let mut hi = DVec3::splat(f64::NEG_INFINITY);
     let mut any = false;
-    for (_, v) in m.vertices() {
-        lo = lo.min(v.pos);
-        hi = hi.max(v.pos);
+    for p in shown_points(m, hidden) {
+        lo = lo.min(p);
+        hi = hi.max(p);
         any = true;
     }
     any.then(|| hi - lo)
@@ -120,14 +129,11 @@ pub fn own_size(scene: &Scene, definition: DefinitionId, linear: DMat3) -> Optio
         let Some(mesh) = scene.mesh(MeshId::Definition(d)) else {
             continue;
         };
-        let all_shown = hidden.is_empty() && !mesh.has_hidden_edge_or_face();
-        for (id, v) in mesh.vertices() {
-            if all_shown || mesh.vertex_shown(id, &hidden, false) {
-                let p = place.transform_point3(v.pos);
-                lo = lo.min(p);
-                hi = hi.max(p);
-                any = true;
-            }
+        for p in shown_points(mesh, &hidden) {
+            let p = place.transform_point3(p);
+            lo = lo.min(p);
+            hi = hi.max(p);
+            any = true;
         }
         if depth < MAX_DEPTH {
             for (_, inner) in mesh.instances() {
@@ -142,6 +148,7 @@ pub fn own_size(scene: &Scene, definition: DefinitionId, linear: DMat3) -> Optio
 
 struct Walk<'a> {
     scene: &'a Scene,
+    hidden: BTreeSet<TagId>,
     parts: Vec<CutPart>,
 }
 
@@ -164,8 +171,9 @@ impl Walk<'_> {
         let m = &def.mesh;
         let linear = linear * instance.transform.matrix3;
         let material = instance.material.or(inherited);
-        if m.faces().next().is_some()
-            && let Some(extent) = extent(m)
+        // A part is its shown faces; hidden geometry does not count in its size.
+        if m.faces().any(|(_, f)| scene.face_shown(f))
+            && let Some(extent) = extent(m, &self.hidden)
         {
             let (solid, note) = match open_reason(m) {
                 Some(why) => (false, Some(why)),
@@ -210,6 +218,7 @@ pub fn cut_parts(
     ids.retain(|id| seen.insert(*id));
     let mut walk = Walk {
         scene,
+        hidden: scene.hidden_tags(),
         parts: Vec::new(),
     };
     for id in ids {

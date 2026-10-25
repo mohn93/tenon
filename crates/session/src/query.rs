@@ -60,7 +60,7 @@ pub enum Query {
         ids: Vec<EntityId>,
     },
     /// The cut list of the open context: its groups and components (`ids`: those listed; every
-    /// one when empty) broken down to parts, each a definition's own faces; a group holding
+    /// one when empty) broken down to parts, each a definition's own shown faces; a group holding
     /// groups or components lists the ones inside, not itself. Each row has the part's name,
     /// material, length, width and thickness (the part's own box along its own axes, scaled by
     /// its placement, longest first), quantity and whether it is a solid (with a note why not).

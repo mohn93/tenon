@@ -151,6 +151,68 @@ fn boards_that_differ_by_float_noise_on_a_rounding_boundary_are_one_row() {
     assert_eq!(r[0]["quantity"], 3);
 }
 
+fn created(out: &Value, prefix: char) -> Vec<Value> {
+    out["changes"]["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|id| id.as_str().unwrap().starts_with(prefix))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn hidden_geometry_inside_a_part_does_not_count_in_its_size() {
+    let mut d = doc();
+    let b = board(&mut d);
+    run(&mut d, json!({"type": "open_instance", "id": b}));
+    let out = run(
+        &mut d,
+        json!({"type": "add_edge", "start": [0, 0, 0.02], "end": [0, 0, 5]}),
+    );
+    let edge = created(&out, 'e')[0].clone();
+    run(&mut d, json!({"type": "close_instance"}));
+    close(
+        size(&rows(&d, json!({"type": "cut_list"}))[0]),
+        [5.0, 1.0, 0.1],
+    );
+    run(&mut d, json!({"type": "open_instance", "id": b}));
+    run(&mut d, json!({"type": "hide", "ids": [edge]}));
+    run(&mut d, json!({"type": "close_instance"}));
+    close(
+        size(&rows(&d, json!({"type": "cut_list"}))[0]),
+        [1.0, 0.1, 0.02],
+    );
+}
+
+#[test]
+fn a_part_whose_faces_are_all_hidden_is_not_listed() {
+    let mut d = doc();
+    let b = board(&mut d);
+    top(&mut d);
+    run(&mut d, json!({"type": "open_instance", "id": b}));
+    let faces: Vec<Value> = ask(&d, json!({"type": "entities", "kinds": ["face"]}))["faces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["id"].clone())
+        .collect();
+    assert_eq!(faces.len(), 6);
+    run(&mut d, json!({"type": "hide", "ids": faces[..5]}));
+    run(&mut d, json!({"type": "close_instance"}));
+    assert_eq!(
+        rows(&d, json!({"type": "cut_list"})).len(),
+        2,
+        "one face still shows"
+    );
+    run(&mut d, json!({"type": "open_instance", "id": b}));
+    run(&mut d, json!({"type": "hide", "ids": [faces[5]]}));
+    run(&mut d, json!({"type": "close_instance"}));
+    let r = rows(&d, json!({"type": "cut_list"}));
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0]["name"], "Top");
+}
+
 #[test]
 fn a_cabinet_lists_its_parts_not_itself() {
     let mut d = doc();
