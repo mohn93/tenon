@@ -138,6 +138,66 @@ fn a_glb_with_a_texture_lays_the_image_as_its_coordinates_say() {
     }
 }
 
+/// The `textured.glb` fixture with its JSON changed by `change`, written to `name`.
+fn textured_with(name: &str, change: impl Fn(&mut Value)) -> String {
+    let glb = std::fs::read(fixture("textured.glb")).unwrap();
+    let word = |at: usize| u32::from_le_bytes(glb[at..at + 4].try_into().unwrap()) as usize;
+    let json_len = word(12);
+    let mut v: Value = serde_json::from_slice(&glb[20..20 + json_len]).unwrap();
+    change(&mut v);
+    let mut json = v.to_string().into_bytes();
+    while !json.len().is_multiple_of(4) {
+        json.push(b' ');
+    }
+    let bin = &glb[20 + json_len..];
+    let mut out = Vec::new();
+    out.extend_from_slice(b"glTF");
+    out.extend_from_slice(&2u32.to_le_bytes());
+    out.extend_from_slice(&((20 + json.len() + bin.len()) as u32).to_le_bytes());
+    out.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    out.extend_from_slice(&0x4E4F_534Au32.to_le_bytes());
+    out.extend_from_slice(&json);
+    out.extend_from_slice(bin);
+    let path = scratch(name);
+    std::fs::write(&path, out).unwrap();
+    path.to_str().unwrap().to_string()
+}
+
+fn linear(byte: u64) -> f64 {
+    let c = byte as f64 / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn srgb(linear: f64) -> u64 {
+    let s = if linear <= 0.003_130_8 {
+        12.92 * linear
+    } else {
+        1.055 * linear.powf(1.0 / 2.4) - 0.055
+    };
+    (s * 255.0).round() as u64
+}
+
+#[test]
+fn a_textured_materials_color_is_the_images_average_times_the_base_color_factor() {
+    let color = |path: &str| {
+        let mut d = doc();
+        import(&mut d, path);
+        let materials = ask(&d, json!({"type": "materials"}))["materials"].clone();
+        let c = materials[0]["color"].as_array().unwrap().clone();
+        c.iter().map(|x| x.as_u64().unwrap()).collect::<Vec<_>>()
+    };
+    let plain = color(&fixture("textured.glb"));
+    let tinted = color(&textured_with("tinted.glb", |v| {
+        v["materials"][0]["pbrMetallicRoughness"]["baseColorFactor"] = json!([0.5, 1.0, 0.0, 1.0]);
+    }));
+    let want = vec![srgb(linear(plain[0]) * 0.5), plain[1], 0];
+    assert_eq!(tinted, want, "{plain:?}");
+}
+
 #[test]
 fn a_mesh_two_nodes_place_becomes_one_component_placed_twice() {
     let mut d = doc();

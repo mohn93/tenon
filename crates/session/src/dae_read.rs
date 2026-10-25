@@ -340,6 +340,7 @@ impl<'a, 'i> Reader<'a, 'i, '_> {
                 .to_string(),
             color,
             opacity,
+            tint: [1.0; 3],
             image,
         });
         let m = Some(self.scene.materials.len() - 1);

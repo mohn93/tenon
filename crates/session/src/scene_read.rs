@@ -98,6 +98,9 @@ pub(crate) struct SceneMaterial {
     /// sRGB.
     pub color: [u8; 3],
     pub opacity: f32,
+    /// The linear factor a texture's colours are multiplied by (glTF's base colour factor;
+    /// 1 for COLLADA).
+    pub tint: [f64; 3],
     /// The image file's bytes, or why it could not be read.
     pub image: Option<Result<Vec<u8>, &'static str>>,
 }
@@ -296,6 +299,20 @@ pub(crate) fn srgb_byte(linear: f64) -> u8 {
         1.055 * l.powf(1.0 / 2.4) - 0.055
     };
     (s * 255.0).round().clamp(0.0, 255.0) as u8
+}
+
+/// An sRGB colour multiplied by a linear `tint`, each component as glTF multiplies a base
+/// colour texture by its factor.
+pub(crate) fn tinted(color: [u8; 3], tint: [f64; 3]) -> [u8; 3] {
+    let linear = |byte: u8| {
+        let c = f64::from(byte) / 255.0;
+        if c <= 0.040_45 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    [0, 1, 2].map(|i| srgb_byte(linear(color[i]) * tint[i]))
 }
 
 /// A count and a noun as a phrase: "1 animation", "3 animations".

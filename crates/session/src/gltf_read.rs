@@ -308,6 +308,7 @@ pub(crate) fn read_gltf(bytes: &[u8], side: &SideFiles) -> Result<ReadScene, Str
         materials.push(SceneMaterial {
             name: m.name.clone(),
             color: [f[0], f[1], f[2]].map(srgb_byte),
+            tint: [f[0], f[1], f[2]],
             opacity: if blend && f[3].is_finite() {
                 f[3].clamp(0.0, 1.0) as f32
             } else {

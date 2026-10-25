@@ -22,6 +22,7 @@ use crate::import::{
 };
 use crate::scene_read::{
     FileUp, Mapping, ReadScene, SideFiles, build_tree, counted, name_or, reached, texture_size,
+    tinted,
 };
 use crate::skp::{SkpNotes, display_length, read_skp, remove_added, remove_materials};
 use crate::sniff;
@@ -483,9 +484,9 @@ impl Document {
                     }
                 }
             };
-            let color = texture
-                .as_ref()
-                .map_or(m.color, |t| crate::texture::average_color(&t.image));
+            let color = texture.as_ref().map_or(m.color, |t| {
+                tinted(crate::texture::average_color(&t.image), m.tint)
+            });
             let material = |texture: Option<Texture>| Material {
                 name: name.clone(),
                 color,
