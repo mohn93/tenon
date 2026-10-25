@@ -44,10 +44,13 @@ pub(super) fn joints(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     }
 }
 
-/// What a value reads as: degrees to a tenth, or a length in the model's units.
+/// What a value reads as: degrees to a tenth, or a length in the model's units. Zero, and a
+/// value that rounds to it, has no sign.
 fn value_text(kind_angular: bool, value: f64, units: &Units) -> String {
     if kind_angular {
-        format!("{value:.1}\u{b0}")
+        // Adding zero turns a negative zero positive.
+        let tenths = (value * 10.0).round() / 10.0 + 0.0;
+        format!("{tenths:.1}\u{b0}")
     } else {
         format_length(value, units)
     }

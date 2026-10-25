@@ -287,3 +287,22 @@ fn a_value_too_long_for_the_dock_does_not_widen_it() {
         "the dock keeps its width: starts at {dock}"
     );
 }
+
+#[test]
+fn a_value_at_zero_shows_no_sign() {
+    let mut f = joints_tab();
+    f.joints[0].info.value = -0.0;
+    f.joints[0].info.limits = None;
+    f.joints[1].info.value = -0.0001;
+    let mut h = tall(f);
+    h.get_by_label("Revolute 0.0\u{b0}");
+    h.get_by_label("Prismatic 0 m");
+    let value = |h: &H, label: &str| h.get_by_label(label).accesskit_node().value();
+    assert_eq!(value(&h, "Hinge angle value").as_deref(), Some("0.0\u{b0}"));
+    assert_eq!(value(&h, "Rail distance value").as_deref(), Some("0 m"));
+    // A value that rounds to zero.
+    h.state_mut().joints[0].info.value = -0.04;
+    h.run_ok();
+    h.get_by_label("Revolute 0.0\u{b0}");
+    assert_eq!(value(&h, "Hinge angle value").as_deref(), Some("0.0\u{b0}"));
+}
