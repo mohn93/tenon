@@ -105,11 +105,14 @@ fn play_plays_the_joint() {
 }
 
 #[test]
-fn a_joint_that_follows_a_cam_has_no_play_button() {
+fn a_joint_that_follows_a_cam_has_no_play_button_or_slider() {
     let mut f = joints_tab();
     f.joints[1].follows = true;
     let h = tall(f);
     assert!(h.query_by_label("Play Rail").is_none());
+    assert!(h.query_by_label("Rail distance value").is_none());
+    h.get_by_label("Follows its cam; drive the cam's joints");
+    h.get_by_label("Hinge angle value");
     h.get_by_label("Play Hinge");
     h.get_by_label("Delete Rail");
 }

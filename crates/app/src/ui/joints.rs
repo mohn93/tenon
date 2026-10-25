@@ -1,5 +1,5 @@
-//! The Joints tab: a row per joint with its kind and value, a slider to drive it, its limits
-//! and a Delete button. A click on the name selects the joint's two parts. A slider drags
+//! The Joints tab: a row per joint with its kind and value, a slider to drive it (none for a
+//! joint that follows a cam), its limits and a Delete button. A click on the name selects the joint's two parts. A slider drags
 //! live (`DriveJoint` with `done` false for each new value) and reports its end once.
 
 use std::ops::RangeInclusive;
@@ -101,6 +101,11 @@ fn joint_row(ui: &mut Ui, row: &JointRow, units: Units, actions: &mut Vec<UiActi
         }
     });
     if !info.kind.has_value() {
+        return;
+    }
+    if row.follows {
+        // A drive of a follower is refused: its value comes from the cam.
+        ui.label(RichText::new("Follows its cam; drive the cam's joints").weak());
         return;
     }
     let joint = info.id;
