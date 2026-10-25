@@ -291,6 +291,11 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         Item::new("Check Interference", UiAction::CheckInterference)
             .tooltip("Find selected parts that overlap (all parts when none is selected)")
             .entry(),
+        Item::new("Model Health", UiAction::CheckHealth)
+            .tooltip(
+                "List selected parts that are not solids and why (all parts when none is selected)",
+            )
+            .entry(),
     ])
     .collect();
 

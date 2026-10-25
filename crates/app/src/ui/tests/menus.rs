@@ -1390,3 +1390,27 @@ fn tools_check_interference_is_enabled_runs_and_keeps_a_stable_native_id() {
         "SolidTool(Union)"
     );
 }
+
+#[test]
+fn tools_model_health_is_enabled_runs_and_keeps_a_stable_native_id() {
+    let mut h = harness(Fixture::default());
+    assert_eq!(
+        click_menu(&mut h, &["Tools", "Model Health"]),
+        [UiAction::CheckHealth]
+    );
+    let bar = crate::menus::menu_bar(&Fixture::default().view(), true);
+    let tools = &bar.iter().find(|m| m.title == "Tools").unwrap().entries;
+    let item = tools
+        .iter()
+        .find_map(|e| match e {
+            crate::menus::Entry::Item(i) if i.label == "Model Health" => Some(i),
+            _ => None,
+        })
+        .expect("Model Health item");
+    assert!(item.enabled);
+    assert_eq!(crate::menus::item_key(item), "CheckHealth");
+    assert_eq!(
+        crate::menus::item_id(&UiAction::CheckInterference),
+        "CheckInterference"
+    );
+}

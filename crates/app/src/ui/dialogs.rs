@@ -194,6 +194,55 @@ pub(super) fn interference_window(
     }
 }
 
+/// The Model Health window: each part that is not a solid with its problems, a button that
+/// selects the part and zooms to it, and Make Solid (enabled when a listed part can be closed);
+/// or that every part checked is a solid.
+pub(super) fn health_window(
+    ui: &mut Ui,
+    report: &crate::editor::HealthReport,
+    actions: &mut Vec<UiAction>,
+) {
+    let mut open = true;
+    let title = "Model Health";
+    let shown = egui::Window::new(title)
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ui.ctx().content_rect().center())
+        .show(ui.ctx(), |ui| {
+            if report.rows.is_empty() {
+                ui.label(match report.checked {
+                    0 => "No parts to check".to_string(),
+                    1 => "The part is a solid".to_string(),
+                    n => format!("All {n} parts are solids"),
+                });
+            }
+            let list = egui::ScrollArea::vertical()
+                .max_height(300.0)
+                .show(ui, |ui| {
+                    for (i, row) in report.rows.iter().enumerate() {
+                        if ui.button(&row.label).clicked() {
+                            actions.push(UiAction::HealthPart(i));
+                        }
+                    }
+                });
+            widgets::name_scroll_bars(ui.ctx(), list.id, "Parts that are not solids");
+            if !report.rows.is_empty()
+                && ui
+                    .add_enabled(report.fixable(), egui::Button::new("Make Solid"))
+                    .on_disabled_hover_text("Nothing listed can be closed safely")
+                    .clicked()
+            {
+                actions.push(UiAction::MakeSolid);
+            }
+        });
+    widgets::name_title_bar(ui.ctx(), &shown, title);
+    if !open {
+        actions.push(UiAction::CloseHealth);
+    }
+}
+
 /// The viewport's right-click menu, at `menu.at`: for a selected section plane Flip and Active
 /// Cut (checked while the plane is the active one), for faces and groups Intersect Faces with
 /// the model, the selection or the context, and Hide, Unhide, Reverse Faces and Orient Faces

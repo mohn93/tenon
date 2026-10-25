@@ -38,6 +38,10 @@ mod clip;
 mod input;
 mod intersect;
 pub use input::{DriveError, Driven, Stopped};
+mod health;
+pub use health::HealthReport;
+#[cfg(test)]
+pub use health::HealthRow;
 mod interference;
 mod joints;
 pub use interference::InterferenceReport;
@@ -313,6 +317,8 @@ pub struct Editor {
     soften: SoftenWindow,
     /// The Check Interference window: what the last check found, while it is open.
     interference: Option<InterferenceReport>,
+    /// The Model Health window: what the last check found, while it is open.
+    health: Option<HealthReport>,
     /// While an agent's `tool_input` runs: every command run, with its result.
     issued: Option<Vec<(Command, Result<Outcome, CommandError>)>>,
     /// The modifier keys the window reports the user holding.
@@ -420,6 +426,7 @@ impl Editor {
             flying: false,
             soften: SoftenWindow::default(),
             interference: None,
+            health: None,
             issued: None,
             user_mods: Mods::default(),
             agent_mods: Mods::default(),

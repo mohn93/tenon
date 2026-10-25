@@ -337,6 +337,15 @@ pub enum UiAction {
     InterferencePair(usize),
     /// Close the Check Interference window.
     CloseInterference,
+    /// Tools > Model Health: check the selected parts (all when none is) and list those that
+    /// are not solids.
+    CheckHealth,
+    /// Select the part of a row of the Model Health window and zoom to it.
+    HealthPart(usize),
+    /// The Model Health window's Make Solid: close the parts listed that can be closed.
+    MakeSolid,
+    /// Close the Model Health window.
+    CloseHealth,
     /// Make the selected edges soft or hard (Entity Info's Soft checkbox).
     SetSoft(bool),
     /// Set the texture offset of the faces (those selected when the field was edited), in
@@ -644,6 +653,8 @@ pub struct View<'a> {
     pub soften: Option<u8>,
     /// The Check Interference window's report while it is open.
     pub interference: Option<&'a crate::editor::InterferenceReport>,
+    /// The Model Health window's report while it is open.
+    pub health: Option<&'a crate::editor::HealthReport>,
     /// Whether the selected edges are all soft, when only edges are selected.
     pub edges_soft: Option<bool>,
     /// Whether everything selected that can be hidden is, None when nothing selected can be.
@@ -888,6 +899,9 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
     }
     if let Some(report) = view.interference {
         dialogs::interference_window(ui, report, actions);
+    }
+    if let Some(report) = view.health {
+        dialogs::health_window(ui, report, actions);
     }
     if let Some(menu) = view.viewport_menu {
         dialogs::viewport_menu(ui, menu, actions);

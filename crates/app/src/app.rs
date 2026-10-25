@@ -2566,6 +2566,18 @@ impl State {
             UiAction::CloseInterference => {
                 self.editor.close_interference();
             }
+            UiAction::CheckHealth => {
+                self.editor.check_health();
+            }
+            UiAction::HealthPart(index) => {
+                self.editor.select_health_part(index);
+            }
+            UiAction::MakeSolid => {
+                self.editor.make_solid_from_window();
+            }
+            UiAction::CloseHealth => {
+                self.editor.close_health();
+            }
             UiAction::Harden => {
                 self.editor.harden_selection();
             }
@@ -2982,6 +2994,7 @@ impl State {
             selection: self.editor.doc().selection(),
             soften: self.editor.soften_window(),
             interference: self.editor.interference_window(),
+            health: self.editor.health_window(),
             edges_soft: self.editor.selection_soft(),
             selection_hidden: self.editor.selection_hidden(),
             selection_section_cut: self.editor.selection_section_cut(),
