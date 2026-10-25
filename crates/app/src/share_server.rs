@@ -7,6 +7,11 @@
 //! a link) and `/s/<blob id>` for the current blob. Everything else is 404 (query strings,
 //! percent escapes and doubled slashes included) or 405. The decryption key is in the link's
 //! fragment, which browsers never send, so the server never sees it.
+//!
+//! A viewer file with a `<name>.gz` copy beside it (`scripts/build-web.sh` makes them) is sent
+//! as that copy, `Content-Encoding: gzip`, to a browser that takes gzip. Viewer files carry an
+//! `ETag` and are revalidated (`304 Not Modified`) rather than downloaded again; the blob is
+//! never kept.
 
 use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
@@ -480,6 +485,11 @@ fn serve(stream: TcpStream, shared: &Shared) {
             }
         }
         Route::File(path) => {
+            // The precompressed copy when the browser takes gzip: the viewer's module is about
+            // a third the size that way.
+            let gzipped = accepts_gzip(&head).then(|| gzip_copy(&path)).flatten();
+            let content_type = mime(&path);
+            let path = gzipped.clone().unwrap_or(path);
             let Ok(file) = File::open(&path) else {
                 let _ = send(
                     &mut stream,
@@ -503,7 +513,23 @@ fn serve(stream: TcpStream, shared: &Shared) {
                 );
                 return;
             }
-            let _ = send_file(&mut stream, file, meta.len(), mime(&path), head_only);
+            let tag = etag(&meta);
+            let mut extra = vec![
+                ("Content-Type", content_type),
+                // Kept by the browser but asked about each time: a viewer opened again (another
+                // share) does not download the module again, and a rebuilt one is picked up.
+                ("Cache-Control", "no-cache"),
+                ("ETag", tag.as_str()),
+                ("Vary", "Accept-Encoding"),
+            ];
+            if gzipped.is_some() {
+                extra.push(("Content-Encoding", "gzip"));
+            }
+            if header(&head, "if-none-match").is_some_and(|tags| matches_etag(tags, &tag)) {
+                let _ = send(&mut stream, 304, "Not Modified", &extra, b"", true);
+                return;
+            }
+            let _ = send_stream(&mut stream, 200, "OK", &extra, file, meta.len(), head_only);
         }
     }
 }
@@ -575,22 +601,57 @@ fn send_stream(
     stream.flush()
 }
 
-fn send_file(
-    stream: &mut impl Write,
-    file: File,
-    length: u64,
-    content_type: &str,
-    head_only: bool,
-) -> std::io::Result<()> {
-    send_stream(
-        stream,
-        200,
-        "OK",
-        &[("Content-Type", content_type)],
-        file,
-        length,
-        head_only,
-    )
+/// The value of the request header `name` (lowercase) in `head` (the request line and
+/// headers), if it has one; a header that is not text counts as absent.
+fn header<'a>(head: &'a [u8], name: &str) -> Option<&'a str> {
+    let text = std::str::from_utf8(head).ok()?;
+    text.split("\r\n").skip(1).find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.trim().eq_ignore_ascii_case(name).then(|| value.trim())
+    })
+}
+
+/// Whether the request's `Accept-Encoding` takes gzip (and does not refuse it with `q=0`).
+fn accepts_gzip(head: &[u8]) -> bool {
+    header(head, "accept-encoding").is_some_and(|value| {
+        value.split(',').any(|item| {
+            let mut parts = item.split(';').map(str::trim);
+            let coding = parts.next().unwrap_or_default();
+            let refused = parts.any(|p| {
+                p.strip_prefix("q=")
+                    .is_some_and(|q| q.trim().parse::<f32>().is_ok_and(|q| q <= 0.0))
+            });
+            (coding.eq_ignore_ascii_case("gzip") || coding == "*") && !refused
+        })
+    })
+}
+
+/// The gzip copy of `path` (`<name>.gz` beside it, a regular file, not a link), if there is one.
+fn gzip_copy(path: &Path) -> Option<PathBuf> {
+    let mut name = path.file_name()?.to_os_string();
+    name.push(".gz");
+    let gz = path.with_file_name(name);
+    std::fs::symlink_metadata(&gz)
+        .is_ok_and(|m| m.file_type().is_file())
+        .then_some(gz)
+}
+
+/// A file's entity tag: its size and modification time, which change when it is rebuilt.
+fn etag(meta: &std::fs::Metadata) -> String {
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos());
+    format!("\"{:x}-{modified:x}\"", meta.len())
+}
+
+/// Whether an `If-None-Match` value names `tag` (or is `*`); weak tags compare as strong ones.
+fn matches_etag(tags: &str, tag: &str) -> bool {
+    tags.split(',').map(str::trim).any(|t| {
+        let t = t.strip_prefix("W/").unwrap_or(t);
+        t == "*" || t == tag
+    })
 }
 
 /// The address to put in the link among `candidates` (the addresses the computer could be

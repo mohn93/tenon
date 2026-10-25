@@ -6,6 +6,8 @@
 //! browser in a request, is not logged and is taken out of the address bar once the model is
 //! open.
 
+use std::task::Poll;
+
 use session::share::{MAX_BLOB_BYTES, parse_fragment};
 
 /// What is said when the link is wrong (the app's own text, so the two cannot differ), the model is not what the link names, or it has expired
@@ -144,9 +146,80 @@ impl Collector {
     }
 }
 
+/// Runs `a` and `b` together (the page has one thread: each goes on while the other waits on the
+/// browser) and gives both results once both are done. `a` is polled first.
+pub async fn both<A: Future, B: Future>(a: A, b: B) -> (A::Output, B::Output) {
+    let mut a = std::pin::pin!(a);
+    let mut b = std::pin::pin!(b);
+    let (mut done_a, mut done_b) = (None, None);
+    std::future::poll_fn(|cx| {
+        if done_a.is_none()
+            && let Poll::Ready(v) = a.as_mut().poll(cx)
+        {
+            done_a = Some(v);
+        }
+        if done_b.is_none()
+            && let Poll::Ready(v) = b.as_mut().poll(cx)
+        {
+            done_b = Some(v);
+        }
+        match (done_a.take(), done_b.take()) {
+            (Some(a), Some(b)) => Poll::Ready((a, b)),
+            (a, b) => {
+                (done_a, done_b) = (a, b);
+                Poll::Pending
+            }
+        }
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Polls `f` to the end with a waker that does nothing, counting the polls.
+    fn run<F: Future>(f: F) -> (F::Output, usize) {
+        let mut f = std::pin::pin!(f);
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        let mut polls = 0;
+        loop {
+            polls += 1;
+            if let Poll::Ready(v) = f.as_mut().poll(&mut cx) {
+                return (v, polls);
+            }
+        }
+    }
+
+    /// Ready after `n` polls (each earlier one is pending), recording its polls in `log`.
+    async fn after(n: usize, name: char, log: &std::cell::RefCell<Vec<char>>) -> char {
+        let mut left = n;
+        std::future::poll_fn(|_| {
+            log.borrow_mut().push(name);
+            if left == 0 {
+                Poll::Ready(name)
+            } else {
+                left -= 1;
+                Poll::Pending
+            }
+        })
+        .await
+    }
+
+    #[test]
+    fn both_runs_two_futures_together_and_waits_for_the_slower() {
+        let log = std::cell::RefCell::new(Vec::new());
+        let ((a, b), polls) = run(both(after(1, 'a', &log), after(3, 'b', &log)));
+        assert_eq!((a, b), ('a', 'b'));
+        assert_eq!(polls, 4);
+        // The first goes first, and neither is polled once it is done.
+        assert_eq!(*log.borrow(), ['a', 'b', 'a', 'b', 'b', 'b']);
+        log.borrow_mut().clear();
+        let ((a, b), polls) = run(both(after(2, 'a', &log), after(0, 'b', &log)));
+        assert_eq!((a, b), ('a', 'b'));
+        assert_eq!(polls, 3);
+        assert_eq!(*log.borrow(), ['a', 'b', 'a', 'a']);
+    }
     use session::share::{link_fragment, seal};
 
     #[test]

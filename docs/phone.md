@@ -19,7 +19,10 @@ local network. The web build and the phone viewer itself do not have this item.
 
 - The viewer's own files (the web build: `index.html`, `web.js`, `web_bg.wasm`) and the one
   encrypted model, nothing else. The server answers only `GET` and `HEAD`, has no directory
-  listing, and answers 404 to any other path.
+  listing, and answers 404 to any other path. To a browser that takes gzip, `web.js` and
+  `web_bg.wasm` go as the gzip copies the build makes (`web_bg.wasm` is about 18 MB, 6 MB
+  gzipped). Viewer files carry an `ETag` and `Cache-Control: no-cache`, so a phone that opens
+  another share revalidates them instead of downloading them again; the model is `no-store`.
 - The key is in the link's fragment (after `#`). Browsers never send the fragment, so the
   server, and anything else on the network, sees only the ciphertext. Anyone who gets the
   whole link (for example by seeing the QR code) can open the model while the share runs.

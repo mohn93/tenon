@@ -16,7 +16,8 @@ scripts/build-web.sh
 The script builds `web` for `wasm32-unknown-unknown` with the size-optimised `web` profile
 (`[profile.web]` in the root `Cargo.toml`: opt-level s, LTO, one codegen unit), runs `wasm-bindgen
 --target web --no-typescript --out-dir web/dist` and copies `web/index.html`. `web/dist`
-(git-ignored) then holds `index.html`, `web.js` and `web_bg.wasm`. `.cargo/config.toml` sets the
+(git-ignored) then holds `index.html`, `web.js` and `web_bg.wasm`, and gzip copies of the last
+two (`.gz`) that the servers send to browsers that take gzip. `.cargo/config.toml` sets the
 `getrandom` backend the wasm build needs.
 
 ## Serve
@@ -25,8 +26,9 @@ The script builds `web` for `wasm32-unknown-unknown` with the size-optimised `we
 scripts/serve-web.sh        # http://localhost:8080, PORT=9000 to change it
 ```
 
-A small Python `http.server` that serves `.wasm` as `application/wasm`. Any static server that
-does so works; no special headers are needed.
+A small Python `http.server` that serves `.wasm` as `application/wasm`, and the `.gz` copies
+(`Content-Encoding: gzip`) to browsers that take gzip. Any static server that serves `.wasm` as
+`application/wasm` works; no special headers are needed.
 
 CI runs `cargo check --target wasm32-unknown-unknown -p web` on Linux x86_64. The page itself is
 tested by hand (open, draw, save, reopen).
