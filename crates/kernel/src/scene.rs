@@ -359,6 +359,10 @@ pub struct Scene {
     /// Notes a viewer hides with the parts they point at (see [`Scene::set_view_hidden_notes`]):
     /// not part of the model, never saved, and left out of equality.
     pub(crate) view_hidden_notes: BTreeSet<NoteId>,
+    /// Dimensions a viewer hides with the parts they measure (see
+    /// [`Scene::set_view_hidden_dimensions`]): not part of the model, never saved, and left
+    /// out of equality.
+    pub(crate) view_hidden_dimensions: BTreeSet<DimensionId>,
     /// The cam trees drives have built, kept while their meshes are unchanged (see
     /// [`Scene::cam_tree`]); not part of the model, and left out of equality.
     pub(crate) cam_trees: CamTrees,
@@ -409,6 +413,7 @@ impl Scene {
             transition: SceneTransition::DEFAULT,
             view_hidden: BTreeSet::new(),
             view_hidden_notes: BTreeSet::new(),
+            view_hidden_dimensions: BTreeSet::new(),
             cam_trees: CamTrees::default(),
             drawn_copies: DrawnCopies::default(),
         }
@@ -451,6 +456,7 @@ impl Scene {
             next_id: used,
             view_hidden: BTreeSet::new(),
             view_hidden_notes: BTreeSet::new(),
+            view_hidden_dimensions: BTreeSet::new(),
             cam_trees: CamTrees::default(),
             drawn_copies: DrawnCopies::default(),
         }

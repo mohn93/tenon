@@ -1,12 +1,13 @@
-//! The notes a viewer's Isolate hides with the parts: a root leader note points at whatever
-//! its anchor lies nearest, and goes when that is a hidden part.
+//! The notes and dimensions a viewer's Isolate hides with the parts: a root leader note points
+//! at whatever its anchor lies nearest, a linear dimension measures what its ends lie nearest
+//! and a radial one the circle's rim, and each goes when that is a hidden part.
 
 use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 
 use glam::{DAffine3, DVec3};
 use kernel::bvh::closest_on_triangle;
-use kernel::{Anchor, FaceId, InstanceId, MeshId, Note, NoteId, Scene};
+use kernel::{Anchor, DimensionId, FaceId, InstanceId, MeshId, Note, NoteId, Scene};
 
 /// The box around `points`; None for none.
 fn enclose(points: impl IntoIterator<Item = DVec3>) -> Option<[DVec3; 2]> {
@@ -186,6 +187,76 @@ impl Meshes {
 /// How deep nested instances are searched.
 const MAX_DEPTH: usize = 64;
 
+/// A point on the rim of the circle `c`.
+fn rim_point(c: &kernel::Circle) -> DVec3 {
+    let n = c.normal.try_normalize().unwrap_or(DVec3::Z);
+    let axis = if n.x.abs() < 0.9 { DVec3::X } else { DVec3::Y };
+    c.center + n.cross(axis).normalize() * c.radius.abs()
+}
+
+/// What the root shows, for finding which root part lies nearest a point.
+struct Nearest<'a> {
+    scene: &'a Scene,
+    meshes: Meshes,
+    own: Vec<[DVec3; 3]>,
+    instances: Vec<(InstanceId, DAffine3, MeshId, [DVec3; 2])>,
+}
+
+impl<'a> Nearest<'a> {
+    fn new(scene: &'a Scene) -> Self {
+        let root = scene.root();
+        let mut meshes = Meshes::default();
+        let own = root
+            .faces()
+            .filter(|(_, f)| scene.face_shown(f))
+            .flat_map(|(id, _)| root.triangulate(id).unwrap_or_default())
+            .collect();
+        let instances = root
+            .instances()
+            .filter(|(_, i)| scene.placed_instance_shown(i))
+            .filter_map(|(id, i)| {
+                let mesh = MeshId::Definition(i.definition);
+                let b = meshes.bounds(scene, mesh)?;
+                Some((id, i.transform, mesh, placed(i.transform, b)))
+            })
+            .collect();
+        Nearest {
+            scene,
+            meshes,
+            own,
+            instances,
+        }
+    }
+
+    /// Whether the root instance nearest `p` (nearer than the root's own faces) is in `hidden`.
+    fn is_hidden(&mut self, p: DVec3, hidden: &BTreeSet<InstanceId>) -> bool {
+        let mut best = self
+            .own
+            .iter()
+            .map(|t| closest_on_triangle(p, *t).distance(p))
+            .fold(f64::INFINITY, f64::min);
+        let mut nearest = None;
+        // Nearest boxes first, so most parts are passed over by their box.
+        let mut order: Vec<(f64, usize)> = self
+            .instances
+            .iter()
+            .enumerate()
+            .map(|(k, (.., b))| (box_distance(p, *b), k))
+            .collect();
+        order.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (near, k) in order {
+            if near >= best {
+                break;
+            }
+            let (id, place, mesh, _) = self.instances[k];
+            if self.meshes.nearer(self.scene, mesh, place, p, &mut best, 1) {
+                nearest = Some(id);
+            }
+        }
+        nearest.is_some_and(|id| hidden.contains(&id))
+    }
+}
+
 /// The root leader notes whose anchor lies nearer one of the root instances `hidden` than
 /// anything else the root shows (its own faces and its other instances). A note anchored to
 /// a root vertex points at the root's own geometry and always stays.
@@ -201,50 +272,45 @@ pub(super) fn notes_pointing_at(scene: &Scene, hidden: &BTreeSet<InstanceId>) ->
             _ => None,
         })
         .collect();
-    let mut out = BTreeSet::new();
     if anchored.is_empty() || hidden.is_empty() {
-        return out;
+        return BTreeSet::new();
     }
-    let mut meshes = Meshes::default();
-    let own: Vec<[DVec3; 3]> = root
-        .faces()
-        .filter(|(_, f)| scene.face_shown(f))
-        .flat_map(|(id, _)| root.triangulate(id).unwrap_or_default())
-        .collect();
-    let instances: Vec<(InstanceId, DAffine3, MeshId, [DVec3; 2])> = root
-        .instances()
-        .filter(|(_, i)| scene.placed_instance_shown(i))
-        .filter_map(|(id, i)| {
-            let mesh = MeshId::Definition(i.definition);
-            let b = meshes.bounds(scene, mesh)?;
-            Some((id, i.transform, mesh, placed(i.transform, b)))
+    let mut nearest = Nearest::new(scene);
+    anchored
+        .into_iter()
+        .filter(|(_, p)| nearest.is_hidden(*p, hidden))
+        .map(|(id, _)| id)
+        .collect()
+}
+
+/// The root dimensions that measure one of the root instances `hidden`: a linear one when
+/// either end lies nearest it, a radial one when a point of its circle's rim does (a circle of
+/// the root's own edges lies on the root's own geometry and stays).
+pub(super) fn dimensions_measuring(
+    scene: &Scene,
+    hidden: &BTreeSet<InstanceId>,
+) -> BTreeSet<DimensionId> {
+    let root = scene.root();
+    let probes: Vec<(DimensionId, Vec<DVec3>)> = root
+        .dimensions()
+        .filter_map(|(id, d)| {
+            let points = match d {
+                kernel::Dimension::Linear { .. } => {
+                    let (a, b) = root.dimension_points(id)?;
+                    vec![a, b]
+                }
+                kernel::Dimension::Radial { .. } => vec![rim_point(&root.radial_circle(id)?)],
+            };
+            Some((id, points))
         })
         .collect();
-    for (note, p) in anchored {
-        let mut best = own
-            .iter()
-            .map(|t| closest_on_triangle(p, *t).distance(p))
-            .fold(f64::INFINITY, f64::min);
-        let mut nearest = None;
-        // Nearest boxes first, so most parts are passed over by their box.
-        let mut order: Vec<(f64, usize)> = instances
-            .iter()
-            .enumerate()
-            .map(|(k, (.., b))| (box_distance(p, *b), k))
-            .collect();
-        order.sort_by(|a, b| a.0.total_cmp(&b.0));
-        for (near, k) in order {
-            if near >= best {
-                break;
-            }
-            let (id, place, mesh, _) = instances[k];
-            if meshes.nearer(scene, mesh, place, p, &mut best, 1) {
-                nearest = Some(id);
-            }
-        }
-        if nearest.is_some_and(|id| hidden.contains(&id)) {
-            out.insert(note);
-        }
+    if probes.is_empty() || hidden.is_empty() {
+        return BTreeSet::new();
     }
-    out
+    let mut nearest = Nearest::new(scene);
+    probes
+        .into_iter()
+        .filter(|(_, points)| points.iter().any(|p| nearest.is_hidden(*p, hidden)))
+        .map(|(id, _)| id)
+        .collect()
 }

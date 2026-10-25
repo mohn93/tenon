@@ -221,3 +221,56 @@ fn isolating_hides_the_notes_pointing_at_hidden_parts() {
     d.open_bytes("again", &bytes, true).unwrap();
     assert!(d.scene().view_hidden_notes().is_empty());
 }
+
+/// The root's dimensions, by the x of their first end.
+fn dimension_ids(d: &Document) -> Vec<(i64, kernel::DimensionId)> {
+    d.scene()
+        .root()
+        .dimensions()
+        .map(|(id, _)| {
+            (
+                d.scene().root().dimension_points(id).unwrap().0.x.round() as i64,
+                id,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn isolating_hides_the_dimensions_measuring_hidden_parts() {
+    let (mut d, a, b) = two_groups();
+    // On the first square, on the second, and from one to the other.
+    for (x0, x1) in [(0.5, 1.5), (10.5, 11.5), (1.8, 11.0)] {
+        run(
+            &mut d,
+            json!({"type": "add_dimension", "a": [x0, 1.0, 0.1], "b": [x1, 1.0, 0.1], "offset": [0, -1, 0]}),
+        );
+    }
+    let dims = dimension_ids(&d);
+    assert_eq!(dims.len(), 3);
+    let id = |x: i64| dims.iter().find(|(k, _)| *k == x).unwrap().1;
+    let (on_a, on_b, across) = (id(1), id(11), id(2));
+    d.set_read_only(true);
+
+    assert!(d.isolate(&[a]));
+    let hidden = d.scene().view_hidden_dimensions().clone();
+    assert!(hidden.contains(&on_b), "on the hidden part");
+    assert!(!hidden.contains(&on_a), "on the kept part");
+    assert!(hidden.contains(&across), "one end on the hidden part");
+    let root = d.scene().root();
+    for (_, did) in &dims {
+        let dim = root.dimension(*did).unwrap();
+        assert_eq!(d.scene().dimension_shown(*did, dim), !hidden.contains(did));
+    }
+    // Keeping the other part hides the first dimension instead.
+    assert!(d.isolate(&[b]));
+    let hidden = d.scene().view_hidden_dimensions().clone();
+    assert!(hidden.contains(&on_a) && !hidden.contains(&on_b) && hidden.contains(&across));
+    // Show all brings every dimension back, and nothing of it is saved.
+    assert!(d.show_all());
+    assert!(d.scene().view_hidden_dimensions().is_empty());
+    assert!(d.isolate(&[a]));
+    let bytes = d.encode_bytes().unwrap();
+    d.open_bytes("again", &bytes, true).unwrap();
+    assert!(d.scene().view_hidden_dimensions().is_empty());
+}

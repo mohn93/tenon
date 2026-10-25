@@ -1776,7 +1776,7 @@ impl<'a> Walk<'a> {
             FADED_ANNOTATION_COLOR
         };
         for (did, d) in model.dimensions() {
-            if ghost_mesh || !scene.tag_shown(d.tag()) {
+            if ghost_mesh || !scene.dimension_shown(did, d) {
                 continue;
             }
             let Some(shape) = AnnotationShape::of(model, EntityId::Dimension(did)) else {
@@ -2210,6 +2210,43 @@ mod tests {
         );
         s.set_view_hidden(BTreeSet::new());
         s.set_view_hidden_notes(BTreeSet::new());
+        assert_eq!(
+            scene_geometry(&s, &[], &BTreeSet::new()).annotations.len(),
+            2
+        );
+    }
+
+    #[test]
+    fn dimensions_hidden_for_viewing_are_not_drawn() {
+        let (mut s, _, second) = two_squares();
+        let linear = |x: f64| kernel::Dimension::Linear {
+            a: kernel::Anchor::Point(DVec3::new(x, 0.5, 0.0)),
+            b: kernel::Anchor::Point(DVec3::new(x + 1.0, 0.5, 0.0)),
+            offset: DVec3::new(0.0, -1.0, 0.0),
+            tag: None,
+        };
+        s.edit(MeshId::Root, |m| m.add_dimension(linear(0.5)))
+            .unwrap();
+        let measuring = s
+            .edit(MeshId::Root, |m| m.add_dimension(linear(3.5)))
+            .unwrap()
+            .summary()
+            .created[0];
+        let EntityId::Dimension(measuring) = measuring else {
+            panic!("a dimension");
+        };
+        assert_eq!(
+            scene_geometry(&s, &[], &BTreeSet::new()).annotations.len(),
+            2
+        );
+        s.set_view_hidden(BTreeSet::from([second]));
+        s.set_view_hidden_dimensions(BTreeSet::from([measuring]));
+        assert_eq!(
+            scene_geometry(&s, &[], &BTreeSet::new()).annotations.len(),
+            1
+        );
+        s.set_view_hidden(BTreeSet::new());
+        s.set_view_hidden_dimensions(BTreeSet::new());
         assert_eq!(
             scene_geometry(&s, &[], &BTreeSet::new()).annotations.len(),
             2
