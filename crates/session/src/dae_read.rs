@@ -16,8 +16,9 @@ use crate::scene_read::{
 };
 use crate::texture::MAX_TEXTURE_BYTES;
 
-/// Most XML nodes (elements, text and attributes' owners) a COLLADA file may have.
-const MAX_XML_NODES: u32 = 20_000_000;
+/// Most XML nodes (elements and text) a COLLADA file may have. Geometry lies in the text of
+/// a few elements, so real files hold far fewer; each node takes tens of bytes once parsed.
+const MAX_XML_NODES: u32 = 4_000_000;
 
 /// Most corners one polygon may have.
 const MAX_CORNERS: usize = 100_000;
