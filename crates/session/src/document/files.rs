@@ -392,6 +392,9 @@ impl Document {
         if format == ExportFormat::Svg {
             return self.export_svg(target, overwrite, refuse_links, scale);
         }
+        if format == ExportFormat::Csv {
+            return self.export_csv(target, overwrite, refuse_links);
+        }
         // An OBJ with painted faces names a material library beside it: same name, `.mtl`.
         let mtl_path = target.with_extension("mtl");
         let mtl_name = mtl_path
@@ -437,6 +440,7 @@ impl Document {
                 ExportFormat::Gltf => Kind::Gltf,
                 ExportFormat::Skp => Kind::Skp,
                 ExportFormat::Svg => Kind::Svg,
+                ExportFormat::Csv => Kind::Csv,
             };
             let checks = std::iter::once((target.to_path_buf(), kind)).chain(side);
             if let Some((p, k)) = checks.into_iter().find(|(p, k)| !sniff::replaceable(p, *k)) {
@@ -555,6 +559,11 @@ impl Document {
                     report,
                 })
             }
+            ExportFormat::Csv => Ok(ExportedBytes {
+                bytes: self.cut_list_csv()?.into_bytes(),
+                side_files: Vec::new(),
+                report: ExportReport::default(),
+            }),
             _ => {
                 let (encoded, report) = self.encode_triangles(format, &format!("{stem}.mtl"))?;
                 let side_files = encoded
@@ -632,6 +641,25 @@ impl Document {
     ) -> Result<(), CommandError> {
         let target = self.check_pdf_target(path, overwrite, refuse_links)?;
         file::replace_file(&target, pdf, Access::Default).map_err(|e| file_error(path, e))
+    }
+
+    /// Writes the model's cut list as CSV (see `cutlist`).
+    fn export_csv(
+        &self,
+        target: &Path,
+        overwrite: bool,
+        refuse_links: bool,
+    ) -> Result<ExportReport, CommandError> {
+        if refuse_links {
+            check_links(std::iter::once(target))?;
+        }
+        if !overwrite && !sniff::replaceable(target, Kind::Csv) {
+            return Err(sniff::refusal(target, Kind::Csv));
+        }
+        let text = self.cut_list_csv()?;
+        file::replace_file(target, text.as_bytes(), Access::Default)
+            .map_err(|e| file_error(&target.display().to_string(), e))?;
+        Ok(ExportReport::default())
     }
 
     /// Writes the current view as a line drawing in SVG (see `drawing` and `svg`): in pixels at

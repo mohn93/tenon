@@ -1278,7 +1278,7 @@ pub enum Command {
     },
     /// Write every face of the model (all instances placed, in root coordinates) as triangles
     /// to `path`. `format` defaults to the one the file name's extension names (`.obj`,
-    /// `.stl`, `.glb`, `.gltf`, `.skp`, `.svg`). Not an undo step. The outcome's `export` counts the
+    /// `.stl`, `.glb`, `.gltf`, `.skp`, `.svg`, `.csv`). Not an undo step. The outcome's `export` counts the
     /// triangles written and the faces left out because they could not be triangulated. A
     /// SketchUp 2017 file (`skp`) holds the whole scene instead: every definition the root
     /// places written once, faces with holes, soft edges, guides and materials with their
@@ -1289,6 +1289,9 @@ pub enum Command {
     /// camera and viewport): visible edges only (soft edges, hidden tags and what section cuts
     /// remove are left out), section cuts with their fill and outlines, and the labels and
     /// lines of dimensions and notes; its `export` counts the polylines drawn in `lines`.
+    /// A CSV (`.csv`, or `format` `csv`) is the cut list of the whole model grouped by
+    /// definition (see the `cut_list` query), sizes in the model's display unit named in the
+    /// header; it has no triangles, so `export` is empty and an empty model gives a header only.
     /// An existing file that is not of the format written, or the SketchUp file the model
     /// was opened from, is refused unless `overwrite` is true.
     Export {

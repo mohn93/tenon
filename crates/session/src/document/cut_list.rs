@@ -5,6 +5,7 @@ use kernel::{EntityId, InstanceId};
 
 use super::Document;
 use crate::command::{CommandError, ErrorKind};
+use crate::cutlist::to_csv;
 use crate::query::{CutListGrouping, CutRowInfo};
 
 impl Document {
@@ -31,11 +32,28 @@ impl Document {
             instances.push(i);
         }
         let inherited = cutlist::context_material(&self.scene, &self.context);
+        self.cut_rows(m, &instances, inherited, group_by)
+    }
+
+    /// The model's cut list as CSV in the display units: the root's parts grouped by
+    /// definition, whichever group is open.
+    pub(super) fn cut_list_csv(&self) -> Result<String, CommandError> {
+        let rows = self.cut_rows(self.scene.root(), &[], None, CutListGrouping::Definition)?;
+        Ok(to_csv(&rows, &self.units))
+    }
+
+    fn cut_rows(
+        &self,
+        mesh: &kernel::Model,
+        instances: &[InstanceId],
+        inherited: Option<kernel::MaterialId>,
+        group_by: CutListGrouping,
+    ) -> Result<Vec<CutRowInfo>, CommandError> {
         let grouping = match group_by {
             CutListGrouping::Definition => Grouping::Definition,
             CutListGrouping::None => Grouping::None,
         };
-        let rows = cutlist::cut_list(&self.scene, m, &instances, inherited, grouping)
+        let rows = cutlist::cut_list(&self.scene, mesh, instances, inherited, grouping)
             .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e))?;
         Ok(rows
             .into_iter()

@@ -343,13 +343,14 @@ pub struct Editor {
 }
 
 /// The formats File > Export offers, as (filter name, extension).
-pub const EXPORT_FORMATS: [(&str, &str); 6] = [
+pub const EXPORT_FORMATS: [(&str, &str); 7] = [
     ("OBJ", "obj"),
     ("STL", "stl"),
     ("glTF binary", "glb"),
     ("glTF", "gltf"),
     ("SketchUp 2017 (.skp)", "skp"),
     ("SVG drawing", "svg"),
+    ("Cut list (CSV)", "csv"),
 ];
 
 /// The colors the Materials panel offers; new materials get them in turn.

@@ -232,3 +232,56 @@ fn bad_ids_are_refused() {
     );
     assert_eq!(rows(&d, json!({"type": "cut_list"})), Vec::<Value>::new());
 }
+
+fn scratch(name: &str) -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("session-cutlist-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(name);
+    let _ = std::fs::remove_file(&path);
+    path
+}
+
+#[test]
+fn the_csv_export_escapes_names_and_follows_the_display_units() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_box", "corner": [0, 0, 0], "size": [1.2, 0.0254, 0.019],
+               "as": "group", "name": "Rail, \"long\""}),
+    );
+    run(
+        &mut d,
+        json!({"type": "set_units", "length": "millimeters", "precision": 1}),
+    );
+    let path = scratch("list.csv");
+    let out = run(
+        &mut d,
+        json!({"type": "export", "path": path.to_str().unwrap()}),
+    );
+    assert_eq!(out["export"]["triangles"], 0);
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        text,
+        "Name,Material,Length (mm),Width (mm),Thickness (mm),Quantity,Solid,Note\r\n\
+         \"Rail, \"\"long\"\"\",,1200,25.4,19,1,yes,\r\n"
+    );
+    // Another unit changes the header and the numbers; the same file may be replaced.
+    run(
+        &mut d,
+        json!({"type": "set_units", "length": "inches", "precision": 2}),
+    );
+    run(
+        &mut d,
+        json!({"type": "export", "path": path.to_str().unwrap()}),
+    );
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.starts_with("Name,Material,Length (in),Width (in),Thickness (in),"));
+    assert!(text.contains(",47.24,1,0.75,1,yes,"), "{text}");
+    // A file that is not a cut list is not replaced without `overwrite`.
+    std::fs::write(&path, "hello").unwrap();
+    let cmd: Command =
+        serde_json::from_value(json!({"type": "export", "path": path.to_str().unwrap()})).unwrap();
+    assert!(d.execute(cmd).is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
+}

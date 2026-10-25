@@ -347,7 +347,7 @@ fn number(s: &str) -> Option<f64> {
 }
 
 /// `value` with at most `precision` decimals, trailing zeros dropped and no "-0".
-fn decimals(value: f64, precision: u8) -> String {
+pub(crate) fn decimals(value: f64, precision: u8) -> String {
     let s = format!("{value:.*}", usize::from(precision));
     let s = if s.contains('.') {
         s.trim_end_matches('0').trim_end_matches('.')

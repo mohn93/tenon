@@ -7,6 +7,7 @@ pub mod camera;
 mod circle;
 pub mod clip;
 mod command;
+pub mod cutlist;
 mod document;
 pub mod drawing;
 pub mod export;

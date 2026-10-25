@@ -32,11 +32,13 @@ pub enum ExportFormat {
     Skp,
     /// A line drawing of the current view (hidden lines removed), as SVG (see `drawing`).
     Svg,
+    /// The model's cut list as CSV (see `cutlist`).
+    Csv,
 }
 
 impl ExportFormat {
     /// The format a file name's extension asks for (`.obj`, `.stl`, `.glb`, `.gltf`, `.skp`,
-    /// any case).
+    /// `.svg`, `.csv`, any case).
     pub fn from_path(path: &Path) -> Option<Self> {
         let ext = path.extension()?.to_str()?.to_ascii_lowercase();
         Some(match ext.as_str() {
@@ -46,6 +48,7 @@ impl ExportFormat {
             "gltf" => ExportFormat::Gltf,
             "skp" => ExportFormat::Skp,
             "svg" => ExportFormat::Svg,
+            "csv" => ExportFormat::Csv,
             _ => return None,
         })
     }
@@ -158,6 +161,9 @@ pub(crate) fn encode(
         }
         ExportFormat::Svg => {
             return Err("an SVG file is drawn from the view, not triangles".to_string());
+        }
+        ExportFormat::Csv => {
+            return Err("a CSV file is the cut list, not triangles".to_string());
         }
     })
 }
