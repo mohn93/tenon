@@ -22,6 +22,9 @@ const MAX_XML_NODES: u32 = 20_000_000;
 /// Most corners one polygon may have.
 const MAX_CORNERS: usize = 100_000;
 
+/// Highest input offset a primitive may have (indices per corner, less one).
+const MAX_INPUT_OFFSET: usize = 63;
+
 /// The element's name without its namespace.
 fn tag<'a>(n: &Node<'a, '_>) -> &'a str {
     n.tag_name().name()
@@ -490,12 +493,16 @@ impl<'a, 'i> Reader<'a, 'i, '_> {
             };
             let normal = self.input(part, "NORMAL").filter(|_| all_normals);
             let uv = self.input(part, "TEXCOORD");
-            let stride = part
+            let most = part
                 .descendants()
                 .filter(|n| tag(n) == "input")
                 .filter_map(|n| n.attribute("offset")?.parse::<usize>().ok())
                 .max()
-                .map_or(1, |m| m + 1);
+                .unwrap_or(0);
+            if most > MAX_INPUT_OFFSET {
+                return Err(format!("an input's offset is over {MAX_INPUT_OFFSET}"));
+            }
+            let stride = most + 1;
             let material = part.attribute("material").and_then(|symbol| {
                 binding
                     .iter()

@@ -53,6 +53,7 @@ mod read_only;
 mod revolve;
 mod rotate;
 mod scale;
+mod scene_fuzz;
 mod scene_joints;
 mod scenes;
 mod sections;
