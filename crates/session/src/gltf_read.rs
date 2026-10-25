@@ -15,7 +15,8 @@ use crate::scene_read::{
     SceneMesh, SceneNode, ScenePolygon, SideFiles, counted, srgb_byte,
 };
 
-/// Extensions a file may require that change nothing this reader reads.
+/// Extensions a file may require that change nothing this reader reads, or that it applies
+/// (`KHR_texture_transform`).
 const HARMLESS: [&str; 5] = [
     "KHR_materials_emissive_strength",
     "KHR_materials_unlit",
@@ -111,6 +112,54 @@ impl Default for GPbr {
 struct GTextureRef {
     index: usize,
     tex_coord: usize,
+    extensions: GTextureExtensions,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct GTextureExtensions {
+    #[serde(rename = "KHR_texture_transform")]
+    transform: Option<GTextureTransform>,
+}
+
+/// `KHR_texture_transform`: texture coordinates scaled, then turned, then offset.
+#[derive(Deserialize, Clone, Copy)]
+#[serde(default, rename_all = "camelCase")]
+struct GTextureTransform {
+    offset: [f64; 2],
+    rotation: f64,
+    scale: [f64; 2],
+    tex_coord: Option<usize>,
+}
+
+impl Default for GTextureTransform {
+    fn default() -> Self {
+        GTextureTransform {
+            offset: [0.0; 2],
+            rotation: 0.0,
+            scale: [1.0; 2],
+            tex_coord: None,
+        }
+    }
+}
+
+impl GTextureTransform {
+    /// Texture coordinates `uv` as the transform moves them.
+    fn apply(&self, uv: DVec2) -> DVec2 {
+        let (sin, cos) = self.rotation.sin_cos();
+        let s = uv * DVec2::from(self.scale);
+        DVec2::new(cos * s.x + sin * s.y, cos * s.y - sin * s.x) + DVec2::from(self.offset)
+    }
+
+    /// True when a texture placement (a turn and a scale along each side) lays the moved
+    /// coordinates exactly: no mirror, and no shear (equal scales, or a turn by quarters).
+    fn is_simple(&self) -> bool {
+        let [x, y] = self.scale;
+        let quarter = (self.rotation / std::f64::consts::FRAC_PI_2).fract().abs();
+        x > 0.0
+            && y > 0.0
+            && ((x - y).abs() <= 1e-9 * x.max(y) || quarter < 1e-9 || quarter > 1.0 - 1e-9)
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -285,6 +334,9 @@ pub(crate) fn read_gltf(bytes: &[u8], side: &SideFiles) -> Result<ReadScene, Str
 
     // Which texture coordinate set each material's base-color texture uses.
     let mut uv_set: Vec<Option<usize>> = vec![None; doc.materials.len()];
+    // And how it moves those coordinates.
+    let mut uv_transform: Vec<Option<GTextureTransform>> = vec![None; doc.materials.len()];
+    let mut sheared = 0usize;
     let mut materials = Vec::with_capacity(doc.materials.len());
     let mut image_cache: BTreeMap<usize, Result<Vec<u8>, &'static str>> = BTreeMap::new();
     let mut budget = ImageBudget::default();
@@ -296,6 +348,11 @@ pub(crate) fn read_gltf(bytes: &[u8], side: &SideFiles) -> Result<ReadScene, Str
             .as_ref()
             .and_then(|t| {
                 uv_set[i] = Some(t.tex_coord);
+                if let Some(x) = t.extensions.transform {
+                    uv_set[i] = Some(x.tex_coord.unwrap_or(t.tex_coord));
+                    uv_transform[i] = Some(x);
+                    sheared += usize::from(!x.is_simple());
+                }
                 let source = doc.textures.get(t.index)?.source?;
                 Some(
                     image_cache
@@ -364,7 +421,16 @@ pub(crate) fn read_gltf(bytes: &[u8], side: &SideFiles) -> Result<ReadScene, Str
             let uvs = if all_uvs {
                 let set = set_of(p).unwrap_or(0);
                 match p.attributes.get(&format!("TEXCOORD_{set}")) {
-                    Some(&t) => Some(data.vec2(t)?),
+                    Some(&t) => {
+                        let uvs = data.vec2(t)?;
+                        match p
+                            .material
+                            .and_then(|i| uv_transform.get(i).copied().flatten())
+                        {
+                            Some(x) => Some(uvs.into_iter().map(|uv| x.apply(uv)).collect()),
+                            None => Some(uvs),
+                        }
+                    }
                     None => None,
                 }
             } else {
@@ -474,6 +540,18 @@ pub(crate) fn read_gltf(bytes: &[u8], side: &SideFiles) -> Result<ReadScene, Str
         if n > 0 {
             warnings.push(format!("{} not imported", counted(n, one, many)));
         }
+    }
+    if sheared > 0 {
+        warnings.push(format!(
+            "{} the image (KHR_texture_transform) in a way a texture position cannot, so the \
+             nearest turn and scale {} laid",
+            counted(
+                sheared,
+                "material's texture transform shears or mirrors",
+                "materials' texture transforms shear or mirror"
+            ),
+            if sheared == 1 { "was" } else { "were" },
+        ));
     }
     Ok(ReadScene {
         meshes,

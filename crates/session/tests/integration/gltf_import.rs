@@ -198,6 +198,63 @@ fn a_textured_materials_color_is_the_images_average_times_the_base_color_factor(
     assert_eq!(tinted, want, "{plain:?}");
 }
 
+/// Where each corner of the model's triangles lies on the image (in repeats, v up, whole
+/// repeats aside) with the first material's texture size.
+fn image_spots(d: &Document) -> Vec<(DVec3, DVec2)> {
+    let materials = ask(d, json!({"type": "materials"}))["materials"].clone();
+    let t = &materials[0]["texture"];
+    let size = DVec2::new(t["width"].as_f64().unwrap(), t["height"].as_f64().unwrap());
+    let mut out = Vec::new();
+    for tri in d.scene().triangles() {
+        for (c, uv) in tri.corners.iter().zip(tri.uvs) {
+            out.push((*c, uv / size));
+        }
+    }
+    out
+}
+
+#[test]
+fn khr_texture_transform_moves_turns_and_scales_the_coordinates() {
+    let (offset, rotation, scale) = ([0.25, 0.1], 0.5f64, [2.0, 2.0]);
+    let path = textured_with("transformed.glb", |v| {
+        v["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"]["extensions"] = json!({
+            "KHR_texture_transform": {"offset": offset, "rotation": rotation, "scale": scale}
+        });
+        v["extensionsUsed"] = json!(["KHR_texture_transform"]);
+        v["extensionsRequired"] = json!(["KHR_texture_transform"]);
+    });
+    let mut d = doc();
+    let report = import(&mut d, &path);
+    assert!(
+        report["warnings"].as_array().is_none_or(Vec::is_empty),
+        "{report}"
+    );
+    let (sin, cos) = rotation.sin_cos();
+    for (c, st) in image_spots(&d) {
+        // The fixture's coordinates are (x, -y) with v down the image; the transform is
+        // offset after rotation after scale, in the file's coordinates.
+        let (u, v) = (c.x * scale[0], -c.y * scale[1]);
+        let (u, v) = (
+            cos * u + sin * v + offset[0],
+            -sin * u + cos * v + offset[1],
+        );
+        let want = DVec2::new(u, -v);
+        let d = st - want;
+        assert!((d - d.round()).length() < 1e-6, "{c}: {st} not {want}");
+    }
+
+    // A rotation with unequal scales shears the image, which a placement cannot: the
+    // nearest is laid, and the report says so.
+    let path = textured_with("sheared.glb", |v| {
+        v["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"]["extensions"] = json!({
+            "KHR_texture_transform": {"rotation": 0.5, "scale": [1.0, 3.0]}
+        });
+    });
+    let report = import(&mut doc(), &path);
+    let warnings = report["warnings"].to_string();
+    assert!(warnings.contains("KHR_texture_transform"), "{report}");
+}
+
 #[test]
 fn a_mesh_two_nodes_place_becomes_one_component_placed_twice() {
     let mut d = doc();
