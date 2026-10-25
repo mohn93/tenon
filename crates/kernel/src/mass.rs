@@ -10,6 +10,7 @@ use glam::{DAffine3, DMat3, DVec3};
 
 use crate::ids::{DefinitionId, InstanceId, MaterialId};
 use crate::model::{Instance, Model};
+use crate::parallel::each_in_parallel;
 use crate::scene::{MeshId, Scene};
 use crate::solid::open_reason;
 
@@ -338,6 +339,26 @@ struct Walk<'a> {
 }
 
 impl Walk<'_> {
+    /// Works out what every definition placed by `instances`, at any depth, is to the sum, all
+    /// at once on a few threads.
+    fn prepare<'i>(&mut self, instances: impl IntoIterator<Item = &'i Instance>) {
+        let scene = self.scene;
+        let mut found = Vec::new();
+        let mut seen = BTreeSet::new();
+        let mut next: Vec<DefinitionId> = instances.into_iter().map(|i| i.definition).collect();
+        while let Some(d) = next.pop() {
+            let Some(def) = scene.definition(d) else {
+                continue;
+            };
+            if seen.insert(d) {
+                found.push((d, &def.mesh));
+                next.extend(def.mesh.instances().map(|(_, i)| i.definition));
+            }
+        }
+        let parts = each_in_parallel(found.len(), |k| part(found[k].1));
+        self.parts.extend(found.iter().map(|(d, _)| *d).zip(parts));
+    }
+
     fn skip(&mut self, path: &str, reason: String) {
         self.skipped.push(Skipped {
             path: path.into(),
@@ -403,6 +424,7 @@ pub fn instance_mass(
         parts: BTreeMap::new(),
         skipped: Vec::new(),
     };
+    walk.prepare([instance]);
     walk.instance(instance, "", inherited, 0)
         .transformed(&instance.transform)
         .props()
@@ -433,6 +455,7 @@ pub fn mass_report(
         parts: BTreeMap::new(),
         skipped: Vec::new(),
     };
+    walk.prepare(ids.iter().filter_map(|id| mesh.instance(*id)));
     let mut total = Acc::default();
     let mut instances = Vec::new();
     for id in ids {
