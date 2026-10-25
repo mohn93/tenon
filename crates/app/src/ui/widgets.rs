@@ -40,6 +40,22 @@ pub fn icon_button(
         .on_disabled_hover_ui(|ui| hint(ui, tooltip, bound))
 }
 
+/// The width `icon_button` takes for `icon`: its glyph and padding, CONTROL_HEIGHT at least.
+pub fn icon_button_width(ui: &Ui, icon: &str) -> f32 {
+    let glyph = egui::WidgetText::from(
+        RichText::new(icon)
+            .family(fonts::icons())
+            .size(theme::ICON_SIZE),
+    )
+    .into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Button,
+    );
+    (glyph.size().x + 2.0 * ui.spacing().button_padding.x).max(theme::CONTROL_HEIGHT)
+}
+
 /// A tool's button on the rail: its glyph in a square `side` points wide (`RAIL_BUTTON`, less
 /// in a short window), on an accent fill while it is the active tool (otherwise framed only
 /// under the pointer, as a selectable label is). Named for the tool; the tooltip names the
@@ -334,6 +350,18 @@ pub fn name_scroll_bars(ctx: &egui::Context, id: egui::Id, what: &str) {
     }
 }
 
+/// Adds `slider` with its rail in the pressed fill. egui fills the rail as an idle widget,
+/// which is a window's own fill: in the Settings window only the knob would show.
+pub fn slider(ui: &mut Ui, slider: egui::Slider<'_>) -> Response {
+    let t = theme::tokens(ui.ctx().theme());
+    ui.scope(|ui| {
+        // The knob takes the idle fill too; its ring keeps it apart from the rail.
+        ui.visuals_mut().widgets.inactive.bg_fill = t.bg_pressed;
+        ui.add(slider)
+    })
+    .inner
+}
+
 /// A slider for `value` in `range`, moving in steps of `step`, with its value box after it; the
 /// slider is labelled by the label widget `label` and the box named "`name` value". egui's
 /// slider draws its own box without a name, so the slider is drawn without one and the box
@@ -362,13 +390,13 @@ pub fn slider_and_box<T: egui::emath::Numeric>(
     step: f64,
     value_box: impl for<'v> FnOnce(egui::DragValue<'v>) -> egui::DragValue<'v>,
 ) -> (Response, Response) {
-    let track = ui
-        .add(
-            egui::Slider::new(value, range.clone())
-                .step_by(step)
-                .show_value(false),
-        )
-        .labelled_by(label);
+    let track = slider(
+        ui,
+        egui::Slider::new(value, range.clone())
+            .step_by(step)
+            .show_value(false),
+    )
+    .labelled_by(label);
     // The box moves by a step per arrow key, AccessKit Increment or Decrement, and point
     // dragged: a rate below a step would round back to the value it started from.
     let shown = ui.add(value_box(

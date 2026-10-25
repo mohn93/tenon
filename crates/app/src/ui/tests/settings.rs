@@ -345,3 +345,26 @@ fn the_model_tab_sets_the_scene_transition() {
     h.run_ok();
     assert_eq!(h.state_mut().take(), []);
 }
+
+#[test]
+fn the_autosave_slider_shows_its_rail_on_the_window() {
+    let mut h = harness(settings_fixture());
+    click(&mut h, "Files");
+    let slider = h
+        .get_all_by_label("Autosave every")
+        .find(|n| n.accesskit_node().role() == egui::accesskit::Role::Slider)
+        .expect("the slider")
+        .rect();
+    // The rail: a bar across the slider in a fill other than the window's.
+    let window = theme::DARK.bg_raised;
+    let rail = drawn_shapes(&h).into_iter().any(|s| match s {
+        egui::Shape::Rect(r) => {
+            r.fill != window
+                && r.fill.a() > 0
+                && slider.contains_rect(r.rect)
+                && r.rect.width() > 0.8 * slider.width()
+        }
+        _ => false,
+    });
+    assert!(rail, "a rail across {slider:?}");
+}
