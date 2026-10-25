@@ -559,12 +559,23 @@ pub fn polygon_geometry(
     let built = build_placed(points, polygons, &textures, false)?;
     let mut soft: Vec<(usize, usize)> = Vec::new();
     if normals.len() == points.len() {
+        // Each polygon's first point at each welded corner, looked up rather than searched
+        // for, so long polygons stay linear.
+        let mut point_at: HashMap<(usize, usize), usize> = HashMap::new();
+        for f in &built.faces {
+            if point_at.contains_key(&(f.source, f.loops[0][0])) {
+                continue;
+            }
+            for &k in &polygons[f.source].corners {
+                if let Some(&c) = built.map.get(k) {
+                    point_at.entry((f.source, c)).or_insert(k);
+                }
+            }
+        }
         // The file's normal at welded corner `c` of face `f`: that of the polygon's own point.
         let normal = |f: &BuiltFace, c: usize| {
-            polygons[f.source]
-                .corners
-                .iter()
-                .find(|&&k| built.map.get(k) == Some(&c))
+            point_at
+                .get(&(f.source, c))
                 .map(|&k| normals[k].normalize_or_zero())
                 .filter(|n| *n != DVec3::ZERO)
         };

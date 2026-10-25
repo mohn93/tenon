@@ -636,3 +636,29 @@ fn polygon_geometry_softens_smooth_surfaces_and_keeps_creases() {
         "diagonals of flat quads are coplanar, so not soft"
     );
 }
+
+#[test]
+fn polygon_geometry_with_normals_stays_quick_on_long_polygons_sharing_their_sides() {
+    // A long ring that is not flat (its corners rise and fall), and a second polygon running
+    // back along the same corners to an apex: thousands of sides each shared by two faces
+    // from the two long polygons.
+    let n = 50_000;
+    let mut points: Vec<DVec3> = (0..n)
+        .map(|k| {
+            let a = std::f64::consts::TAU * k as f64 / n as f64;
+            DVec3::new(a.cos(), a.sin(), if k % 2 == 0 { 0.0 } else { 0.01 })
+        })
+        .collect();
+    points.push(DVec3::new(0.0, 0.0, 1.0));
+    let normals = vec![DVec3::Z; n + 1];
+    let back: Vec<usize> = std::iter::once(n).chain((0..n).rev()).collect();
+    let polygons = [polygon(&(0..n).collect::<Vec<_>>()), polygon(&back)];
+    let started = std::time::Instant::now();
+    let (g, _) = polygon_geometry(&points, &polygons, &[], &normals, false).unwrap();
+    assert!(g.faces.len() > 1000);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+}
