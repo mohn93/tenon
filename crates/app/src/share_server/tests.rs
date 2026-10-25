@@ -474,6 +474,8 @@ fn a_client_that_dribbles_bytes_gets_no_extra_time() {
     let s = start(&d);
     let mut c = connect(s.port());
     let t = Instant::now();
+    // Set while the socket is open: macOS refuses it once the server has closed its end.
+    c.set_read_timeout(Some(Duration::from_millis(1))).unwrap();
     let mut closed = false;
     while t.elapsed() < Duration::from_secs(4) {
         if c.write_all(b"G").is_err() {
@@ -481,10 +483,16 @@ fn a_client_that_dribbles_bytes_gets_no_extra_time() {
             break;
         }
         std::thread::sleep(Duration::from_millis(100));
-        c.set_read_timeout(Some(Duration::from_millis(1))).unwrap();
         let mut b = [0u8; 4];
-        if matches!(c.read(&mut b), Ok(0)) {
-            closed = true;
+        match c.read(&mut b) {
+            Ok(0) => closed = true,
+            // A reset is the server closing too; a timeout is it still waiting.
+            Err(e) if !matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                closed = true;
+            }
+            _ => {}
+        }
+        if closed {
             break;
         }
     }
