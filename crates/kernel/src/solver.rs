@@ -647,6 +647,9 @@ fn shown(kind: JointKind, value: f64) -> String {
     format!("{text}{unit}")
 }
 
+/// The triangle tree of each cam definition, in its own coordinates.
+pub(crate) type CamTrees = BTreeMap<DefinitionId, Rc<Bvh>>;
+
 fn refuse(why: String) -> KernelError {
     KernelError::Joint(why)
 }
@@ -666,6 +669,18 @@ impl Scene {
         id: JointId,
         value: f64,
         slide: Option<f64>,
+    ) -> Result<SceneChange, KernelError> {
+        self.drive_joint_with(id, value, slide, &mut CamTrees::new())
+    }
+
+    /// [`Scene::drive_joint`] taking the cams' trees from `cams` and keeping the ones it
+    /// builds there, for drives one after another while no definition changes (a sweep).
+    pub(crate) fn drive_joint_with(
+        &mut self,
+        id: JointId,
+        value: f64,
+        slide: Option<f64>,
+        cams: &mut CamTrees,
     ) -> Result<SceneChange, KernelError> {
         let driven = self.joint(id).ok_or(KernelError::JointNotFound)?.clone();
         if !driven.kind.has_value() {
@@ -700,7 +715,7 @@ impl Scene {
         {
             return Ok(SceneChange::default());
         }
-        let mut system = self.assembly(id, &driven);
+        let mut system = self.assembly(id, &driven, cams);
         let mut values: Vec<(f64, f64)> = system
             .links
             .iter()
@@ -979,7 +994,7 @@ impl Scene {
 
     /// The assembly of joint `id`: the parts connected to it through joints (not through the
     /// ground) and couplings, every joint and coupling between them, and which parts move.
-    fn assembly(&self, id: JointId, driven: &Joint) -> System {
+    fn assembly(&self, id: JointId, driven: &Joint, trees: &mut CamTrees) -> System {
         let (joints, parts) = self.assembly_parts(driven);
         let index: BTreeMap<InstanceId, usize> =
             parts.iter().enumerate().map(|(k, i)| (*i, k)).collect();
@@ -1017,7 +1032,6 @@ impl Scene {
             })
             .collect();
         // One tree per cam definition, however many followers ride on it.
-        let mut trees: BTreeMap<DefinitionId, Rc<Bvh>> = BTreeMap::new();
         let riders: Vec<Rider> = self
             .cam_followers()
             .filter_map(|(w, c)| {
