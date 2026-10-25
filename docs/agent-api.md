@@ -2258,7 +2258,7 @@ read as a tree of nodes. What is carried:
   `BLEND`, and the `baseColorTexture` image. COLLADA: the effect's `diffuse` color (as sRGB,
   as COLLADA writers give it) or `diffuse` texture (through its sampler and surface), and the
   opacity of `transparent` and `transparency` (`A_ONE` or `RGB_ZERO`). A textured material's
-  color is its image's average color; the image is used under `add_material`'s limits (PNG or
+  color is its image's average color (glTF: times `baseColorFactor`, in linear); the image is used under `add_material`'s limits (PNG or
   JPEG, at most 16 MiB and 4096 pixels a side, the pixel budget and 256 textures), else the
   material keeps its color with a warning ("1 texture was not imported (the image file could
   not be read); its material keeps its colour").
@@ -2267,7 +2267,10 @@ read as a tree of nodes. What is carried:
   each face gets the texture placement (offset, rotation, scale) its coordinates ask for on top
   of that, so the image lands as in the file; a sheared mapping takes the nearest rotation and
   scale, a mirrored one the mirror's size, and a placement beyond the placement limits is left
-  off.
+  off. A glTF `KHR_texture_transform` on the base-color texture (offset, rotation, scale and
+  its `texCoord`) moves the coordinates before that; one that shears or mirrors the image (a
+  rotation with unequal scales, or a negative scale) is laid as the nearest turn and scale, with
+  a warning naming it.
 - Side files: buffers and images are `data:` URIs, the `.glb`'s binary chunk, buffer views,
   or relative paths (percent-escapes decoded, `/` or `\` between folders) read from the file's
   folder or below it. A path that is absolute, climbs out with `..`, or is a URL (`http:`,
@@ -2282,8 +2285,7 @@ not imported"), and parts that could not be read. A glTF file that requires an e
 other than `KHR_materials_emissive_strength`, `KHR_materials_unlit`, `KHR_materials_specular`,
 `KHR_texture_transform` and `KHR_mesh_quantization` (Draco or meshopt compression, for
 example) is a `file` error naming it, and so are sparse accessors, accessors or buffer views
-that run past their data, and broken XML or a DTD in a COLLADA file. Texture transforms,
-other texture coordinate sets than the material's, vertex colors, and the materials' other
+that run past their data, and broken XML or a DTD in a COLLADA file. Other texture coordinate sets than the material's, vertex colors, and the materials' other
 maps are not read.
 
 The outcome's `import` reports what was made:
