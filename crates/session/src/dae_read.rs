@@ -131,6 +131,7 @@ pub(crate) fn read_dae(bytes: &[u8], side: &SideFiles) -> Result<ReadScene, Stri
         mesh_index: HashMap::new(),
         node_index: HashMap::new(),
         images: HashMap::new(),
+        sources: HashMap::new(),
         points: 0,
         polygons: 0,
         lines: 0,
@@ -195,6 +196,8 @@ struct Reader<'a, 'i, 's> {
     node_index: HashMap<NodeId, usize>,
     /// Each image id's file bytes, or why they could not be read.
     images: HashMap<&'a str, Result<Vec<u8>, &'static str>>,
+    /// Each `<source>`'s numbers and stride, read once however many geometries use it.
+    sources: HashMap<NodeId, (Vec<f64>, usize)>,
     points: usize,
     polygons: usize,
     lines: usize,
@@ -478,7 +481,8 @@ impl<'a, 'i> Reader<'a, 'i, '_> {
             .filter(|p| polygonal(p))
             .any(|p| self.input(*p, "TEXCOORD").is_some());
         let mut point_of: HashMap<(usize, Option<usize>, Option<usize>), usize> = HashMap::new();
-        let mut sources: HashMap<NodeId, (Vec<f64>, usize)> = HashMap::new();
+        // Taken out while the corners borrow it, and put back for the next mesh.
+        let mut sources = std::mem::take(&mut self.sources);
         for part in parts {
             if matches!(tag(&part), "lines" | "linestrips") {
                 self.lines += 1;
@@ -595,6 +599,7 @@ impl<'a, 'i> Reader<'a, 'i, '_> {
         if out.normals.len() != out.points.len() {
             out.normals.clear();
         }
+        self.sources = sources;
         Ok(out)
     }
 
