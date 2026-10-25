@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use glam::{DVec2, DVec3};
 
+use crate::boolean::{interior_point, point_inside, subset};
 use crate::geom::{LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon, vector_area};
 use crate::ids::{EdgeId, FaceId, VertexId};
 use crate::model::{Face, Model};
@@ -130,9 +131,11 @@ fn face_volume(m: &Model, f: FaceId) -> f64 {
 }
 
 /// The faces to turn over so that every shell agrees and faces the right way: a closed shell
-/// (every side of its faces used by exactly two faces) outward, an open one to the side with
-/// more area. A shell is the faces reached across sides used by exactly two faces. Also the
-/// number of sides whose faces could not be made to agree (a Moebius strip).
+/// (every side of its faces used by exactly two faces) outward, or inward when it lies inside
+/// an odd number of other closed shells (a void, or a void in a solid floating in a void); an
+/// open one to the side with more area. A shell is the faces reached across sides used by
+/// exactly two faces. Also the number of sides whose faces could not be made to agree (a
+/// Moebius strip).
 fn turns(m: &Model) -> (BTreeSet<FaceId>, usize) {
     let mut by_side: BTreeMap<(VertexId, VertexId), Vec<(FaceId, bool)>> = BTreeMap::new();
     for (id, f) in m.faces() {
@@ -144,7 +147,7 @@ fn turns(m: &Model) -> (BTreeSet<FaceId>, usize) {
         }
     }
     let mut turn: BTreeMap<FaceId, bool> = BTreeMap::new();
-    let mut out = BTreeSet::new();
+    let mut shells: Vec<(Vec<FaceId>, bool)> = Vec::new();
     let mut conflicts = 0;
     for (start, _) in m.faces() {
         if turn.contains_key(&start) {
@@ -186,12 +189,17 @@ fn turns(m: &Model) -> (BTreeSet<FaceId>, usize) {
                 }
             }
         }
+        shells.push((shell, closed));
+    }
+    let depth = closed_depths(m, &shells);
+    let mut out = BTreeSet::new();
+    for (k, (shell, closed)) in shells.into_iter().enumerate() {
         let invert = if closed {
             let six: f64 = shell
                 .iter()
                 .map(|f| face_volume(m, *f) * if turn[f] { -1.0 } else { 1.0 })
                 .sum();
-            six < 0.0
+            (six < 0.0) != (depth[k] % 2 == 1)
         } else {
             let (mut turned, mut kept) = (0.0, 0.0);
             for f in &shell {
@@ -204,6 +212,54 @@ fn turns(m: &Model) -> (BTreeSet<FaceId>, usize) {
     }
     // Each conflict is seen from both faces.
     (out, conflicts / 2)
+}
+
+/// For each of `shells` (faces, and whether closed) how many other closed shells hold it; 0
+/// for an open one. Shells are tested only against those whose bounding box holds theirs.
+fn closed_depths(m: &Model, shells: &[(Vec<FaceId>, bool)]) -> Vec<usize> {
+    let bounds = |faces: &[FaceId]| {
+        let mut lo = DVec3::splat(f64::INFINITY);
+        let mut hi = DVec3::splat(f64::NEG_INFINITY);
+        for f in faces {
+            for v in &m.face(*f).expect("listed").outer {
+                lo = lo.min(m.pos(*v));
+                hi = hi.max(m.pos(*v));
+            }
+        }
+        (lo, hi)
+    };
+    let boxes: Vec<_> = shells.iter().map(|(faces, _)| bounds(faces)).collect();
+    let mut parts: BTreeMap<usize, Model> = BTreeMap::new();
+    let mut depth = vec![0; shells.len()];
+    for (i, (faces, closed)) in shells.iter().enumerate() {
+        if !closed {
+            continue;
+        }
+        let (lo, hi) = boxes[i];
+        let holders: Vec<usize> = (0..shells.len())
+            .filter(|&j| {
+                j != i
+                    && shells[j].1
+                    && boxes[j].0.cmple(lo).all()
+                    && boxes[j].1.cmpge(hi).all()
+            })
+            .collect();
+        if holders.is_empty() {
+            continue;
+        }
+        let Some(p) = faces.iter().find_map(|f| interior_point(m, *f)) else {
+            continue;
+        };
+        for j in holders {
+            let part = parts
+                .entry(j)
+                .or_insert_with(|| subset(m, &shells[j].0));
+            if point_inside(p, part) == Some(true) {
+                depth[i] += 1;
+            }
+        }
+    }
+    depth
 }
 
 /// The vertex pairs across tiny gaps: both on open edges, nearer than the weld tolerance and
@@ -713,6 +769,46 @@ mod tests {
 
     fn volume(m: &Model) -> f64 {
         signed_volume(m)
+    }
+
+    /// The 2 m box from the origin with a void (the box from 0.5 to 1.5 m, its faces facing
+    /// into the void): a solid of 7 m³.
+    fn hollow() -> Model {
+        let mut points = corners(DVec3::ZERO, DVec3::splat(2.0));
+        points.extend(corners(DVec3::splat(0.5), DVec3::splat(1.5)));
+        let mut faces = sides_of_box(0);
+        faces.extend(sides_of_box(8).into_iter().map(|q| q.into_iter().rev().collect()));
+        build(&points, &faces)
+    }
+
+    #[test]
+    fn a_void_keeps_facing_in_when_the_solid_around_it_is_repaired() {
+        let m = hollow();
+        assert!(check(&m).is_solid());
+        assert!((volume(&m) - 7.0).abs() < 1e-9);
+
+        let mut stray = m.clone();
+        stray.add_edge(DVec3::splat(3.0), DVec3::splat(4.0)).unwrap();
+        stray.take_changes();
+        let h = check(&stray);
+        assert!(h.reversed_faces.is_empty(), "{h:?}");
+        let r = repair(&stray);
+        assert_eq!(r.repair.faces_flipped, 0);
+        assert!((volume(&r.model.expect("closed")) - 7.0).abs() < 1e-9);
+
+        let mut open = m.clone();
+        let top = open
+            .faces()
+            .find(|(_, f)| f.normal.z > 0.5 && open.pos(f.outer[0]).z > 1.9)
+            .map(|(id, _)| id)
+            .unwrap();
+        open.remove_face(top);
+        open.take_changes();
+        let r = repair(&open);
+        assert_eq!(r.repair.faces_flipped, 0);
+        let fixed = r.model.expect("closed");
+        assert!((volume(&fixed) - 7.0).abs() < 1e-9);
+        fixed.validate().unwrap();
     }
 
     #[test]

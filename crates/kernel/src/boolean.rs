@@ -326,7 +326,7 @@ fn shells_of(m: &Model) -> Vec<Vec<FaceId>> {
 }
 
 /// A copy of `m` holding only `faces` and their edges and vertices.
-fn subset(m: &Model, faces: &[FaceId]) -> Model {
+pub(crate) fn subset(m: &Model, faces: &[FaceId]) -> Model {
     let mut out = Model::new();
     let mut vertices: HashMap<VertexId, VertexId> = HashMap::new();
     let mut curves: HashMap<CurveId, CurveId> = HashMap::new();
