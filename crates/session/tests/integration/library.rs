@@ -233,7 +233,7 @@ fn inserting_at_a_point_puts_the_minimum_corner_there() {
 }
 
 #[test]
-fn inserting_a_component_twice_makes_two_definitions_and_brings_materials_and_tags() {
+fn inserting_a_component_twice_reuses_its_definition_and_brings_materials_and_tags() {
     let dir = folder("twice");
     let mut d = doc();
     let chair = turned_component(&mut d);
@@ -242,22 +242,24 @@ fn inserting_a_component_twice_makes_two_definitions_and_brings_materials_and_ta
         &mut d,
         json!({"type": "save_to_library", "path": p(&file), "kind": "component", "item": chair}),
     );
-    // Into the model it came from too: a fresh definition each time.
+    // Into the model it came from: the same component, so no new definition.
     let before = d.scene().definitions().count();
-    for k in 1..=2 {
+    for _ in 0..2 {
         ok(
             &mut d,
             json!({"type": "insert_library_item", "path": p(&file)}),
         );
-        assert_eq!(d.scene().definitions().count(), before + k);
+        assert_eq!(d.scene().definitions().count(), before);
     }
+    // Into another model: one definition, however often it is inserted.
     let mut other = doc();
     for k in 1..=2 {
         ok(
             &mut other,
             json!({"type": "insert_library_item", "path": p(&file), "at": [k, 0, 0]}),
         );
-        assert_eq!(other.scene().definitions().count(), k);
+        assert_eq!(other.scene().definitions().count(), 1);
+        assert_eq!(instances(&other).len(), k as usize);
     }
     // Materials and tags merge by name.
     assert_eq!(materials(&other).len(), 1);
@@ -675,6 +677,7 @@ fn inserting_inside_a_turned_scaled_group_keeps_world_orientation_and_size() {
         json!({"type": "move", "ids": [group], "offset": [3, -2, 1]}),
     );
     ok(&mut d, json!({"type": "open_instance", "id": group}));
+    // Away from its origin: held by the bottom centre of its box.
     let inner = rectangle(&mut d, [5.0, 5.0, 0.0], [6.0, 6.0, 0.0]);
     let part = instance_of(&ok(
         &mut d,
@@ -701,7 +704,15 @@ fn inserting_inside_a_turned_scaled_group_keeps_world_orientation_and_size() {
         let (mlo, mhi) = box_of(&world_geometry(&d, &made));
         for k in 0..3 {
             assert!(((mhi - mlo)[k] - want[k]).abs() < 1e-9, "{at:?} {made}");
-            assert!((mlo[k] - point[k]).abs() < 1e-9, "{at:?}: {mlo} vs {point}");
+            let held = if k == 2 {
+                mlo[k]
+            } else {
+                (mlo[k] + mhi[k]) / 2.0
+            };
+            assert!(
+                (held - point[k]).abs() < 1e-9,
+                "{at:?}: {mlo} {mhi} vs {point}"
+            );
         }
     }
 }
@@ -804,7 +815,8 @@ fn an_items_outline_is_its_edges_and_its_corner_a_material_has_none() {
         json!({"type": "save_to_library", "path": p(&model), "kind": "model"}),
     );
     let outline = session::library::outline(&model).unwrap();
-    assert_eq!(outline.base, glam::DVec3::new(1.0, 1.0, 0.0));
+    // The origin is off the plate: held by the bottom centre of its box.
+    assert_eq!(outline.base, glam::DVec3::new(2.0, 2.5, 0.0));
     assert_eq!(outline.segments.len(), 4);
     let red = ok(
         &mut d,
@@ -1050,4 +1062,339 @@ fn a_material_with_a_longest_name_still_gets_a_numbered_name_that_fits() {
     let added = names.iter().find(|n| n.ends_with(" 2")).expect("numbered");
     assert_eq!(added.chars().count(), 256);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A component named `name` made from a rectangle with these corners, saved to `file`;
+/// returns the document holding it.
+fn saved_part(name: &str, corner: [f64; 3], opposite: [f64; 3], file: &Path) -> Document {
+    let mut d = doc();
+    let ids = rectangle(&mut d, corner, opposite);
+    let part = instance_of(&ok(
+        &mut d,
+        json!({"type": "make_component", "ids": ids, "name": name}),
+    ));
+    ok(
+        &mut d,
+        json!({"type": "save_to_library", "path": p(file), "kind": "component", "item": part}),
+    );
+    d
+}
+
+fn definition_names(d: &Document) -> Vec<(String, bool)> {
+    d.scene()
+        .definitions()
+        .map(|(_, def)| {
+            (
+                def.name.clone(),
+                def.kind == kernel::DefinitionKind::Component,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn inserting_the_same_component_reuses_its_definition_in_one_undo_step() {
+    let dir = folder("reuse");
+    let file = dir.join("bolt.skr");
+    let mut d = saved_part("Cap bolt", [0.0; 3], [1.0, 1.0, 0.0], &file);
+    let before = d.scene().definitions().count();
+    assert_eq!(before, 1);
+    let out = ok(
+        &mut d,
+        json!({"type": "insert_library_item", "path": p(&file), "at": [5, 0, 0]}),
+    );
+    assert_eq!(d.scene().definitions().count(), 1);
+    assert_eq!(instances(&d).len(), 2);
+    assert_eq!(
+        created(&out).iter().filter(|i| i.starts_with('i')).count(),
+        1
+    );
+    assert_eq!(d.undo_label(), Some("insert"));
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    assert_eq!(instances(&d).len(), 1);
+    assert_eq!(d.scene().definitions().count(), 1);
+}
+
+#[test]
+fn a_different_component_of_the_same_name_is_added_under_a_free_name() {
+    let dir = folder("rename");
+    let file = dir.join("bolt.skr");
+    let _ = saved_part("Cap bolt", [0.0; 3], [1.0, 1.0, 0.0], &file);
+    // Same name, other content.
+    let mut other = saved_part("Cap bolt", [0.0; 3], [2.0, 1.0, 0.0], &dir.join("x.skr"));
+    ok(
+        &mut other,
+        json!({"type": "insert_library_item", "path": p(&file)}),
+    );
+    let mut names = definition_names(&other);
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            ("Cap bolt".to_string(), true),
+            ("Cap bolt#2".to_string(), true)
+        ]
+    );
+    // Again: the second is the same as the one added, so reused.
+    ok(
+        &mut other,
+        json!({"type": "insert_library_item", "path": p(&file)}),
+    );
+    assert_eq!(other.scene().definitions().count(), 2);
+    assert_eq!(instances(&other).len(), 3);
+    // An empty model keeps the name.
+    let mut empty = doc();
+    ok(
+        &mut empty,
+        json!({"type": "insert_library_item", "path": p(&file)}),
+    );
+    assert_eq!(definition_names(&empty), [("Cap bolt".to_string(), true)]);
+}
+
+#[test]
+fn inserting_adds_no_wrapper_group_definition() {
+    let dir = folder("wrapper");
+    let file = dir.join("bolt.skr");
+    let _ = saved_part("Cap bolt", [0.0; 3], [1.0, 1.0, 0.0], &file);
+    let mut empty = doc();
+    ok(
+        &mut empty,
+        json!({"type": "insert_library_item", "path": p(&file)}),
+    );
+    assert_eq!(definition_names(&empty), [("Cap bolt".to_string(), true)]);
+}
+
+#[test]
+fn a_part_modelled_away_from_its_origin_is_held_by_the_bottom_centre_of_its_box() {
+    let dir = folder("held");
+    let far = dir.join("far.skr");
+    let _ = saved_part("Far", [5.0, 5.0, 0.0], [7.0, 6.0, 0.0], &far);
+    let outline = session::library::outline(&far).unwrap();
+    assert_eq!(outline.base, glam::DVec3::new(6.0, 5.5, 0.0));
+    let mut d = doc();
+    let out = ok(
+        &mut d,
+        json!({"type": "insert_library_item", "path": p(&far), "at": [10, 0, 0]}),
+    );
+    let made = instance_info(&d, &instance_of(&out));
+    let min: Vec<f64> = serde_json::from_value(made["bounds"]["min"].clone()).unwrap();
+    let max: Vec<f64> = serde_json::from_value(made["bounds"]["max"].clone()).unwrap();
+    for (got, want) in min.iter().zip([9.0, -0.5, 0.0]) {
+        assert!((got - want).abs() < 1e-9, "{made}");
+    }
+    for (got, want) in max.iter().zip([11.0, 0.5, 0.0]) {
+        assert!((got - want).abs() < 1e-9, "{made}");
+    }
+    // Origin on the part: the corner, as before.
+    let near = dir.join("near.skr");
+    let _ = saved_part("Near", [0.0; 3], [2.0, 1.0, 0.0], &near);
+    assert_eq!(
+        session::library::outline(&near).unwrap().base,
+        glam::DVec3::ZERO
+    );
+}
+
+/// Whether `d`'s camera shows the box `lo`..`hi` centered and not as a speck.
+fn frames(d: &Document, lo: glam::DVec3, hi: glam::DVec3) -> bool {
+    let (a, b) = (d.camera.project(lo), d.camera.project(hi));
+    let (Some(a), Some(b)) = (a, b) else {
+        return false;
+    };
+    let view = d.camera.viewport;
+    let c = (a + b) / 2.0;
+    c.x > 0.0 && c.x < view.x && c.y > 0.0 && c.y < view.y && (a - b).length() > view.y / 12.0
+}
+
+#[test]
+fn opening_a_file_without_a_saved_view_frames_the_model_but_a_saved_view_is_kept() {
+    let dir = folder("frame");
+    let (lo, hi) = (
+        glam::DVec3::new(100.0, 100.0, 0.0),
+        glam::DVec3::new(100.1, 100.1, 0.0),
+    );
+    let mut d = doc();
+    rectangle(&mut d, lo.to_array(), hi.to_array());
+    assert!(!frames(&d, lo, hi), "the default view misses it");
+    let file = dir.join("far.skr");
+    ok(&mut d, json!({"type": "save", "path": p(&file)}));
+    let mut other = doc();
+    ok(&mut other, json!({"type": "open", "path": p(&file)}));
+    assert!(frames(&other, lo, hi));
+
+    // A view the file saved is not overridden, even if it misses the model.
+    ok(
+        &mut d,
+        json!({"type": "set_camera", "eye": [0, -10, 5], "target": [0, 0, 0]}),
+    );
+    let kept = d.camera.clone();
+    ok(&mut d, json!({"type": "save", "path": p(&file)}));
+    let mut again = doc();
+    ok(&mut again, json!({"type": "open", "path": p(&file)}));
+    assert!(again.camera.eye.abs_diff_eq(kept.eye, 1e-9));
+    assert!(again.camera.target.abs_diff_eq(kept.target, 1e-9));
+}
+
+#[test]
+fn opening_a_library_item_whose_saved_view_misses_it_frames_it() {
+    let dir = folder("frame-item");
+    let file = dir.join("bolt.skr");
+    // A big model, seen from afar, holds a small part.
+    let mut d = doc();
+    rectangle(&mut d, [-200.0, -200.0, 0.0], [200.0, 200.0, 0.0]);
+    let ids = rectangle(&mut d, [0.0; 3], [0.02, 0.02, 0.0]);
+    let part = instance_of(&ok(
+        &mut d,
+        json!({"type": "make_component", "ids": ids, "name": "Bolt"}),
+    ));
+    ok(&mut d, json!({"type": "zoom_extents"}));
+    ok(
+        &mut d,
+        json!({"type": "save_to_library", "path": p(&file), "kind": "component", "item": part}),
+    );
+    let mut item = doc();
+    ok(&mut item, json!({"type": "open", "path": p(&file)}));
+    assert!(frames(
+        &item,
+        glam::DVec3::ZERO,
+        glam::DVec3::new(0.02, 0.02, 0.0)
+    ));
+    // A model item keeps its model's view unless that misses it: here it shows the big plate
+    // and the small part is a speck, so only the saved (framing) one is kept.
+    let model = dir.join("all.skr");
+    ok(
+        &mut d,
+        json!({"type": "save_to_library", "path": p(&model), "kind": "model"}),
+    );
+    let mut whole = doc();
+    ok(&mut whole, json!({"type": "open", "path": p(&model)}));
+    assert!(frames(
+        &whole,
+        glam::DVec3::new(-200.0, -200.0, 0.0),
+        glam::DVec3::new(200.0, 200.0, 0.0)
+    ));
+}
+
+#[test]
+fn a_library_item_seen_as_a_speck_is_framed_on_open_but_a_plain_file_is_not() {
+    let dir = folder("speck");
+    let (lo, hi) = (glam::DVec3::ZERO, glam::DVec3::new(0.02, 0.02, 0.0));
+    let mut d = doc();
+    rectangle(&mut d, lo.to_array(), hi.to_array());
+    ok(
+        &mut d,
+        json!({"type": "set_camera", "eye": [0, -500, 100], "target": [0, 0, 0]}),
+    );
+    assert!(!frames(&d, lo, hi));
+    let item = dir.join("item.skr");
+    ok(
+        &mut d,
+        json!({"type": "save_to_library", "path": p(&item), "kind": "model"}),
+    );
+    let plain = dir.join("plain.skr");
+    ok(&mut d, json!({"type": "save", "path": p(&plain)}));
+    let mut opened = doc();
+    ok(&mut opened, json!({"type": "open", "path": p(&item)}));
+    assert!(frames(&opened, lo, hi));
+    let mut opened = doc();
+    ok(&mut opened, json!({"type": "open", "path": p(&plain)}));
+    assert!(!frames(&opened, lo, hi), "a saved view is kept");
+}
+
+#[test]
+fn a_textured_component_with_many_faces_is_matched_quickly() {
+    let dir = folder("textured-many");
+    let png = red_blue_png(&dir);
+    let mut d = doc();
+    let out = ok(
+        &mut d,
+        json!({"type": "add_material", "name": "Tiles",
+               "texture": {"path": p(&png), "width": 0.5}}),
+    );
+    let tiles = out["changes"]["materials"][0].as_str().unwrap().to_string();
+    let mut all = Vec::new();
+    for i in 0..300 {
+        let x = f64::from(i) * 2.0;
+        all.extend(rectangle(&mut d, [x, 0.0, 0.0], [x + 1.0, 1.0, 0.0]));
+    }
+    let faces: Vec<EntityId> = all
+        .iter()
+        .copied()
+        .filter(|i| matches!(i, EntityId::Face(_)))
+        .collect();
+    ok(
+        &mut d,
+        json!({"type": "paint", "ids": faces, "material": tiles}),
+    );
+    let part = instance_of(&ok(
+        &mut d,
+        json!({"type": "make_component", "ids": all, "name": "Wall"}),
+    ));
+    let file = dir.join("wall.skr");
+    ok(
+        &mut d,
+        json!({"type": "save_to_library", "path": p(&file), "kind": "component", "item": part}),
+    );
+    let before = d.scene().definitions().count();
+    let start = std::time::Instant::now();
+    ok(
+        &mut d,
+        json!({"type": "insert_library_item", "path": p(&file)}),
+    );
+    assert!(start.elapsed().as_secs() < 10, "{:?}", start.elapsed());
+    assert_eq!(d.scene().definitions().count(), before);
+}
+
+#[test]
+fn inserting_inside_the_same_component_adds_it_under_a_free_name() {
+    let dir = folder("inside");
+    let file = dir.join("chair.skr");
+    let mut d = saved_part("Chair", [0.0; 3], [1.0, 1.0, 0.0], &file);
+    let chair = instances(&d)[0]["id"].as_str().unwrap().to_string();
+    ok(&mut d, json!({"type": "open_instance", "id": chair}));
+    ok(
+        &mut d,
+        json!({"type": "insert_library_item", "path": p(&file)}),
+    );
+    let mut names = definition_names(&d);
+    names.sort();
+    assert_eq!(
+        names,
+        [("Chair".to_string(), true), ("Chair#2".to_string(), true)]
+    );
+}
+
+#[test]
+fn nested_components_are_reused_and_a_numbered_twin_is_matched() {
+    let dir = folder("nested");
+    let mut d = doc();
+    let ids = rectangle(&mut d, [0.0; 3], [1.0, 1.0, 0.0]);
+    let inner = ok(
+        &mut d,
+        json!({"type": "make_component", "ids": ids, "name": "Inner"}),
+    );
+    let outer = instance_of(&ok(
+        &mut d,
+        json!({"type": "make_component", "ids": [instance_of(&inner)], "name": "Outer"}),
+    ));
+    let file = dir.join("outer.skr");
+    ok(
+        &mut d,
+        json!({"type": "save_to_library", "path": p(&file), "kind": "component", "item": outer}),
+    );
+    assert_eq!(d.scene().definitions().count(), 2);
+    ok(
+        &mut d,
+        json!({"type": "insert_library_item", "path": p(&file), "at": [5, 0, 0]}),
+    );
+    assert_eq!(d.scene().definitions().count(), 2);
+
+    // A model whose identical component is already named "Part#2".
+    let item = dir.join("part.skr");
+    let _ = saved_part("Part", [0.0; 3], [1.0, 1.0, 0.0], &item);
+    let mut twin = saved_part("Part#2", [0.0; 3], [1.0, 1.0, 0.0], &dir.join("t.skr"));
+    ok(
+        &mut twin,
+        json!({"type": "insert_library_item", "path": p(&item)}),
+    );
+    assert_eq!(definition_names(&twin), [("Part#2".to_string(), true)]);
 }

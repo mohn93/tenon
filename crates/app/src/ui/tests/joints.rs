@@ -202,3 +202,107 @@ fn a_typed_value_drives_the_joint_once() {
         }]
     );
 }
+
+/// The Joints tab of a rig as the V6 engine's: a long name, a prismatic joint a hair off its
+/// slider's step, a cylindrical joint with its slide and a limited hinge.
+fn crowded_joints(width: f32) -> Fixture {
+    let mut crank = info(JointId(1), "Crank", JointKind::Revolute, -0.0);
+    crank.selected = true;
+    let mut rod = info(JointId(2), "Rod 1 big end", JointKind::Revolute, -179.95);
+    rod.info.limits = Some([-180.0, 180.0]);
+    let piston = info(JointId(3), "Piston 1", JointKind::Prismatic, -0.023);
+    let mut long = info(
+        JointId(4),
+        "A joint whose name is far longer than the dock is wide",
+        JointKind::Cylindrical,
+        -12.5,
+    );
+    long.info.slide = Some(-1.234);
+    let mut fixed = info(
+        JointId(5),
+        "Fixed bracket with a long name",
+        JointKind::Fixed,
+        0.0,
+    );
+    fixed.info.limits = None;
+    Fixture {
+        dock: DockLayout {
+            width,
+            tab: DockTab::Joints,
+            ..Default::default()
+        },
+        joints: vec![crank, rod, piston, long, fixed],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn every_joint_row_fits_the_narrowest_dock() {
+    let width = *crate::ui::dock::DOCK_WIDTH.start();
+    for screen in [Vec2::new(1280.0, 1600.0), Vec2::new(1700.0, 1600.0)] {
+        let mut h = harness_sized(crowded_joints(width), screen);
+        for _ in 0..3 {
+            h.run_ok();
+        }
+        let dock = h.state().central.max.x;
+        assert!(
+            (dock - (screen.x - width)).abs() <= 1.0,
+            "the dock keeps its width: starts at {dock} in a {screen:?} window"
+        );
+        h.get_by_label("Delete Piston 1");
+        h.get_by_label("Piston 1 distance value");
+        let root = h.root().accesskit_node().id();
+        let outside: Vec<(String, Rect)> = h
+            .query_all(egui_kittest::kittest::by().predicate(|_| true))
+            .filter(|n| {
+                n.accesskit_node().id() != root && n.accesskit_node().data().bounds().is_some()
+            })
+            .filter(|n| n.accesskit_node().role() != egui::accesskit::Role::Splitter)
+            .filter(|n| n.rect().max.x > dock + 1.0)
+            .filter(|n| n.rect().min.x < dock - 0.5 || n.rect().max.x > screen.x + 0.5)
+            .map(|n| (format!("{:?}", n.accesskit_node().label()), n.rect()))
+            .collect();
+        assert!(outside.is_empty(), "past the dock at {dock}: {outside:?}");
+        let texts: Vec<(String, Rect)> = drawn_text_rects(&h)
+            .into_iter()
+            .filter(|(_, r)| r.max.x > dock + 1.0)
+            .filter(|(_, r)| r.min.x < dock - 0.5 || r.max.x > screen.x + 0.5)
+            .collect();
+        assert!(texts.is_empty(), "text past the dock at {dock}: {texts:?}");
+    }
+}
+
+#[test]
+fn a_value_too_long_for_the_dock_does_not_widen_it() {
+    let width = *crate::ui::dock::DOCK_WIDTH.start();
+    let mut f = crowded_joints(width);
+    f.joints[2].info.value = 1.0e40;
+    let mut h = harness(f);
+    for _ in 0..3 {
+        h.run_ok();
+    }
+    let dock = h.state().central.max.x;
+    assert!(
+        (dock - (SCREEN.x - width)).abs() <= 1.0,
+        "the dock keeps its width: starts at {dock}"
+    );
+}
+
+#[test]
+fn a_value_at_zero_shows_no_sign() {
+    let mut f = joints_tab();
+    f.joints[0].info.value = -0.0;
+    f.joints[0].info.limits = None;
+    f.joints[1].info.value = -0.0001;
+    let mut h = tall(f);
+    h.get_by_label("Revolute 0.0\u{b0}");
+    h.get_by_label("Prismatic 0 m");
+    let value = |h: &H, label: &str| h.get_by_label(label).accesskit_node().value();
+    assert_eq!(value(&h, "Hinge angle value").as_deref(), Some("0.0\u{b0}"));
+    assert_eq!(value(&h, "Rail distance value").as_deref(), Some("0 m"));
+    // A value that rounds to zero.
+    h.state_mut().joints[0].info.value = -0.04;
+    h.run_ok();
+    h.get_by_label("Revolute 0.0\u{b0}");
+    assert_eq!(value(&h, "Hinge angle value").as_deref(), Some("0.0\u{b0}"));
+}

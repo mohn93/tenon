@@ -39,6 +39,8 @@ pub mod recovery;
 #[cfg(not(target_arch = "wasm32"))]
 mod share_server;
 pub mod shortcuts;
+#[cfg(target_os = "macos")]
+mod system_quit;
 mod touch;
 mod ui;
 pub mod viewer;

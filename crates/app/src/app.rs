@@ -145,6 +145,10 @@ pub enum AppEvent {
     /// A native menu item was chosen; `repeat` when a held key chose it.
     #[cfg(target_os = "macos")]
     Menu { id: String, repeat: bool },
+    /// The system asked to quit with unsaved changes (Dock > Quit, log out, shut down) and
+    /// waits for the window's answer (see `system_quit`).
+    #[cfg(target_os = "macos")]
+    SystemQuit,
     /// The AccessKit adapter: a screen reader asked for the tree, asked for an action, or went
     /// away.
     AccessKit(egui_winit::accesskit_winit::Event),
@@ -353,9 +357,10 @@ enum AtExit {
 
 /// What happens to the autosave as the window exits: removed when the exit was settled (the
 /// unsaved prompt answered, or an agent's `quit`) or there is nothing unsaved. An exit the
-/// system asks for without the prompt (macOS: Dock > Quit, log out, shut down) keeps it, to be
-/// offered at the next start, written first when autosave is on (`minutes` not 0) and the
-/// model's `revision` is not the one last autosaved.
+/// system asks for without the prompt (macOS: Dock > Quit, log out, shut down, once
+/// `system_quit` found the changes autosaved) keeps it, to be offered at the next start,
+/// written first when autosave is on (`minutes` not 0) and the model's `revision` is not the
+/// one last autosaved.
 fn at_exit(
     settled: bool,
     modified: bool,
@@ -369,6 +374,76 @@ fn at_exit(
         AtExit::Write
     } else {
         AtExit::Keep
+    }
+}
+
+/// What the window answers when the system asks it to quit (macOS: Dock > Quit, log out, shut
+/// down).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+enum SystemQuit {
+    /// Let the system end the app, without asking.
+    Exit,
+    /// Ask about the unsaved changes, as Cmd+Q does, while the system waits for the answer.
+    Prompt,
+}
+
+/// Whether a quit the system asks for goes ahead without the unsaved prompt: only when the exit
+/// is settled (see `at_exit`), nothing is unsaved, or the changes are in the autosave, which
+/// with autosave on (`minutes` not 0) is the model's `revision` autosaved already or `write`
+/// writing it now. With autosave off, or a write that fails (no recovery folder, a full disk),
+/// the prompt shows.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn system_quit(
+    settled: bool,
+    modified: bool,
+    revision: u64,
+    saved_revision: Option<u64>,
+    minutes: u32,
+    write: impl FnOnce() -> Result<(), String>,
+) -> SystemQuit {
+    if settled || !modified {
+        return SystemQuit::Exit;
+    }
+    if minutes == 0 {
+        return SystemQuit::Prompt;
+    }
+    if saved_revision == Some(revision) {
+        return SystemQuit::Exit;
+    }
+    match write() {
+        Ok(()) => SystemQuit::Exit,
+        Err(why) => {
+            eprintln!("warning: autosave failed as the system asked to quit: {why}");
+            SystemQuit::Prompt
+        }
+    }
+}
+
+/// Where a quit the system asked for stands.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SystemQuitState {
+    /// None asked, or it was cancelled.
+    None,
+    /// The unsaved prompt it raised is open; the system waits for its answer.
+    Prompting,
+    /// The system was told to go ahead and ends the app itself.
+    Handed,
+}
+
+/// The answer to the system's quit once the unsaved prompt it raised has moved on: go ahead
+/// when the window quits (after Save, once saved, or Don't Save), cancel when it does not
+/// (Cancel, a save that failed or was cancelled); none yet while one of the prompt's dialogs is
+/// still open (`waiting`).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn prompt_answer(quit: bool, waiting: bool) -> Option<bool> {
+    if quit {
+        Some(true)
+    } else if waiting {
+        None
+    } else {
+        Some(false)
     }
 }
 
@@ -754,10 +829,18 @@ fn fly_shortcut(
 }
 
 /// True if a key event goes to fly mode's movement: a moving key while flying, except a press
-/// with Cmd held, which stays a shortcut (Cmd+S saves). Releases always go, so a key let go
-/// after Cmd went down still stops.
-fn is_fly_move(flying: bool, key: PhysicalKey, pressed: bool, cmd: bool) -> Option<FlyKey> {
-    fly_move_key(key).filter(|_| flying && !(pressed && cmd))
+/// with Cmd held, which stays a shortcut (Cmd+S saves), and a press that does not reach the
+/// editor (`reaches`: a text field has focus or a sheet is open, see `keys_reach_editor`).
+/// Releases always go, so a key let go after Cmd went down, or after a text field took focus,
+/// still stops: the eye would otherwise keep flying with no key down.
+fn is_fly_move(
+    flying: bool,
+    key: PhysicalKey,
+    pressed: bool,
+    cmd: bool,
+    reaches: bool,
+) -> Option<FlyKey> {
+    fly_move_key(key).filter(|_| flying && !(pressed && (cmd || !reaches)))
 }
 
 /// A raw mouse motion in logical pixels. macOS reports it in points (logical pixels) already;
@@ -885,6 +968,9 @@ struct State {
     settings_open: bool,
     /// The sheet open over the window: keys and native menu items (but Quit) wait while it is.
     sheet: Option<Sheet>,
+    /// Where a quit the system asked for stands (see `system_quit`).
+    #[cfg(target_os = "macos")]
+    system_quit: SystemQuitState,
     /// The share the Open on Phone sheet serves; there is one only while that sheet is open.
     #[cfg(not(target_arch = "wasm32"))]
     share: Option<crate::share_server::Sharing>,
@@ -1189,6 +1275,8 @@ impl State {
             shortcuts_window: false,
             settings_open: false,
             sheet: None,
+            #[cfg(target_os = "macos")]
+            system_quit: SystemQuitState::None,
             #[cfg(not(target_arch = "wasm32"))]
             share: None,
             sheet_origin: SheetOrigin::default(),
@@ -1434,18 +1522,91 @@ impl State {
         match action {
             AtExit::Clear => self.clear_autosave(),
             AtExit::Write => {
-                let original = doc
-                    .path()
-                    .map(Path::to_path_buf)
-                    .or_else(|| self.recovered_doc().and_then(|r| r.original.clone()));
-                if let Some(session) = &self.session
-                    && let Err(why) = session.write_autosave(self.editor.doc(), original.as_deref())
-                {
+                if let Err(why) = self.write_autosave_now() {
                     eprintln!("warning: autosave failed as the app ended: {why}");
                 }
             }
             AtExit::Keep => {}
         }
+    }
+
+    /// Copies the open model to this window's autosave now, naming the model's file, else the
+    /// file a recovered model was a copy of.
+    fn write_autosave_now(&mut self) -> Result<(), String> {
+        let session = self.session.as_ref().ok_or("no recovery folder")?;
+        let doc = self.editor.doc();
+        let original = doc
+            .path()
+            .map(Path::to_path_buf)
+            .or_else(|| self.recovered_doc().and_then(|r| r.original.clone()));
+        session.write_autosave(doc, original.as_deref())?;
+        self.autosave.revision = Some(doc.revision());
+        Ok(())
+    }
+
+    /// The system asked to quit (see `system_quit`): lets it go ahead when the changes are
+    /// safe in the autosave, else asks about them as Cmd+Q does while the system waits, and
+    /// answers it after (see `answer_system_quit`). Cancels it when another request is open and
+    /// the prompt cannot show.
+    #[cfg(target_os = "macos")]
+    fn system_quit(&mut self) {
+        let doc = self.editor.doc();
+        let (modified, revision) = (doc.is_modified(), doc.revision());
+        let answer = system_quit(
+            self.quit,
+            modified,
+            revision,
+            self.autosave.revision,
+            self.prefs.autosave_minutes,
+            || self.write_autosave_now(),
+        );
+        match answer {
+            SystemQuit::Exit => self.hand_system_quit(true),
+            SystemQuit::Prompt if self.flows.is_waiting() || self.sheet.is_some() => {
+                self.hand_system_quit(false);
+            }
+            SystemQuit::Prompt => {
+                self.system_quit = SystemQuitState::Prompting;
+                self.settle_and(Then::Quit);
+                self.answer_system_quit();
+            }
+        }
+    }
+
+    /// Answers the system's quit once the prompt it raised has moved on (see `prompt_answer`).
+    #[cfg(target_os = "macos")]
+    fn answer_system_quit(&mut self) {
+        if self.system_quit != SystemQuitState::Prompting {
+            return;
+        }
+        let waiting = self.flows.is_waiting() || self.sheet.is_some();
+        if let Some(go) = prompt_answer(self.quit, waiting) {
+            self.hand_system_quit(go);
+        }
+    }
+
+    /// Answers the system's quit: go ahead (`go`), and AppKit ends the app, or cancel it.
+    #[cfg(target_os = "macos")]
+    fn hand_system_quit(&mut self, go: bool) {
+        crate::system_quit::reply(go);
+        self.system_quit = if go {
+            SystemQuitState::Handed
+        } else {
+            SystemQuitState::None
+        };
+    }
+
+    /// Whether the window should end its event loop: it quits, and no quit the system asked
+    /// for ends the app instead (once that quit is answered, AppKit ends the app itself).
+    fn should_exit(&mut self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            self.answer_system_quit();
+            if self.system_quit == SystemQuitState::Handed {
+                return false;
+            }
+        }
+        self.quit
     }
 
     /// The model opened from the Recover Models window, while it is the open document.
@@ -3748,7 +3909,7 @@ impl App {
             s.process_api(hub);
         }
         // An agent asked to quit; any unsaved changes were refused or discarded already.
-        if self.state.as_ref().is_some_and(|s| s.quit) {
+        if self.state.as_mut().is_some_and(State::should_exit) {
             event_loop.exit();
         }
     }
@@ -3770,7 +3931,7 @@ impl App {
         s.apply(action);
         s.sync_fly_cursor();
         s.notify_api(&mut self.hub);
-        if s.quit {
+        if s.should_exit() {
             event_loop.exit();
         }
     }
@@ -3797,6 +3958,13 @@ impl ApplicationHandler<AppEvent> for App {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let now = Instant::now();
+        // What a quit the system asks for finds (see `system_quit`).
+        #[cfg(target_os = "macos")]
+        if let Some(s) = self.state.as_mut() {
+            crate::system_quit::set_unsaved(!s.quit && s.editor.doc().is_modified());
+            // A prompt the system's quit raised may have moved on by another path.
+            s.answer_system_quit();
+        }
         let deadline = self
             .state
             .as_mut()
@@ -3819,6 +3987,19 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::Api => self.serve_api(event_loop),
             #[cfg(target_os = "macos")]
             AppEvent::Menu { id, repeat } => self.menu_event(event_loop, &id, repeat),
+            #[cfg(target_os = "macos")]
+            AppEvent::SystemQuit => {
+                if let Some(s) = self.state.as_mut() {
+                    s.system_quit();
+                    s.notify_api(&mut self.hub);
+                    s.window.request_redraw();
+                    if s.should_exit() {
+                        event_loop.exit();
+                    }
+                } else {
+                    crate::system_quit::reply(true);
+                }
+            }
             AppEvent::Error(text) => {
                 if let Some(s) = self.state.as_mut() {
                     s.editor.show_error(&text);
@@ -3843,7 +4024,7 @@ impl ApplicationHandler<AppEvent> for App {
                     s.platform_reply(reply);
                     s.notify_api(&mut self.hub);
                     s.window.request_redraw();
-                    if s.quit {
+                    if s.should_exit() {
                         event_loop.exit();
                     }
                 }
@@ -3873,6 +4054,12 @@ impl ApplicationHandler<AppEvent> for App {
                     repeat: native_menu::current_event_repeats(),
                 });
             }));
+            // Dock > Quit, log out and shut down ask the window first when it has unsaved
+            // changes.
+            let proxy = self.proxy.clone();
+            crate::system_quit::install(move || {
+                let _ = proxy.send_event(AppEvent::SystemQuit);
+            });
         }
         let Some(platform) = self.platform.take() else {
             return;
@@ -3925,7 +4112,7 @@ impl ApplicationHandler<AppEvent> for App {
         state.window.request_redraw();
         // Requests that arrived before the window existed.
         state.process_api(&mut self.hub);
-        if state.quit {
+        if state.should_exit() {
             event_loop.exit();
         }
         self.state = Some(state);
@@ -3960,7 +4147,7 @@ impl ApplicationHandler<AppEvent> for App {
         let changed = match event {
             WindowEvent::CloseRequested => {
                 s.settle_and(Then::Quit);
-                if s.quit {
+                if s.should_exit() {
                     event_loop.exit();
                 }
                 false
@@ -3979,7 +4166,7 @@ impl ApplicationHandler<AppEvent> for App {
                     s.notify_api(&mut self.hub);
                 }
                 s.notify_frame(&mut self.hub);
-                if s.quit {
+                if s.should_exit() {
                     event_loop.exit();
                 }
                 false
@@ -4143,6 +4330,17 @@ impl ApplicationHandler<AppEvent> for App {
                 false
             }
             WindowEvent::KeyboardInput { ref event, .. }
+                if let Some(key) = is_fly_move(
+                    s.editor.flying(),
+                    event.physical_key,
+                    event.state == ElementState::Pressed,
+                    s.fly_shortcut(event),
+                    keys_reach_editor(s.gui.wants_keyboard(), s.sheet.is_some()),
+                ) =>
+            {
+                s.editor.fly_key(key, event.state == ElementState::Pressed)
+            }
+            WindowEvent::KeyboardInput { ref event, .. }
                 if !keys_reach_editor(s.gui.wants_keyboard(), s.sheet.is_some())
                     && !(event.state == ElementState::Pressed
                         && !event.repeat
@@ -4154,16 +4352,6 @@ impl ApplicationHandler<AppEvent> for App {
                         )) =>
             {
                 false
-            }
-            WindowEvent::KeyboardInput { event, .. }
-                if let Some(key) = is_fly_move(
-                    s.editor.flying(),
-                    event.physical_key,
-                    event.state == ElementState::Pressed,
-                    s.fly_shortcut(&event),
-                ) =>
-            {
-                s.editor.fly_key(key, event.state == ElementState::Pressed)
             }
             WindowEvent::MouseWheel { delta, phase, .. } => {
                 let (scroll, started) = scroll_input(delta, phase);
@@ -4195,7 +4383,7 @@ impl ApplicationHandler<AppEvent> for App {
                         Some(Bound::Paste) if s.features.paste_by_event => false,
                         Some(Bound::Quit) => {
                             s.settle_and(Then::Quit);
-                            if s.quit {
+                            if s.should_exit() {
                                 event_loop.exit();
                             }
                             false
@@ -5467,13 +5655,21 @@ mod tests {
         );
         assert_eq!(fly_move_key(code(KeyCode::KeyF)), None);
         let s = code(KeyCode::KeyS);
-        assert_eq!(is_fly_move(true, s, true, false), Some(FlyKey::S));
-        assert_eq!(is_fly_move(false, s, true, false), None, "not flying");
-        assert_eq!(is_fly_move(true, s, true, true), None, "Cmd+S saves");
+        assert_eq!(is_fly_move(true, s, true, false, true), Some(FlyKey::S));
+        assert_eq!(is_fly_move(false, s, true, false, true), None, "not flying");
+        assert_eq!(is_fly_move(true, s, true, true, true), None, "Cmd+S saves");
         assert_eq!(
-            is_fly_move(true, s, false, true),
+            is_fly_move(true, s, false, true, true),
             Some(FlyKey::S),
             "a release always stops"
+        );
+        // A text field has focus, or a sheet is open: the key is theirs, but a key held since
+        // before is still let go.
+        assert_eq!(is_fly_move(true, s, true, false, false), None, "typed");
+        assert_eq!(
+            is_fly_move(true, s, false, false, false),
+            Some(FlyKey::S),
+            "released while typing"
         );
     }
 
@@ -5608,6 +5804,72 @@ mod tests {
             at_exit(false, true, 7, Some(6), 0),
             AtExit::Keep,
             "autosave off"
+        );
+    }
+
+    #[test]
+    fn a_system_quit_goes_ahead_only_with_the_changes_autosaved() {
+        let written = || Ok(());
+        let failed = || Err("no recovery folder".to_string());
+        let unused = || -> Result<(), String> { panic!("no autosave written") };
+        // Nothing unsaved, or the prompt was answered: the app ends at once.
+        assert_eq!(
+            system_quit(false, false, 7, None, 5, unused),
+            SystemQuit::Exit
+        );
+        assert_eq!(
+            system_quit(true, true, 7, None, 5, unused),
+            SystemQuit::Exit
+        );
+        assert_eq!(
+            system_quit(false, false, 7, None, 0, unused),
+            SystemQuit::Exit
+        );
+        // Unsaved and autosaved: the newest changes are written first, or are in it already.
+        assert_eq!(
+            system_quit(false, true, 7, None, 5, written),
+            SystemQuit::Exit
+        );
+        assert_eq!(
+            system_quit(false, true, 7, Some(6), 5, written),
+            SystemQuit::Exit
+        );
+        assert_eq!(
+            system_quit(false, true, 7, Some(7), 5, unused),
+            SystemQuit::Exit
+        );
+        // The write failed (or there is no recovery folder): ask.
+        assert_eq!(
+            system_quit(false, true, 7, Some(6), 5, failed),
+            SystemQuit::Prompt
+        );
+        // Autosave off: ask, even with an older autosave of the same revision.
+        assert_eq!(
+            system_quit(false, true, 7, None, 0, unused),
+            SystemQuit::Prompt
+        );
+        assert_eq!(
+            system_quit(false, true, 7, Some(7), 0, unused),
+            SystemQuit::Prompt
+        );
+    }
+
+    #[test]
+    fn the_unsaved_prompt_answers_the_system_quit_once_it_moves_on() {
+        assert_eq!(
+            prompt_answer(true, false),
+            Some(true),
+            "Save then saved, or Don't Save"
+        );
+        assert_eq!(
+            prompt_answer(false, false),
+            Some(false),
+            "Cancel, or the save failed"
+        );
+        assert_eq!(
+            prompt_answer(false, true),
+            None,
+            "a dialog of the prompt still open"
         );
     }
 

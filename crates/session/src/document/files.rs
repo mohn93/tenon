@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use glam::{DVec2, DVec3};
 use kernel::{DefinitionId, DefinitionKind, MeshId, Scene, SceneChange, Shadows};
 
 use super::{Document, SectionDisplay};
@@ -107,17 +108,62 @@ impl Document {
         self.apply_opened(opened);
         self.path = Some(PathBuf::from(path));
         self.library_info = crate::library::info_of(Path::new(path));
+        // A library item's saved view is its source model's, which need not show the item.
+        if self.library_info.is_some() && !self.view_frames_model() {
+            self.zoom_to_model();
+        }
         Ok(None)
+    }
+
+    /// Frames what the model shows, from the camera's direction; nothing changes for an empty one.
+    fn zoom_to_model(&mut self) {
+        if let Some([lo, hi]) = self.scene.shown_bounds(MeshId::Root, &[]) {
+            self.camera.fit(lo, hi);
+        }
+    }
+
+    /// Whether the camera shows the model: its box's center is in view and it spans at least
+    /// a twelfth of the view's height. True for an empty model.
+    fn view_frames_model(&self) -> bool {
+        let Some([lo, hi]) = self.scene.shown_bounds(MeshId::Root, &[]) else {
+            return true;
+        };
+        let mut seen = Vec::new();
+        for i in 0..8 {
+            let corner = DVec3::new(
+                if i & 1 == 0 { lo.x } else { hi.x },
+                if i & 2 == 0 { lo.y } else { hi.y },
+                if i & 4 == 0 { lo.z } else { hi.z },
+            );
+            match self.camera.project(corner) {
+                Some(p) => seen.push(p),
+                None => return false,
+            }
+        }
+        let min = seen.iter().fold(DVec2::splat(f64::MAX), |a, p| a.min(*p));
+        let max = seen.iter().fold(DVec2::splat(f64::MIN), |a, p| a.max(*p));
+        let view = self.camera.viewport;
+        let center = (min + max) / 2.0;
+        let in_view =
+            center.x >= 0.0 && center.x <= view.x && center.y >= 0.0 && center.y <= view.y;
+        in_view && (max - min).max_element() >= view.y / 12.0
     }
 
     /// Replaces the model, view, lighting and units with those of an opened `.skr` file. A view
     /// that cannot be used opens as the default view. The file's path is for the caller to set.
     fn apply_opened(&mut self, opened: file::Opened) {
         let c = opened.camera;
-        let camera = self
+        let saved = self
             .camera_for(c.eye, c.target, Some(c.fov_y_deg), c.up, Some(c.projection))
-            .unwrap_or_else(|_| Camera::new(self.camera.viewport));
+            .ok()
+            .filter(|camera| !is_default_view(camera));
+        let framed = saved.is_some();
+        let camera = saved.unwrap_or_else(|| Camera::new(self.camera.viewport));
         self.replace(opened.scene, camera);
+        // No saved view (unusable, or just the default one): frame the model.
+        if !framed {
+            self.zoom_to_model();
+        }
         self.units = opened.units;
         self.lighting = c.lighting;
         self.color_by_tag = c.color_by_tag;
@@ -757,4 +803,14 @@ pub(super) fn check_nul(path: &Path) -> Result<(), CommandError> {
 
 fn file_error(path: &str, e: String) -> CommandError {
     CommandError::new(ErrorKind::File, format!("{path}: {e}"))
+}
+
+/// Whether `camera` looks as `Camera::new` does, the view of a model nobody moved the camera of.
+fn is_default_view(camera: &Camera) -> bool {
+    let default = Camera::new(camera.viewport);
+    camera.eye.abs_diff_eq(default.eye, 1e-6)
+        && camera.target.abs_diff_eq(default.target, 1e-6)
+        && camera.up.abs_diff_eq(default.up, 1e-6)
+        && (camera.fov_y - default.fov_y).abs() < 1e-6
+        && camera.projection == default.projection
 }

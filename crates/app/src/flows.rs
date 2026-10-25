@@ -191,6 +191,12 @@ impl Flows {
         Box::new(move |answer| notify(wrap(answer)))
     }
 
+    /// Whether a request waits for the platform's answer (a question or a file dialog open).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn is_waiting(&self) -> bool {
+        self.waiting.is_some()
+    }
+
     /// Before the model is replaced or the window closes: if it has unsaved changes, asks
     /// whether to save them, then does `then` (unless the answer cancels, or a save fails).
     pub fn settle_and(&mut self, env: &mut Env, then: Then) -> Vec<Effect> {

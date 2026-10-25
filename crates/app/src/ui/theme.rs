@@ -376,6 +376,10 @@ pub fn style(t: &Tokens, dark: bool) -> egui::Style {
     s.indent = 4.0 * GRID;
     // Values in the value font: DragValue and Slider read this, not `override_text_style`.
     style.drag_value_text_style = TextStyle::Monospace;
+    // A value field showing zero, or a value that rounds to it, shows no sign.
+    style.number_formatter = egui::style::NumberFormatter::new(|value, decimals| {
+        unsigned_zero(egui::emath::format_with_decimals_in_range(value, decimals))
+    });
 
     style.text_styles = [
         (
@@ -403,6 +407,16 @@ pub fn style(t: &Tokens, dark: bool) -> egui::Style {
     style
 }
 
+/// `text`, a number written out, without its sign when it reads as zero ("-0", "-0.00").
+fn unsigned_zero(text: String) -> String {
+    match text.strip_prefix('-') {
+        Some(digits) if digits.starts_with('0') && digits.chars().all(|c| c == '0' || c == '.') => {
+            digits.to_owned()
+        }
+        _ => text,
+    }
+}
+
 /// Installs the fonts and both themes' styles on `ctx`, and picks `choice`. egui's own
 /// keyboard zoom (Cmd+= and Cmd+-) is off: the UI scale is the Settings window's alone.
 pub fn install(ctx: &egui::Context, choice: ThemeChoice) {
@@ -425,6 +439,19 @@ pub fn set_choice(ctx: &egui::Context, choice: ThemeChoice) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_value_field_shows_zero_without_a_sign() {
+        let style = style(&DARK, true);
+        let format =
+            |v: f64, d: std::ops::RangeInclusive<usize>| style.number_formatter.format(v, d);
+        assert_eq!(format(-0.0, 0..=3), "0");
+        assert_eq!(format(-0.0001, 2..=2), "0.00");
+        assert_eq!(format(-1.0e-12, 0..=3), "0");
+        assert_eq!(format(-0.25, 0..=3), "-0.25");
+        assert_eq!(format(-10.0, 0..=0), "-10");
+        assert_eq!(unsigned_zero("-".into()), "-");
+    }
 
     #[test]
     fn the_hover_look_follows_the_tool() {

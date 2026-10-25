@@ -173,11 +173,29 @@ pub(super) fn dock(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> Doc
             }
         }
     }
+    // The tab's content is laid out in a part of the dock that does not grow with it: a row
+    // wider than the dock is cut off at the dock's margin instead of widening the dock over
+    // the 3D view.
+    let area =
+        egui::Rect::from_min_size(ui.cursor().min, Vec2::new(width, top_height(split, height)));
+    let mut top_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt("dock-top-area")
+            .max_rect(area)
+            .layout(*ui.layout()),
+    );
+    let mut clip = ui.clip_rect();
+    let margin = f32::from(DOCK_MARGIN);
+    (clip.min.x, clip.max.x) = (
+        clip.min.x.max(area.min.x - margin),
+        clip.max.x.min(area.max.x + margin),
+    );
+    top_ui.set_clip_rect(clip);
     let top = egui::ScrollArea::vertical()
         .id_salt("dock-top")
         .auto_shrink([false, false])
-        .max_height(top_height(split, height))
-        .show(ui, |ui| match tab {
+        .max_height(area.height())
+        .show(&mut top_ui, |ui| match tab {
             DockTab::EntityInfo => right::entity_info(ui, view, actions),
             DockTab::Materials => materials::materials(ui, view, actions),
             DockTab::Tags => tags::tags(ui, view, actions),
@@ -187,6 +205,7 @@ pub(super) fn dock(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> Doc
             DockTab::Styles => styles::styles(ui, view, actions),
             DockTab::Library => library::library(ui, view, actions),
         });
+    ui.advance_cursor_after_rect(area);
     widgets::name_scroll_bars(ui.ctx(), top.id, tab.name());
     divider(ui, divider_id, width);
     outliner::outliner(ui, view, actions);

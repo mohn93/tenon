@@ -55,16 +55,18 @@ impl Document {
             Some(at) => DAffine3::from_translation(DVec3::from(at) - clip.base),
             None => self.context_transform().inverse(),
         };
-        self.paste_clip(clip, placement, true)
+        self.paste_clip(clip, placement, true, BTreeMap::new())
     }
 
     /// Inserts `clip`, placed by `placement`, into the open context and selects what it
-    /// made. `remember`: later pastes of the clip's source reuse the definitions made.
+    /// made. `remember`: later pastes of the clip's source reuse the definitions made. `known`
+    /// maps clip definitions to the model's own that stand for them.
     pub(super) fn paste_clip(
         &mut self,
         clip: clip::Clip,
         placement: DAffine3,
         remember: bool,
+        known: BTreeMap<DefinitionId, DefinitionId>,
     ) -> Result<SceneChange, CommandError> {
         // What lands in the open context must keep to the limit commands keep to. Each
         // definition's box is worked out once, so a nested clip costs no more than its size.
@@ -98,7 +100,7 @@ impl Document {
             .filter_map(|(id, _)| {
                 let original = (same_document && self.scene.definition(id).is_some()).then_some(id);
                 let earlier = || self.pasted.get(&(clip.source.clone(), id)).copied();
-                Some((id, original.or_else(earlier)?))
+                Some((id, known.get(&id).copied().or(original).or_else(earlier)?))
             })
             .collect();
         let reuse = |id| offered.get(&id).copied();
