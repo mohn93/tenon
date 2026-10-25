@@ -294,6 +294,7 @@ fn a_hidden_part_is_not_listed_and_hidden_geometry_does_not_count_in_the_size() 
     })
     .unwrap();
     close(list(&s)[0].size.unwrap(), [1.0, 1.0, 1.0]);
+    close(list(&s)[0].own_size.unwrap(), [1.0, 1.0, 1.0]);
     s.edit(MeshId::Root, |m| {
         Ok(m.hide_entities(&[kernel::EntityId::Instance(id)], true).0)
     })

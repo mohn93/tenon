@@ -107,10 +107,11 @@ fn extent(m: &Model) -> Option<DVec3> {
     any.then(|| hi - lo)
 }
 
-/// The own box of `definition` placed by `linear`, longest first: the extent of its geometry
-/// and of what it places inside it along its own axes, scaled by the placement's axis lengths.
-/// None when it has no geometry.
+/// The own box of `definition` placed by `linear`, longest first: the extent of its shown
+/// geometry and of the shown instances it places inside it along its own axes, scaled by the
+/// placement's axis lengths. None when nothing of it shows.
 pub fn own_size(scene: &Scene, definition: DefinitionId, linear: DMat3) -> Option<[f64; 3]> {
+    let hidden = scene.hidden_tags();
     let mut lo = DVec3::splat(f64::INFINITY);
     let mut hi = DVec3::splat(f64::NEG_INFINITY);
     let mut any = false;
@@ -119,15 +120,20 @@ pub fn own_size(scene: &Scene, definition: DefinitionId, linear: DMat3) -> Optio
         let Some(mesh) = scene.mesh(MeshId::Definition(d)) else {
             continue;
         };
-        for (_, v) in mesh.vertices() {
-            let p = place.transform_point3(v.pos);
-            lo = lo.min(p);
-            hi = hi.max(p);
-            any = true;
+        let all_shown = hidden.is_empty() && !mesh.has_hidden_edge_or_face();
+        for (id, v) in mesh.vertices() {
+            if all_shown || mesh.vertex_shown(id, &hidden, false) {
+                let p = place.transform_point3(v.pos);
+                lo = lo.min(p);
+                hi = hi.max(p);
+                any = true;
+            }
         }
         if depth < MAX_DEPTH {
             for (_, inner) in mesh.instances() {
-                stack.push((inner.definition, place * inner.transform, depth + 1));
+                if scene.placed_instance_shown(inner) {
+                    stack.push((inner.definition, place * inner.transform, depth + 1));
+                }
             }
         }
     }
