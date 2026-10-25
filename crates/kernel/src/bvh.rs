@@ -356,14 +356,20 @@ impl Search<'_> {
     }
 
     fn leaves(&mut self, na: &Node, nb: &Node) {
-        let tb: Vec<[DVec3; 3]> = self.b.tris[nb.first as usize..(nb.first + nb.count) as usize]
-            .iter()
-            .map(|t| t.map(|p| self.pb.transform_point3(p)))
-            .collect();
-        for t in &self.a.tris[na.first as usize..(na.first + na.count) as usize] {
-            let ta = t.map(|p| self.pa.transform_point3(p));
-            for u in &tb {
-                let c = triangle_distance(ta, *u);
+        let placed =
+            |t: &[DVec3; 3], place: &DAffine3| Near::of(t.map(|p| place.transform_point3(p)));
+        let mut tb = [None; LEAF];
+        let range = |n: &Node| n.first as usize..(n.first + n.count) as usize;
+        for (slot, t) in tb.iter_mut().zip(&self.b.tris[range(nb)]) {
+            *slot = Some(placed(t, self.pb));
+        }
+        for t in &self.a.tris[range(na)] {
+            let ta = placed(t, self.pa);
+            for u in tb.iter().flatten() {
+                if ta.apart(u, self.limit()) {
+                    continue;
+                }
+                let c = triangle_distance(ta.t, u.t);
                 if c.distance < self.limit() {
                     self.best = Some(c);
                     if self.done() {
@@ -373,6 +379,51 @@ impl Search<'_> {
             }
         }
     }
+}
+
+/// A placed triangle with its box and unit normal, for telling cheaply that two triangles
+/// are no nearer than a distance.
+#[derive(Clone, Copy)]
+struct Near {
+    t: [DVec3; 3],
+    lo: DVec3,
+    hi: DVec3,
+    normal: DVec3,
+}
+
+/// How much farther than a limit two triangles' lower bound must be before they are passed
+/// over: a margin far above rounding, so no pair that could be nearer is ever skipped.
+const APART_MARGIN: f64 = 1e-12;
+
+impl Near {
+    fn of(t: [DVec3; 3]) -> Near {
+        Near {
+            t,
+            lo: t[0].min(t[1]).min(t[2]),
+            hi: t[0].max(t[1]).max(t[2]),
+            normal: (t[1] - t[0]).cross(t[2] - t[0]).normalize_or_zero(),
+        }
+    }
+
+    /// Whether `other` is surely farther than `limit` from this triangle: their boxes are, or
+    /// the corners of one lie all on one side of the other's plane, farther than `limit`.
+    fn apart(&self, other: &Near, limit: f64) -> bool {
+        let limit = limit + APART_MARGIN;
+        box_distance((self.lo, self.hi), (other.lo, other.hi)) > limit
+            || plane_gap(self, other) > limit
+            || plane_gap(other, self) > limit
+    }
+}
+
+/// How far the corners of `q` lie from the plane of `p` when all lie on one side of it (0
+/// when they straddle it or `p` is degenerate): no point of `q` is nearer than that to `p`.
+fn plane_gap(p: &Near, q: &Near) -> f64 {
+    if p.normal == DVec3::ZERO {
+        return 0.0;
+    }
+    let d = q.t.map(|x| (x - p.t[0]).dot(p.normal));
+    let (lo, hi) = (d[0].min(d[1]).min(d[2]), d[0].max(d[1]).max(d[2]));
+    lo.max(-hi).max(0.0)
 }
 
 fn crossing_pair(
@@ -848,5 +899,70 @@ mod tests {
         let p = DAffine3::IDENTITY;
         assert!(a.distance(&p, &b, &p, 0.5, 0.0).is_none());
         assert!((a.distance(&p, &b, &p, 2.0, 0.0).unwrap().distance - 1.0).abs() < 1e-12);
+    }
+
+    /// The side walls of a 64-sided cylinder of radius `r` along Z, two triangles a side.
+    fn tube_walls(r: f64) -> Vec<[DVec3; 3]> {
+        let at = |k: usize, z: f64| {
+            let a = k as f64 * std::f64::consts::TAU / 64.0;
+            [r * a.cos(), r * a.sin(), z]
+        };
+        (0..64)
+            .flat_map(|k| {
+                let (p, q) = (at(k, 0.0), at(k + 1, 0.0));
+                let (u, v) = (at(k, 0.05), at(k + 1, 0.05));
+                [tri(p, q, v), tri(p, v, u)]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_pin_in_its_bore_is_the_brute_force_minimum_apart() {
+        // Nearly every pair of facing triangles is about the gap apart, so most are passed over
+        // by their boxes or planes: the nearest pair must never be among them.
+        let pin = Bvh::new(tube_walls(0.0095));
+        let bore = Bvh::new(tube_walls(0.01));
+        let pa = DAffine3::IDENTITY;
+        for pb in [
+            DAffine3::from_translation(DVec3::new(0.0002, 0.0, 0.01)),
+            DAffine3::from_rotation_z(0.03)
+                * DAffine3::from_translation(DVec3::new(0.0, -0.0003, 0.0)),
+        ] {
+            let tree = pin.distance(&pa, &bore, &pb, 0.005, 0.0).unwrap();
+            let mut brute = f64::INFINITY;
+            for t in pin.triangles() {
+                for u in bore.triangles() {
+                    let ub = u.map(|p| pb.transform_point3(p));
+                    brute = brute.min(triangle_distance(*t, ub).distance);
+                }
+            }
+            assert_eq!(tree.distance, brute);
+        }
+    }
+
+    #[test]
+    fn triangles_told_apart_are_farther_than_the_limit() {
+        // A spread of triangles near one another, turned every way.
+        let mut tris = Vec::new();
+        for k in 0..60 {
+            let f = k as f64;
+            let c = DVec3::new((f * 0.7).sin(), (f * 1.3).cos(), (f * 0.31).sin()) * 0.02;
+            let d = DVec3::new((f * 2.1).cos(), (f * 0.5).sin(), (f * 1.7).cos()) * 0.01;
+            let e = DVec3::new((f * 0.9).sin(), (f * 2.9).cos(), (f * 0.2).cos()) * 0.01;
+            tris.push(Near::of([c, c + d, c + e]));
+        }
+        let mut apart = 0;
+        for p in &tris {
+            for q in &tris {
+                let d = triangle_distance(p.t, q.t).distance;
+                for limit in [0.0, 0.001, 0.005, 0.01] {
+                    if p.apart(q, limit) {
+                        apart += 1;
+                        assert!(d > limit, "{d} within {limit}");
+                    }
+                }
+            }
+        }
+        assert!(apart > 1000, "{apart}");
     }
 }
