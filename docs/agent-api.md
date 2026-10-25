@@ -587,7 +587,9 @@ distinct `ids` is `invalid_input`.
 `sweep_check` checks only the pairs whose boxes come within `report_within`, by distance first:
 the overlap boolean runs only for a pair whose surfaces cross or where one part may lie inside the
 other, so parts that only touch (layers face to face) cost a distance check per step. Each solid's triangle tree is built once and placed at every step; a 60-part engine sweeps
-720 steps in well under 5 s. A pair is checked again at a step only when either part's
+720 steps in well under 5 s. The pairs of a step are checked on several threads, while the solver
+drives the copy on to the next steps (`interference` checks its pairs on several threads too; in
+the browser both run on one thread); the results are the same either way. A pair is checked again at a step only when either part's
 placement changed since the last step it was checked; otherwise it stands as it did, so two parts
 the joint does not move (a block and its bolts) cost nothing after their first check, and a pair
 whose boxes are apart early is first checked later, when they come within `report_within`. A pair

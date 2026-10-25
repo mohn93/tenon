@@ -1,6 +1,7 @@
 //! Sweep checks: a joint driven through a range on a copy of the scene, every pair of parts
 //! checked at each step.
 
+use std::f64::consts::PI;
 use std::time::Instant;
 
 use glam::{DAffine3, DQuat, DVec3};
@@ -592,4 +593,113 @@ fn parts_the_joint_does_not_move_are_checked_once() {
     assert!(stop.interferes.is_none());
     assert!((stop.clearance - 0.002).abs() < 1e-9, "{}", stop.clearance);
     assert!((stop.clearance_at.to_degrees() - 180.0).abs() < 1e-6);
+}
+
+/// A shaft turning about Z with ten eccentric discs fixed to it, each turning inside a ring
+/// 1 mm clear at its nearest, and a pin driven through each ring: round parts of many
+/// triangles near each other at every step, a boolean per disc and shaft at every step (they
+/// turn together), and the pins and rings, which do not move, checked once. 31 parts.
+fn discs() -> (Scene, JointId, Vec<(InstanceId, InstanceId, InstanceId)>) {
+    let mut s = Scene::new();
+    let add = |s: &mut Scene, solid: Solid, at: DVec3| {
+        s.add_solid(
+            MeshId::Root,
+            &solid,
+            DefinitionKind::Group,
+            "P",
+            DAffine3::from_translation(at),
+            None,
+        )
+        .unwrap()
+        .0
+    };
+    let shaft = add(
+        &mut s,
+        Solid::cylinder(0.01, 0.6, 48).unwrap(),
+        p(0.0, 0.0, -0.05),
+    );
+    let turn = join(
+        &mut s,
+        JointKind::Revolute,
+        None,
+        shaft,
+        DVec3::ZERO,
+        DVec3::Z,
+        DVec3::X,
+    );
+    let mut rigs = Vec::new();
+    for k in 0..10 {
+        let z = 0.05 * k as f64;
+        let disc = add(
+            &mut s,
+            Solid::cylinder(0.03, 0.01, 96).unwrap(),
+            p(0.005, 0.0, z),
+        );
+        join(
+            &mut s,
+            JointKind::Fixed,
+            Some(shaft),
+            disc,
+            p(0.0, 0.0, z),
+            DVec3::Z,
+            DVec3::X,
+        );
+        let ring = add(
+            &mut s,
+            Solid::tube(0.05, 0.036, 0.01, 96).unwrap(),
+            p(0.0, 0.0, z),
+        );
+        let pin = add(
+            &mut s,
+            Solid::cylinder(0.004, 0.03, 32).unwrap(),
+            p(0.043, 0.0, z - 0.01),
+        );
+        rigs.push((disc, ring, pin));
+    }
+    (s, turn, rigs)
+}
+
+fn sweep_discs(steps: usize) -> f64 {
+    let (s, j, rigs) = discs();
+    let t = Instant::now();
+    let r = sweep_check(
+        &s,
+        j,
+        0.0,
+        360f64.to_radians(),
+        steps,
+        None,
+        &[],
+        SWEEP_REPORT_WITHIN,
+    )
+    .unwrap();
+    let elapsed = t.elapsed().as_secs_f64();
+    assert_eq!((r.stopped.clone(), r.steps), (None, steps));
+    for (disc, ring, pin) in rigs {
+        let q = pair_of(&r, disc, ring);
+        assert!(q.interferes.is_none(), "{q:?}");
+        assert!(
+            q.clearance > 0.0009 && q.clearance < 0.001,
+            "{}",
+            q.clearance
+        );
+        let q = pair_of(&r, ring, pin);
+        let area = 0.5 * 32.0 * 0.004f64.powi(2) * (2.0 * PI / 32.0).sin();
+        assert!((q.volume - area * 0.01).abs() < 1e-12, "{}", q.volume);
+        assert_eq!(q.interferes, Some((0.0, 360f64.to_radians())));
+    }
+    elapsed
+}
+
+#[test]
+fn round_parts_turning_near_each_other_sweep() {
+    sweep_discs(5);
+}
+
+#[test]
+#[ignore = "timing; run in release"]
+fn perf_round_parts_turning_near_each_other_sweep_72_steps_in_under_3_s() {
+    let elapsed = sweep_discs(73);
+    eprintln!("72 step sweep of 31 round parts: {elapsed:.2} s");
+    assert!(elapsed < 3.0, "{elapsed}");
 }

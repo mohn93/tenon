@@ -34,6 +34,7 @@ mod model;
 pub mod offset;
 mod orient;
 mod page;
+mod parallel;
 mod primitives;
 mod push_pull;
 mod regions;
