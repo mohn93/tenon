@@ -1332,18 +1332,24 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         selection: bool,
     },
-    /// Read an OBJ, STL or SketchUp file and add its faces to the open context, as one undo
-    /// step: as a new group (default) or component named after the file, placed at the
-    /// context's origin and selected, or (`"as": "context"`) as loose geometry merging with
+    /// Read an OBJ, STL, SketchUp, glTF or COLLADA file and add its faces to the open context,
+    /// as one undo step: as a new group (default) or component named after the file, placed at
+    /// the context's origin and selected, or (`"as": "context"`) as loose geometry merging with
     /// what it touches, which becomes the selection. `format` defaults to the one the extension
-    /// names (`.obj`, `.stl`, `.skp`), else to SketchUp for a file with SketchUp's header. OBJ
-    /// and STL units are meters times `scale` (default 1); `up` is the file's up axis (default
+    /// names (`.obj`, `.stl`, `.skp`, `.gltf`, `.glb`, `.dae`), else to SketchUp for a file
+    /// with SketchUp's header. OBJ and STL units are meters times `scale` (default 1); `up` is the file's up axis (default
     /// `y` for OBJ, `z` for STL, as `export` writes them). Corners closer than 1e-6 m are
     /// welded, and with `merge_coplanar` (default true) neighbouring faces in one plane with
     /// one material become one face. OBJ materials come from its `mtllib` libraries. A
     /// SketchUp file (2017 or newer) keeps its components and groups (each definition once),
     /// face holes, soft edges, guides and materials; its lengths keep their real size, times `scale`,
-    /// and `up` and `merge_coplanar` are ignored. The outcome's `import` says what was made.
+    /// and `up` and `merge_coplanar` are ignored. A glTF (`.gltf`, `.glb`) or COLLADA
+    /// (`.dae`) file keeps its node tree (nodes as groups; meshes several nodes place, and
+    /// COLLADA library nodes, as components), materials and base-color textures; its triangles
+    /// become faces as OBJ polygons do, with smooth surfaces' edges soft. glTF is meters times
+    /// `scale`, `y` up by default; COLLADA's own unit times `scale` and its own up axis unless
+    /// `up` is given. Side files (buffers, images) are read only from the file's folder or
+    /// below it. The outcome's `import` says what was made.
     Import {
         path: String,
         #[serde(default)]
@@ -1356,8 +1362,9 @@ pub enum Command {
         up: Option<UpAxis>,
         #[serde(default)]
         merge_coplanar: Option<bool>,
-        /// Set by the API under `--api-root`: the OBJ's material libraries are read only when
-        /// they lie, after symlinks, within these folders. Never read from or written to JSON.
+        /// Set by the API under `--api-root`: the OBJ's material libraries, and a glTF's or
+        /// COLLADA file's buffers and images, are read only when they lie, after symlinks,
+        /// within these folders. Never read from or written to JSON.
         #[serde(skip)]
         library_roots: Option<Vec<PathBuf>>,
     },

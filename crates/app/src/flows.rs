@@ -122,10 +122,15 @@ fn open_filters() -> Vec<Filter> {
 
 fn import_filters() -> Vec<Filter> {
     vec![
-        Filter::new("OBJ, STL or SketchUp", &["obj", "stl", "skp"]),
+        Filter::new(
+            "OBJ, STL, SketchUp, glTF or COLLADA",
+            &["obj", "stl", "skp", "gltf", "glb", "dae"],
+        ),
         Filter::new("OBJ", &["obj"]),
         Filter::new("STL", &["stl"]),
         Filter::new("SketchUp", &["skp"]),
+        Filter::new("glTF", &["gltf", "glb"]),
+        Filter::new("COLLADA", &["dae"]),
     ]
 }
 
@@ -896,6 +901,17 @@ mod tests {
 
     fn desktop() -> Fake {
         Fake::new(Features::ALL)
+    }
+
+    #[test]
+    fn import_offers_gltf_and_collada() {
+        let filters = import_filters();
+        assert_eq!(
+            filters[0].extensions,
+            ["obj", "stl", "skp", "gltf", "glb", "dae"]
+        );
+        assert!(filters.iter().any(|f| f.extensions == ["gltf", "glb"]));
+        assert!(filters.iter().any(|f| f.extensions == ["dae"]));
     }
 
     #[test]

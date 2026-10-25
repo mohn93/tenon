@@ -231,6 +231,7 @@ fn geometry(letters: &[&TextFace], filled: bool, depth: f64) -> ImportGeometry {
         loops,
         front: None,
         back: None,
+        texture: None,
         tag: None,
         hidden: false,
     };

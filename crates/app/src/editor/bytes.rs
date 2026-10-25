@@ -37,21 +37,22 @@ impl Editor {
         opened
     }
 
-    /// Imports an OBJ, STL or SketchUp file from its `bytes` as `import_file` does the file
-    /// (`name` gives the format and the group's name). An OBJ's material libraries are not
-    /// read. False if it cannot be imported; the status then says why.
+    /// Imports an OBJ, STL, SketchUp, glTF or COLLADA file from its `bytes` as `import_file`
+    /// does the file (`name` gives the format and the group's name). An OBJ's material
+    /// libraries and a glTF's or COLLADA file's side files are not read. False if it cannot be
+    /// imported; the status then says why.
     pub fn import_bytes(&mut self, name: &str, bytes: Vec<u8>) -> bool {
         self.reset_tool();
         self.typed.clear();
         self.message = None;
-        let sketchup = is_sketchup_path(Path::new(name));
+        let applies = ImportApplies::to(Path::new(name));
         let options = self.import;
+        let (scale, up, merge_coplanar) = applies.given(options);
         let given = session::ImportOptions {
             place: options.place,
-            scale: (!sketchup && options.units != ImportUnits::Meters)
-                .then(|| options.units.meters()),
-            up: if sketchup { None } else { options.up },
-            merge_coplanar: (!sketchup).then_some(options.merge_coplanar),
+            scale,
+            up,
+            merge_coplanar,
             ..Default::default()
         };
         let result = self.doc.import_bytes(name, bytes, &given);
@@ -61,7 +62,7 @@ impl Editor {
                 let Some(report) = outcome.import else {
                     return false;
                 };
-                self.say_imported(name, sketchup, &report);
+                self.say_imported(name, applies, &report);
                 true
             }
             Err(e) => {

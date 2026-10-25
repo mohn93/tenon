@@ -1,23 +1,32 @@
-//! Importing OBJ and STL files as a group, a component or geometry of the open context.
+//! Importing OBJ, STL, SketchUp, glTF and COLLADA files as a group, a component or geometry of the
+//! open context.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use glam::DVec3;
+use glam::{DVec2, DVec3};
 use kernel::{
-    DefinitionKind, EntityId, ImportTree, InstanceId, KernelError, MaterialId, MeshId, MeshPolygon,
-    Scene, SceneChange, TreeReport,
+    DefinitionKind, EntityId, ImportTree, InstanceId, KernelError, MAX_TEXTURE_SIZE,
+    MIN_TEXTURE_SIZE, Material, MaterialId, MeshId, MeshPolygon, Scene, SceneChange, Texture,
+    TreeReport,
 };
 
 use super::{Document, MAX_COORDINATE};
 use crate::command::{CommandError, ErrorKind};
+use crate::dae_read::read_dae;
+use crate::gltf_read::read_gltf;
 use crate::import::{
     ImportAs, ImportFormat, ImportReport, MAX_CONTEXT_IMPORT_FACES, MAX_IMPORT_BYTES,
     MAX_IMPORT_MATERIALS, MAX_MTL_BYTES, ReadMesh, UpAxis, read_mtl, read_obj, read_stl,
 };
+use crate::scene_read::{
+    FileUp, Mapping, ReadScene, SideFiles, build_tree, counted, name_or, reached, texture_size,
+    tinted,
+};
 use crate::skp::{SkpNotes, display_length, read_skp, remove_added, remove_materials};
 use crate::sniff;
+use crate::texture::{check_total_pixels, dimensions, texture_from_bytes};
 use crate::units::Units;
 
 /// The name of an imported definition whose file name gives none.
@@ -99,7 +108,7 @@ impl Document {
             None if sniffed => ImportFormat::Skp,
             None => {
                 return Err(invalid(
-                    "give a format, or a path ending in .obj, .stl or .skp",
+                    "give a format, or a path ending in .obj, .stl, .skp, .gltf, .glb or .dae",
                 ));
             }
         };
@@ -121,6 +130,9 @@ impl Document {
             ImportFormat::Obj => read_obj(&bytes),
             ImportFormat::Stl => read_stl(&bytes),
             ImportFormat::Skp => return self.import_skp(path, bytes, scale, o.place),
+            ImportFormat::Gltf | ImportFormat::Dae => {
+                return self.import_scene(path, format, bytes, scale, o, from_bytes);
+            }
         }
         .map_err(file_error)?;
         let up = o.up.unwrap_or(format.default_up());
@@ -235,6 +247,305 @@ impl Document {
             self.units.length = display_length(unit);
         }
         Ok(changed)
+    }
+
+    /// Reads a glTF or COLLADA file's `bytes` and adds it to the open context as
+    /// `import_changes` does: its nodes as groups and shared meshes as components (see `scene_read`), inside a new
+    /// group or component named after the file (exploded for `"as": "context"`), at the
+    /// file's own units times `scale`; `o.up` overrides the file's up axis. Side files are
+    /// read beside `path` (none `from_bytes`). Nothing changes on failure.
+    fn import_scene(
+        &mut self,
+        path: &str,
+        format: ImportFormat,
+        bytes: Vec<u8>,
+        scale: f64,
+        o: &ImportOptions,
+        from_bytes: bool,
+    ) -> Result<SceneChange, CommandError> {
+        let file_error = |m: String| CommandError::new(ErrorKind::File, format!("{path}: {m}"));
+        let file = Path::new(path);
+        let side = SideFiles {
+            folder: (!from_bytes).then(|| file.parent().unwrap_or(Path::new(""))),
+            roots: o.library_roots.as_deref(),
+        };
+        let read = match format {
+            ImportFormat::Gltf => read_gltf(&bytes, &side),
+            ImportFormat::Dae => read_dae(&bytes, &side),
+            _ => unreachable!("not a scene format"),
+        }
+        .map_err(file_error)?;
+        drop(bytes);
+        let scale = read.unit * scale;
+        if !(scale.is_finite() && scale > 0.0) {
+            return Err(file_error(
+                "the file's unit is not a positive length".into(),
+            ));
+        }
+        let up = match o.up {
+            Some(UpAxis::Y) => FileUp::Y,
+            Some(UpAxis::Z) => FileUp::Z,
+            None => read.up,
+        };
+        let turn = up.turn();
+        let (_, meshes) = reached(&read).map_err(file_error)?;
+        let mut warnings = read.warnings.clone();
+        let (materials, added, textures) =
+            self.scene_materials(&read, &meshes, turn * scale, &mut warnings)?;
+        let mapping = Mapping {
+            turn,
+            scale,
+            materials: &materials,
+            v_down: read.v_down,
+            merge: o.merge_coplanar.unwrap_or(true),
+        };
+        let undo_materials = |doc: &mut Document, added: &AddedMaterials| {
+            doc.scene
+                .apply(&SceneChange::join(added.iter().map(|(_, c)| c.clone())).inverse());
+        };
+        let (tree, notes) = match build_tree(&read, &mapping) {
+            Ok(built) => built,
+            Err(e) => {
+                undo_materials(self, &added);
+                return Err(file_error(e));
+            }
+        };
+        let beyond = std::iter::once(&tree.root)
+            .chain(tree.definitions.iter().map(|d| &d.geometry))
+            .any(|g| {
+                g.points
+                    .iter()
+                    .any(|p| p.abs().max_element() > MAX_COORDINATE)
+                    || g.instances
+                        .iter()
+                        .any(|i| i.transform.translation.abs().max_element() > MAX_COORDINATE)
+            });
+        if beyond {
+            undo_materials(self, &added);
+            return Err(file_error(format!(
+                "a position is beyond +/-{MAX_COORDINATE} m at scale {scale}"
+            )));
+        }
+        let mesh = self.active();
+        let (kind, name) = (wrapper_kind(o.place), import_name(file));
+        let (instance, built, change) = match self.scene.import_tree(mesh, &tree, kind, &name) {
+            Ok(done) => done,
+            Err(e) => {
+                undo_materials(self, &added);
+                return Err(file_error(e.to_string()));
+            }
+        };
+        // Materials only skipped polygons used are not kept.
+        let in_use: HashSet<MaterialId> = self
+            .scene
+            .meshes()
+            .flat_map(|(_, m)| m.faces().filter_map(|(_, f)| f.front).collect::<Vec<_>>())
+            .collect();
+        let (kept, unused): (Vec<_>, Vec<_>) =
+            added.into_iter().partition(|(id, _)| in_use.contains(id));
+        undo_materials(self, &unused);
+        let definition = self.model().instance(instance).map(|i| i.definition);
+        let root_faces = definition
+            .and_then(|d| self.scene.mesh(MeshId::Definition(d)))
+            .map_or(0, |m| m.faces().count());
+        let textures = kept.iter().filter(|(id, _)| textures.contains(id)).count();
+        if built.split > 0 {
+            warnings.push(format!(
+                "{} could not be made as given and {} made from {} outer loop alone",
+                counted(built.split, "face with holes", "faces with holes"),
+                if built.split == 1 { "was" } else { "were" },
+                if built.split == 1 { "its" } else { "their" },
+            ));
+        }
+        let report = ImportReport {
+            instance: Some(EntityId::Instance(instance)),
+            definition,
+            polygons: notes.polygons + read.skipped,
+            faces: built.faces,
+            vertices: built.vertices,
+            skipped: read.skipped + notes.skipped + built.skipped,
+            materials: kept.len(),
+            definitions: built.definitions,
+            instances: built.instances,
+            textures,
+            warnings,
+            ..ImportReport::default()
+        };
+        let change = SceneChange::join(kept.into_iter().map(|(_, c)| c).chain([change]));
+        self.place_import(mesh, instance, change, report, o.place, root_faces)
+    }
+
+    /// Adds a material for each scene material the reached `meshes` use (at most
+    /// `MAX_IMPORT_MATERIALS`, in the file's order; the rest leave their faces unpainted),
+    /// named as the file names it, numbered against the model's names (`Brick 2`), with its
+    /// texture when the image can be used (else its color, with a warning per reason). A
+    /// texture's size is the one most polygons painted with it give by their texture
+    /// coordinates, their points taken through `affine` (file to model, without node
+    /// transforms); 1 m by 1 m when none gives one. Returns each scene material's model
+    /// material and texture size, the materials added with their changes, and those of them
+    /// with a texture.
+    #[allow(clippy::type_complexity)]
+    fn scene_materials(
+        &mut self,
+        read: &ReadScene,
+        meshes: &[usize],
+        affine: glam::DMat3,
+        warnings: &mut Vec<String>,
+    ) -> Result<
+        (
+            Vec<Option<(MaterialId, Option<DVec2>)>>,
+            AddedMaterials,
+            HashSet<MaterialId>,
+        ),
+        CommandError,
+    > {
+        // For each material used, how often each texture size its polygons' coordinates give
+        // comes up (sizes rounded to a millionth of a meter).
+        let mut sizes: BTreeMap<usize, HashMap<[i64; 2], usize>> = BTreeMap::new();
+        let mut fitted = 0usize;
+        for &m in meshes {
+            let mesh = &read.meshes[m];
+            let mapped = !mesh.uvs.is_empty() && mesh.uvs.len() == mesh.points.len();
+            for p in &mesh.polygons {
+                let Some(i) = p.material.filter(|i| *i < read.materials.len()) else {
+                    continue;
+                };
+                let counts = sizes.entry(i).or_default();
+                let textured = matches!(read.materials[i].image, Some(Ok(_)));
+                if !(mapped && textured) || fitted >= MAX_SIZE_FITS {
+                    continue;
+                }
+                let corners: Option<Vec<DVec3>> = p
+                    .corners
+                    .iter()
+                    .map(|&c| mesh.points.get(c).map(|q| affine * *q))
+                    .collect();
+                let uvs: Option<Vec<DVec2>> = p
+                    .corners
+                    .iter()
+                    .map(|&c| mesh.uvs.get(c).copied())
+                    .collect();
+                if let (Some(corners), Some(uvs)) = (corners, uvs)
+                    && let Some(size) = texture_size(&corners, &uvs, read.v_down)
+                {
+                    fitted += 1;
+                    let key = (size * 1e6).round().as_i64vec2().to_array();
+                    *counts.entry(key).or_default() += 1;
+                }
+            }
+        }
+        // The size most polygons give; the smallest of those that tie.
+        let first_use: BTreeMap<usize, Option<DVec2>> = sizes
+            .into_iter()
+            .map(|(i, counts)| {
+                let best = counts
+                    .into_iter()
+                    .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))
+                    .map(|(k, _)| DVec2::new(k[0] as f64, k[1] as f64) / 1e6);
+                (i, best)
+            })
+            .collect();
+        let mut out = vec![None; read.materials.len()];
+        let mut added: AddedMaterials = Vec::new();
+        let mut with_texture = HashSet::new();
+        let mut failures: Vec<(&'static str, usize)> = Vec::new();
+        let mut fail = |why: &'static str| match failures.iter_mut().find(|(w, _)| *w == why) {
+            Some((_, n)) => *n += 1,
+            None => failures.push((why, 1)),
+        };
+        let mut taken: HashSet<String> = self
+            .scene
+            .materials()
+            .map(|(_, m)| m.name.clone())
+            .collect();
+        let mut pixels = self.texture_pixels_besides(None);
+        let dropped = first_use.len().saturating_sub(MAX_IMPORT_MATERIALS);
+        for (&i, size) in first_use.iter().take(MAX_IMPORT_MATERIALS) {
+            let m = &read.materials[i];
+            let base = name_or(&m.name, "Material");
+            let name = std::iter::once(base.clone())
+                .chain((2..).map(|n| format!("{base} {n}")))
+                .find(|n| !taken.contains(n))
+                .expect("a free name");
+            taken.insert(name.clone());
+            let texture = match &m.image {
+                None => None,
+                Some(Err(why)) => {
+                    fail(why);
+                    None
+                }
+                Some(Ok(bytes)) => {
+                    let size = size.unwrap_or(DVec2::ONE);
+                    match scene_texture(bytes, size, pixels) {
+                        Ok(t) => Some(t),
+                        Err(why) => {
+                            fail(why);
+                            None
+                        }
+                    }
+                }
+            };
+            let color = texture.as_ref().map_or(m.color, |t| {
+                tinted(crate::texture::average_color(&t.image), m.tint)
+            });
+            let material = |texture: Option<Texture>| Material {
+                name: name.clone(),
+                color,
+                opacity: m.opacity,
+                texture,
+                emission: 0.0,
+                metalness: kernel::DEFAULT_METALNESS,
+                roughness: kernel::DEFAULT_ROUGHNESS,
+                density: None,
+            };
+            let had_texture = texture.is_some();
+            let result = match self.scene.add_material_from(material(texture)) {
+                Err(_) if had_texture => {
+                    fail(MODEL_LIMIT);
+                    self.scene.add_material_from(material(None))
+                }
+                r => r,
+            };
+            match result {
+                Ok((id, change)) => {
+                    if let Some(t) = self.scene.material(id).and_then(|m| m.texture.as_ref()) {
+                        pixels += u64::from(t.image.width) * u64::from(t.image.height);
+                        with_texture.insert(id);
+                    }
+                    let size = self
+                        .scene
+                        .material(id)
+                        .and_then(|m| m.texture.as_ref())
+                        .map(|t| DVec2::new(t.width, t.height));
+                    out[i] = Some((id, size));
+                    added.push((id, change));
+                }
+                Err(e) => {
+                    self.scene
+                        .apply(&SceneChange::join(added.iter().map(|(_, c)| c.clone())).inverse());
+                    return Err(CommandError::new(
+                        ErrorKind::File,
+                        format!("material \"{name}\": {e}"),
+                    ));
+                }
+            }
+        }
+        for (why, n) in failures {
+            warnings.push(match n {
+                1 => format!("1 texture was not imported ({why}); its material keeps its colour"),
+                n => format!(
+                    "{n} textures were not imported ({why}); their materials keep their colours"
+                ),
+            });
+        }
+        if dropped > 0 {
+            warnings.push(format!(
+                "{} not imported (at most {MAX_IMPORT_MATERIALS} are); faces painted with \
+                 them are left unpainted",
+                counted(dropped, "material was", "materials were")
+            ));
+        }
+        Ok((out, added, with_texture))
     }
 
     /// Reads a SketchUp file's `bytes` (from `path`, named in messages) and builds its tree
@@ -478,6 +789,33 @@ fn import_name(file: &Path) -> String {
         .unwrap_or_else(|| IMPORT_NAME.to_string())
 }
 
+/// Most polygons whose texture coordinates are fitted to choose the scene's texture sizes.
+const MAX_SIZE_FITS: usize = 100_000;
+
+/// Why a texture was not imported, as the warnings say it (as SketchUp import words them).
+const OVERSIZE: &str = crate::scene_read::IMAGE_OVERSIZE;
+const UNREADABLE: &str = "the image is not a PNG or JPEG that can be read";
+const TOO_MANY_PIXELS: &str = "all textures together would hold too many pixels";
+const MODEL_LIMIT: &str = "the model holds at most 256 textures";
+
+/// A texture of a scene file's image `bytes`, `size` meters (clamped to the texture size
+/// limits), or why it cannot be used (`others`: the pixels textures hold already).
+fn scene_texture(bytes: &[u8], size: DVec2, others: u64) -> Result<Texture, &'static str> {
+    let (_, width, height) = dimensions(bytes).map_err(|e| {
+        if e.contains("pixels") || e.contains("too large") {
+            OVERSIZE
+        } else {
+            UNREADABLE
+        }
+    })?;
+    check_total_pixels(others, u64::from(width) * u64::from(height))
+        .map_err(|_| TOO_MANY_PIXELS)?;
+    let [w, h] = size
+        .to_array()
+        .map(|x| x.clamp(MIN_TEXTURE_SIZE, MAX_TEXTURE_SIZE));
+    texture_from_bytes(bytes.to_vec(), w, h).map_err(|_| UNREADABLE)
+}
+
 /// The kind of the definition wrapping an import placed `place`.
 fn wrapper_kind(place: ImportAs) -> DefinitionKind {
     match place {
@@ -487,7 +825,7 @@ fn wrapper_kind(place: ImportAs) -> DefinitionKind {
 }
 
 /// The whole file, failing when it holds more than `limit` bytes.
-pub(super) fn read_limited(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
+pub(crate) fn read_limited(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
     // A pipe or device could block forever (or eat the host's stdin): regular files only.
     if !std::fs::metadata(path)
         .map_err(|e| e.to_string())?

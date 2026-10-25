@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A hand-written test fixture laid out the way SketchUp writes COLLADA: Y up, centimeters, a
+     top node "SketchUp" holding loose geometry and two placements of a library node. -->
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+  <asset>
+    <contributor><authoring_tool>hand-written</authoring_tool></contributor>
+    <unit name="centimeter" meter="0.01"/>
+    <up_axis>Y_UP</up_axis>
+  </asset>
+  <library_cameras>
+    <camera id="cam"><optics><technique_common><perspective><yfov>35</yfov><znear>1</znear><zfar>1000</zfar></perspective></technique_common></optics></camera>
+  </library_cameras>
+  <library_images>
+    <image id="brick-image"><init_from>textures/brick.png</init_from></image>
+  </library_images>
+  <library_effects>
+    <effect id="grass-effect">
+      <profile_COMMON><technique sid="COMMON"><lambert>
+        <diffuse><color>0.2 0.6 0.2 1</color></diffuse>
+      </lambert></technique></profile_COMMON>
+    </effect>
+    <effect id="brick-effect">
+      <profile_COMMON>
+        <newparam sid="brick-surface"><surface type="2D"><init_from>brick-image</init_from></surface></newparam>
+        <newparam sid="brick-sampler"><sampler2D><source>brick-surface</source></sampler2D></newparam>
+        <technique sid="COMMON"><lambert>
+          <diffuse><texture texture="brick-sampler" texcoord="UVSET0"/></diffuse>
+        </lambert></technique>
+      </profile_COMMON>
+    </effect>
+    <effect id="glass-effect">
+      <profile_COMMON><technique sid="COMMON"><phong>
+        <diffuse><color>0.5 0.7 0.9 1</color></diffuse>
+        <transparent opaque="A_ONE"><color>1 1 1 0.5</color></transparent>
+        <transparency><float>1</float></transparency>
+      </phong></technique></profile_COMMON>
+    </effect>
+  </library_effects>
+  <library_materials>
+    <material id="grass" name="Grass"><instance_effect url="#grass-effect"/></material>
+    <material id="brick" name="Brick"><instance_effect url="#brick-effect"/></material>
+    <material id="glass" name="Glass"><instance_effect url="#glass-effect"/></material>
+  </library_materials>
+  <library_geometries>
+    <geometry id="ground" name="Ground">
+      <mesh>
+        <source id="ground-pos">
+          <float_array id="ground-pos-array" count="24">0 0 0 200 0 0 200 0 -200 0 0 -200 50 0 -50 50 0 -150 150 0 -150 150 0 -50</float_array>
+          <technique_common><accessor source="#ground-pos-array" count="8" stride="3">
+            <param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/>
+          </accessor></technique_common>
+        </source>
+        <vertices id="ground-vtx"><input semantic="POSITION" source="#ground-pos"/></vertices>
+        <polygons material="GrassSymbol" count="1">
+          <input semantic="VERTEX" source="#ground-vtx" offset="0"/>
+          <ph><p>0 1 2 3</p><h>4 5 6 7</h></ph>
+        </polygons>
+        <lines count="1">
+          <input semantic="VERTEX" source="#ground-vtx" offset="0"/>
+          <p>0 2</p>
+        </lines>
+      </mesh>
+    </geometry>
+    <geometry id="seat" name="Seat">
+      <mesh>
+        <source id="seat-pos">
+          <float_array id="seat-pos-array" count="24">0 0 0 50 0 0 50 50 0 0 50 0 0 0 -50 50 0 -50 50 50 -50 0 50 -50</float_array>
+          <technique_common><accessor source="#seat-pos-array" count="8" stride="3"/></technique_common>
+        </source>
+        <source id="seat-nor">
+          <float_array id="seat-nor-array" count="18">0 0 1 0 0 -1 1 0 0 -1 0 0 0 1 0 0 -1 0</float_array>
+          <technique_common><accessor source="#seat-nor-array" count="6" stride="3"/></technique_common>
+        </source>
+        <source id="seat-uv">
+          <float_array id="seat-uv-array" count="8">0 0 2 0 2 2 0 2</float_array>
+          <technique_common><accessor source="#seat-uv-array" count="4" stride="2"/></technique_common>
+        </source>
+        <vertices id="seat-vtx"><input semantic="POSITION" source="#seat-pos"/></vertices>
+        <polylist material="BrickSymbol" count="6">
+          <input semantic="VERTEX" source="#seat-vtx" offset="0"/>
+          <input semantic="NORMAL" source="#seat-nor" offset="1"/>
+          <input semantic="TEXCOORD" source="#seat-uv" offset="2" set="0"/>
+          <vcount>4 4 4 4 4 4</vcount>
+          <p>0 0 0 1 0 1 2 0 2 3 0 3
+             5 1 0 4 1 1 7 1 2 6 1 3
+             1 2 0 5 2 1 6 2 2 2 2 3
+             4 3 0 0 3 1 3 3 2 7 3 3
+             3 4 0 2 4 1 6 4 2 7 4 3
+             4 5 0 5 5 1 1 5 2 0 5 3</p>
+        </polylist>
+      </mesh>
+    </geometry>
+    <geometry id="pane" name="Pane">
+      <mesh>
+        <source id="pane-pos">
+          <float_array id="pane-pos-array" count="12">0 0 0 10 0 0 10 10 0 0 10 0</float_array>
+          <technique_common><accessor source="#pane-pos-array" count="4" stride="3"/></technique_common>
+        </source>
+        <vertices id="pane-vtx"><input semantic="POSITION" source="#pane-pos"/></vertices>
+        <triangles material="GlassSymbol" count="2">
+          <input semantic="VERTEX" source="#pane-vtx" offset="0"/>
+          <p>0 1 2 0 2 3</p>
+        </triangles>
+      </mesh>
+    </geometry>
+  </library_geometries>
+  <library_nodes>
+    <node id="chair" name="Chair">
+      <instance_geometry url="#seat">
+        <bind_material><technique_common>
+          <instance_material symbol="BrickSymbol" target="#brick"/>
+        </technique_common></bind_material>
+      </instance_geometry>
+    </node>
+  </library_nodes>
+  <library_visual_scenes>
+    <visual_scene id="scene">
+      <node name="SketchUp">
+        <instance_geometry url="#ground">
+          <bind_material><technique_common>
+            <instance_material symbol="GrassSymbol" target="#grass"/>
+          </technique_common></bind_material>
+        </instance_geometry>
+        <node name="first">
+          <matrix>1 0 0 100 0 1 0 0 0 0 1 0 0 0 0 1</matrix>
+          <instance_node url="#chair"/>
+        </node>
+        <node name="second">
+          <translate>0 0 -100</translate>
+          <rotate>0 1 0 90</rotate>
+          <instance_node url="#chair"/>
+        </node>
+        <node name="Window">
+          <translate>0 100 0</translate>
+          <instance_geometry url="#pane">
+            <bind_material><technique_common>
+              <instance_material symbol="GlassSymbol" target="#glass"/>
+            </technique_common></bind_material>
+          </instance_geometry>
+        </node>
+        <node name="Camera"><instance_camera url="#cam"/></node>
+      </node>
+    </visual_scene>
+  </library_visual_scenes>
+  <scene><instance_visual_scene url="#scene"/></scene>
+</COLLADA>

@@ -10,9 +10,11 @@ use glam::{DAffine3, DVec2, DVec3};
 use crate::edit::KernelError;
 use crate::geom::{LENGTH_TOL, Plane, signed_area2, vector_area};
 use crate::ids::{InstanceId, MaterialId, VertexId};
+use crate::import_tree::{ImportEdge, ImportFace, ImportGeometry};
 use crate::model::{Face, Instance, Model};
 use crate::regions::PlaneGraph;
 use crate::scene::{DefinitionKind, MeshId, Scene, SceneChange};
+use crate::texture::{TexturePlacement, check_placement};
 
 /// A polygon of an imported mesh: its corners as indices into the mesh's points, wound
 /// counter-clockwise around its front, and the material of its front side.
@@ -125,6 +127,7 @@ impl Model {
             let outer = loops.remove(0);
             let mut face = Face::new(outer, loops, f.normal);
             face.front = f.material;
+            face.texture = f.texture;
             self.insert_face(face);
         }
         vertex.len()
@@ -137,6 +140,8 @@ pub(crate) struct Built {
     pub points: Vec<DVec3>,
     pub faces: Vec<BuiltFace>,
     pub skipped: usize,
+    /// For each given point, the index of the welded point it became.
+    pub map: Vec<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -145,6 +150,9 @@ pub(crate) struct BuiltFace {
     pub loops: Vec<Vec<usize>>,
     pub normal: DVec3,
     pub material: Option<MaterialId>,
+    pub texture: Option<TexturePlacement>,
+    /// The polygon it was made from (of a merged face, the largest one's).
+    pub source: usize,
 }
 
 /// Welds the points, turns each polygon into a face (a polygon that is not flat, or whose
@@ -155,11 +163,22 @@ pub(crate) fn build_mesh(
     polygons: &[MeshPolygon],
     merge: bool,
 ) -> Result<Built, KernelError> {
+    build_placed(points, polygons, &[], merge)
+}
+
+/// `build_mesh` with a texture placement for each polygon (`textures` parallel to `polygons`,
+/// or empty for none): faces with different placements do not merge.
+fn build_placed(
+    points: &[DVec3],
+    polygons: &[MeshPolygon],
+    textures: &[Option<TexturePlacement>],
+    merge: bool,
+) -> Result<Built, KernelError> {
     let (welded, map) = weld(points);
     let mut faces: Vec<BuiltFace> = Vec::new();
     let mut seen: HashSet<Vec<usize>> = HashSet::new();
     let mut skipped = 0;
-    for polygon in polygons {
+    for (source, polygon) in polygons.iter().enumerate() {
         let Some(corners) = polygon
             .corners
             .iter()
@@ -182,6 +201,8 @@ pub(crate) fn build_mesh(
                     loops: vec![l],
                     normal,
                     material: polygon.material,
+                    texture: textures.get(source).copied().flatten(),
+                    source,
                 });
             }
         }
@@ -196,6 +217,7 @@ pub(crate) fn build_mesh(
         points: welded,
         faces,
         skipped,
+        map,
     })
 }
 
@@ -370,6 +392,7 @@ fn merge_coplanar(points: &[DVec3], faces: Vec<BuiltFace>) -> Vec<BuiltFace> {
         let (ff, gg) = (&faces[f], &faces[g]);
         if df != dg
             && ff.material == gg.material
+            && same_placement(ff.texture, gg.texture)
             && ff.normal.dot(gg.normal) > 0.0
             && on_plane(ff, gg)
             && on_plane(gg, ff)
@@ -483,9 +506,148 @@ fn merged(
             loops,
             normal,
             material: faces[largest].material,
+            texture: faces[largest].texture,
+            source: faces[largest].source,
         });
     }
     ((covered - total).abs() <= 1e-9 * total.max(1.0)).then_some(out)
+}
+
+/// Most two texture placements may differ and still count as one (offsets in meters, turns
+/// in degrees, scales as a fraction): neighbours one mapping covers differ only by rounding.
+const PLACEMENT_TOL: f64 = 1e-4;
+
+/// Most two unit normals given at a corner may differ and still count as one smooth normal.
+const SMOOTH_TOL: f64 = 1e-3;
+
+/// True when two faces' texture placements are the same, but for rounding.
+fn same_placement(a: Option<TexturePlacement>, b: Option<TexturePlacement>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => {
+            let turn = (a.rotation_deg - b.rotation_deg).rem_euclid(360.0);
+            (0..2).all(|i| {
+                (a.offset[i] - b.offset[i]).abs() <= PLACEMENT_TOL
+                    && (a.scale[i] - b.scale[i]).abs() <= PLACEMENT_TOL * a.scale[i].max(b.scale[i])
+            }) && turn.min(360.0 - turn) <= PLACEMENT_TOL * 100.0
+        }
+        _ => false,
+    }
+}
+
+/// A mesh read from a file as the faces and edges of an import tree geometry (see
+/// [`Scene::import_tree`]): points are welded and polygons made into faces as
+/// `import_mesh` does, and with `merge` neighbouring faces in one plane with the same material
+/// and texture placement join into one. `textures` gives each polygon's texture placement
+/// (parallel to `polygons`, or empty); a placement that is the default or out of range is
+/// left off. `normals` gives the file's normal at each point (parallel to `points`, or empty
+/// for a mesh shaded flat): an edge between two faces that stay apart and do not lie in one
+/// plane is soft when both faces' normals at both its ends agree, so a smooth surface reads as
+/// one. Returns the geometry (faces painted on the front only) and how many polygons made no
+/// face. Fails with `TooManyFaces` past `MAX_IMPORT_FACES` faces.
+pub fn polygon_geometry(
+    points: &[DVec3],
+    polygons: &[MeshPolygon],
+    textures: &[Option<TexturePlacement>],
+    normals: &[DVec3],
+    merge: bool,
+) -> Result<(ImportGeometry, usize), KernelError> {
+    let textures: Vec<Option<TexturePlacement>> = textures
+        .iter()
+        .map(|t| t.filter(|t| !t.is_default() && check_placement(t).is_ok()))
+        .collect();
+    let built = build_placed(points, polygons, &textures, false)?;
+    let mut soft: Vec<(usize, usize)> = Vec::new();
+    if normals.len() == points.len() {
+        // Each polygon's first point at each welded corner, looked up rather than searched
+        // for, so long polygons stay linear.
+        let mut point_at: HashMap<(usize, usize), usize> = HashMap::new();
+        for f in &built.faces {
+            if point_at.contains_key(&(f.source, f.loops[0][0])) {
+                continue;
+            }
+            for &k in &polygons[f.source].corners {
+                if let Some(&c) = built.map.get(k) {
+                    point_at.entry((f.source, c)).or_insert(k);
+                }
+            }
+        }
+        // The file's normal at welded corner `c` of face `f`: that of the polygon's own point.
+        let normal = |f: &BuiltFace, c: usize| {
+            point_at
+                .get(&(f.source, c))
+                .map(|&k| normals[k].normalize_or_zero())
+                .filter(|n| *n != DVec3::ZERO)
+        };
+        let mut users: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+        for (i, f) in built.faces.iter().enumerate() {
+            let l = &f.loops[0];
+            for k in 0..l.len() {
+                let (a, b) = (l[k], l[(k + 1) % l.len()]);
+                users.entry((a.min(b), a.max(b))).or_default().push(i);
+            }
+        }
+        let mut keys: Vec<(&(usize, usize), &Vec<usize>)> = users.iter().collect();
+        keys.sort_unstable();
+        for (&(a, b), faces) in keys {
+            let [f, g] = faces[..] else { continue };
+            let (ff, gg) = (&built.faces[f], &built.faces[g]);
+            if ff.normal.dot(gg.normal) >= 1.0 - 1e-9 {
+                continue;
+            }
+            let agree = |c: usize| match (normal(ff, c), normal(gg, c)) {
+                (Some(m), Some(n)) => m.distance(n) <= SMOOTH_TOL,
+                _ => false,
+            };
+            if agree(a) && agree(b) {
+                soft.push((a, b));
+            }
+        }
+    }
+    let faces = if merge {
+        merge_coplanar(&built.points, built.faces)
+    } else {
+        built.faces
+    };
+    // A soft edge merging took away would come back as a loose edge.
+    let mut sides: HashSet<(usize, usize)> = HashSet::new();
+    for l in faces.iter().flat_map(|f| &f.loops) {
+        for k in 0..l.len() {
+            let (a, b) = (l[k], l[(k + 1) % l.len()]);
+            sides.insert((a.min(b), a.max(b)));
+        }
+    }
+    let edges = soft
+        .into_iter()
+        .filter(|e| sides.contains(e))
+        .map(|(a, b)| ImportEdge {
+            a,
+            b,
+            soft: true,
+            tag: None,
+            hidden: false,
+        })
+        .collect();
+    let faces = faces
+        .into_iter()
+        .map(|f| ImportFace {
+            loops: f.loops,
+            front: f.material,
+            back: None,
+            texture: f.texture,
+            tag: None,
+            hidden: false,
+        })
+        .collect();
+    Ok((
+        ImportGeometry {
+            points: built.points,
+            faces,
+            edges,
+            ..ImportGeometry::default()
+        },
+        built.skipped,
+    ))
 }
 
 #[cfg(test)]
