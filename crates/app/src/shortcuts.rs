@@ -2,6 +2,8 @@
 //! the window's key handling looks keys up in it, so a label cannot name a key that does
 //! something else.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use tools::ToolKind;
 
 use crate::ui::UiAction;
@@ -208,10 +210,26 @@ pub fn plain(c: char) -> Option<Bound> {
     find(shift, key).or_else(|| if shift { find(false, key) } else { None })
 }
 
+/// Whether keys are named as on Apple's computers (`⌘S`); see [`mac_labels`].
+static MAC_LABELS: AtomicBool = AtomicBool::new(cfg!(target_os = "macos"));
+
+/// Whether menus and tooltips name keys as on Apple's computers (`⇧⌘S`, with Cmd) rather
+/// than `Ctrl+Shift+S`: on macOS, and in a browser on a Mac, iPhone or iPad (the web build
+/// says so at start, see [`set_mac_labels`]).
+pub fn mac_labels() -> bool {
+    MAC_LABELS.load(Ordering::Relaxed)
+}
+
+/// Names keys as on Apple's computers, or not, from now on: for the web build, which learns
+/// the computer it runs on only from the browser.
+pub fn set_mac_labels(on: bool) {
+    MAC_LABELS.store(on, Ordering::Relaxed);
+}
+
 impl Chord {
-    /// How menus and tooltips show the chord on this system.
+    /// How menus and tooltips show the chord on this system (see [`mac_labels`]).
     pub fn text(self) -> String {
-        self.text_for(cfg!(target_os = "macos"))
+        self.text_for(mac_labels())
     }
 
     /// `⇧⌘S` on macOS, `Ctrl+Shift+S` elsewhere.
@@ -514,6 +532,12 @@ mod tests {
     #[test]
     fn chords_read_as_mac_glyphs_or_words() {
         let text = |b, mac| chord(b).unwrap().text_for(mac);
+        // The window names keys by the system it runs on until told otherwise (the web).
+        assert_eq!(mac_labels(), cfg!(target_os = "macos"));
+        assert_eq!(
+            Bound::SaveFileAs.key_text().as_deref(),
+            Some(text(Bound::SaveFileAs, mac_labels()).as_str())
+        );
         assert_eq!(text(Bound::SaveFileAs, true), "⇧⌘S");
         assert_eq!(text(Bound::SaveFileAs, false), "Ctrl+Shift+S");
         assert_eq!(text(Bound::Undo, true), "⌘Z");

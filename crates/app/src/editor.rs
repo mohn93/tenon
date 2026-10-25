@@ -267,6 +267,9 @@ pub struct Editor {
     hover_dirty: bool,
     /// The cursor left the view since the hover was last asked for: the marker stays hidden.
     hover_hidden: bool,
+    /// A cursor position has been given (`cursor_moved`). A viewer has none on a phone until
+    /// a pinch, and works out no hover before then.
+    pointer_seen: bool,
     /// A window, a menu or the gizmo lies over the cursor in the view: the window shows no
     /// highlight, marker or chip there (`set_covered`).
     covered: bool,
@@ -395,6 +398,7 @@ impl Editor {
             solid: None,
             hover_dirty: false,
             hover_hidden: false,
+            pointer_seen: false,
             covered: false,
             navigated: false,
             layout: RefCell::new(None),
@@ -926,6 +930,7 @@ impl Editor {
     /// have (it is worked out when the frame is drawn, see `refresh_hover`).
     pub fn cursor_moved(&mut self, pos: DVec2) -> bool {
         self.cursor_point = None;
+        self.pointer_seen = true;
         if self.flying {
             // No hover while flying; leaving fly mode works it out afresh.
             self.cursor = pos;
@@ -2481,6 +2486,9 @@ impl Editor {
         if !self.hover_dirty || self.nav.dragging() || std::mem::take(&mut self.navigated) {
             return false;
         }
+        if self.waits_for_pointer() {
+            return false;
+        }
         self.flush_hover()
     }
 
@@ -2492,7 +2500,15 @@ impl Editor {
     /// True when `refresh_hover` put the hover off for navigation that has no drag holding it:
     /// a frame drawn a little later shows it if navigation stopped.
     pub fn hover_deferred(&self) -> bool {
-        !self.flying && self.hover_dirty && !self.nav.dragging()
+        !self.flying && self.hover_dirty && !self.nav.dragging() && !self.waits_for_pointer()
+    }
+
+    /// A viewer before any pointer (on a phone, until a pinch): nothing is under a cursor, so
+    /// no hover is worked out. Working it out builds the picking layout of the whole model,
+    /// which would hold back the model's first frame; the hover stays out of date until a
+    /// pointer comes.
+    fn waits_for_pointer(&self) -> bool {
+        self.doc.is_read_only() && !self.pointer_seen
     }
 
     /// Works out the inference under the cursor and the tool preview. True if either changed.
@@ -3599,6 +3615,32 @@ mod tests {
             e.hit.map(|h| (h.kind, h.point)),
             Some((SnapKind::Endpoint, end))
         );
+    }
+
+    #[test]
+    fn a_viewer_works_out_no_hover_before_a_pointer() {
+        let (mut e, p) = raised_face();
+        e.set_read_only(true);
+        e.invalidate_hover();
+        assert!(!e.refresh_hover());
+        assert!(e.hover_pending(), "still out of date");
+        assert!(!e.hover_deferred(), "and no frame asked for it");
+        assert!(
+            e.layout.borrow().is_none(),
+            "the picking layout is not built"
+        );
+        // A pointer brings it.
+        let px = e.doc().camera.project(p).unwrap();
+        e.cursor_moved(px);
+        e.refresh_hover();
+        assert!(!e.hover_pending());
+        assert!(e.layout.borrow().is_some());
+
+        // An editor works it out before any pointer, as before.
+        let (mut e, _) = raised_face();
+        e.invalidate_hover();
+        e.refresh_hover();
+        assert!(!e.hover_pending());
     }
 
     #[test]

@@ -6,8 +6,9 @@ use std::collections::{BTreeSet, HashMap};
 
 use glam::DVec3;
 
+use crate::annotation::Note;
 use crate::edit::KernelError;
-use crate::ids::{EntityId, InstanceId, TagId, VertexId};
+use crate::ids::{EntityId, InstanceId, NoteId, TagId, VertexId};
 use crate::model::{ChangeSet, Model};
 use crate::model::{Edge, Face, Guide, Instance};
 use crate::scene::{MeshId, Scene, SceneChange, Step, enclose, placed_box};
@@ -283,6 +284,24 @@ impl Scene {
     /// counted as a change. A viewer isolates a part this way. Unknown ids hide nothing.
     pub fn set_view_hidden(&mut self, ids: BTreeSet<InstanceId>) {
         self.view_hidden = ids;
+    }
+
+    /// The notes hidden for viewing only (see [`Scene::set_view_hidden_notes`]).
+    pub fn view_hidden_notes(&self) -> &BTreeSet<NoteId> {
+        &self.view_hidden_notes
+    }
+
+    /// Hides the notes `ids` (of any mesh: note ids are unique in a scene) from every view of
+    /// the scene, as [`Scene::set_view_hidden`] does instances: a viewer hides the labels of
+    /// the parts it hides this way.
+    pub fn set_view_hidden_notes(&mut self, ids: BTreeSet<NoteId>) {
+        self.view_hidden_notes = ids;
+    }
+
+    /// Whether note `id` (`note`) shows: it is not on a hidden tag and not hidden for viewing.
+    /// The instances placing it are checked by [`Scene::instance_shown`].
+    pub fn note_shown(&self, id: NoteId, note: &Note) -> bool {
+        self.tag_shown(note.tag()) && !self.view_hidden_notes.contains(&id)
     }
 
     /// Whether instance `id` (`instance`) of mesh `mesh` shows: it is not hidden itself, not on

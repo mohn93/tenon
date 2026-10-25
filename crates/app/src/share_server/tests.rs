@@ -127,6 +127,184 @@ fn index_and_files_are_served_with_their_types() {
     }
 }
 
+fn get_with(port: u16, target: &str, headers: &str) -> Reply {
+    raw(
+        port,
+        format!("GET {target} HTTP/1.1\r\nHost: x\r\n{headers}\r\n").as_bytes(),
+    )
+}
+
+#[test]
+fn a_gzip_copy_is_sent_to_browsers_that_take_gzip() {
+    let d = viewer();
+    d.file("web_bg.wasm.gz", b"GZIPPED");
+    let s = start(&d);
+    for accept in [
+        "Accept-Encoding: gzip, deflate, br\r\n",
+        "accept-encoding: br;q=1.0, GZIP;q=0.5\r\n",
+        "Accept-Encoding: *\r\n",
+    ] {
+        let r = get_with(s.port(), "/web_bg.wasm", accept);
+        assert_eq!(r.status, 200, "{accept}");
+        assert_eq!(r.body, b"GZIPPED", "{accept}");
+        assert_eq!(r.header("Content-Encoding"), Some("gzip"), "{accept}");
+        assert_eq!(r.header("Content-Type"), Some("application/wasm"));
+        assert_eq!(r.header("Content-Length"), Some("7"));
+        assert_eq!(r.header("Vary"), Some("Accept-Encoding"));
+    }
+    // Without gzip (or refusing it) the file itself.
+    for accept in [
+        "",
+        "Accept-Encoding: br\r\n",
+        "Accept-Encoding: gzip;q=0\r\n",
+        "Accept-Encoding: gzip;q=0, *\r\n",
+        "Accept-Encoding: *, gzip; q=0\r\n",
+        "Accept-Encoding: *;q=0\r\n",
+    ] {
+        let r = get_with(s.port(), "/web_bg.wasm", accept);
+        assert_eq!(r.body.len(), 300_000, "{accept:?}");
+        assert_eq!(r.header("Content-Encoding"), None, "{accept:?}");
+    }
+    // A file with no copy is sent as it is.
+    let r = get_with(s.port(), "/web.js", "Accept-Encoding: gzip\r\n");
+    assert_eq!(r.body, b"let x;");
+    assert_eq!(r.header("Content-Encoding"), None);
+}
+
+#[test]
+fn a_gzip_copy_that_is_a_link_is_not_sent() {
+    let d = viewer();
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(d.0.join("data.bin"), d.0.join("web.js.gz")).unwrap();
+        let s = start(&d);
+        let r = get_with(s.port(), "/web.js", "Accept-Encoding: gzip\r\n");
+        assert_eq!(r.body, b"let x;");
+        assert_eq!(r.header("Content-Encoding"), None);
+    }
+}
+
+#[test]
+fn a_gzip_copy_older_than_its_file_is_not_sent() {
+    let d = viewer();
+    d.file("web_bg.wasm.gz", b"GZIPPED");
+    let set_time = |name: &str, t: std::time::SystemTime| {
+        File::options()
+            .write(true)
+            .open(d.0.join(name))
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+    };
+    let now = std::time::SystemTime::now();
+    set_time("web_bg.wasm", now);
+    set_time("web_bg.wasm.gz", now - Duration::from_secs(3600));
+    let s = start(&d);
+    let r = get_with(s.port(), "/web_bg.wasm", "Accept-Encoding: gzip\r\n");
+    assert_eq!(
+        r.body.len(),
+        300_000,
+        "the rebuilt file, not the stale copy"
+    );
+    assert_eq!(r.header("Content-Encoding"), None);
+    // A copy as new as its file is sent, also when its time lost the file's nanoseconds
+    // (gzip -k keeps the time to the microsecond).
+    set_time("web_bg.wasm.gz", now - Duration::from_nanos(999));
+    let r = get_with(s.port(), "/web_bg.wasm", "Accept-Encoding: gzip\r\n");
+    assert_eq!(r.body, b"GZIPPED");
+}
+
+#[test]
+fn a_gzip_copy_that_cannot_be_opened_falls_back_to_the_file() {
+    let d = viewer();
+    std::fs::create_dir(d.0.join("web_bg.wasm.gz")).unwrap();
+    let s = start(&d);
+    let r = get_with(s.port(), "/web_bg.wasm", "Accept-Encoding: gzip\r\n");
+    assert_eq!(r.status, 200);
+    assert_eq!(r.body.len(), 300_000);
+    assert_eq!(r.header("Content-Encoding"), None);
+}
+
+#[cfg(unix)]
+#[test]
+fn files_are_opened_without_following_links() {
+    let d = viewer();
+    std::os::unix::fs::symlink(d.0.join("data.bin"), d.0.join("linked.bin")).unwrap();
+    assert!(open_regular(&d.0.join("linked.bin")).is_none());
+    assert!(open_regular(&d.0.join("data.bin")).is_some());
+    assert!(open_regular(&d.0.join("sub")).is_none(), "a folder");
+}
+
+#[test]
+fn viewer_files_are_revalidated_by_their_etag() {
+    let d = viewer();
+    d.file("web_bg.wasm.gz", b"GZIPPED");
+    let s = start(&d);
+    let first = get(s.port(), "/web_bg.wasm");
+    assert_eq!(first.header("Cache-Control"), Some("no-cache"));
+    let tag = first.header("ETag").expect("an etag").to_string();
+    assert!(tag.starts_with('"') && tag.ends_with('"'));
+    let again = get_with(
+        s.port(),
+        "/web_bg.wasm",
+        &format!("If-None-Match: {tag}\r\n"),
+    );
+    assert_eq!(again.status, 304);
+    assert!(again.body.is_empty());
+    assert_eq!(
+        again.header("Content-Length"),
+        Some("300000"),
+        "a 200's length"
+    );
+    assert_eq!(again.header("ETag"), Some(tag.as_str()));
+    let weak = get_with(
+        s.port(),
+        "/web_bg.wasm",
+        &format!("If-None-Match: \"other\", W/{tag}\r\n"),
+    );
+    assert_eq!(weak.status, 304);
+    // The gzip copy is another file with its own tag.
+    let gz = get_with(s.port(), "/web_bg.wasm", "Accept-Encoding: gzip\r\n");
+    assert_ne!(gz.header("ETag"), Some(tag.as_str()));
+    let stale = get_with(s.port(), "/web_bg.wasm", "If-None-Match: \"other\"\r\n");
+    assert_eq!(stale.status, 200);
+    assert_eq!(stale.body.len(), 300_000);
+    // The blob is never kept.
+    let blob = get_with(
+        s.port(),
+        &format!("/s/{}", hex(&ID)),
+        "If-None-Match: *\r\n",
+    );
+    assert_eq!(blob.status, 200);
+    assert_eq!(blob.header("Cache-Control"), Some("no-store"));
+    assert_eq!(blob.header("ETag"), None);
+}
+
+#[test]
+fn request_headers_are_read_by_name() {
+    let head = b"GET / HTTP/1.1\r\nHost: x\r\nAccept-Encoding:  gzip \r\nX-Odd:no-space";
+    assert_eq!(header(head, "accept-encoding"), Some("gzip"));
+    assert_eq!(header(head, "x-odd"), Some("no-space"));
+    assert_eq!(header(head, "if-none-match"), None);
+    // The request line is not a header.
+    assert_eq!(header(b"GET /a:b HTTP/1.1", "get /a"), None);
+    assert!(accepts_gzip(head));
+    assert!(!accepts_gzip(
+        b"GET / HTTP/1.1\r\nAccept-Encoding: gzipx, identity"
+    ));
+    assert!(!accepts_gzip(
+        b"GET / HTTP/1.1\r\nAccept-Encoding: gzip; q=0.0"
+    ));
+    assert!(accepts_gzip(
+        b"GET / HTTP/1.1\r\nAccept-Encoding: gzip; q=0.001"
+    ));
+    assert!(!accepts_gzip(
+        b"GET / HTTP/1.1\r\nAccept-Encoding: gzip;q=0, *"
+    ));
+    assert!(accepts_gzip(b"GET / HTTP/1.1\r\nAccept-Encoding: br, *"));
+    assert!(!accepts_gzip(b"GET / HTTP/1.1\r\nHost: x"));
+}
+
 #[test]
 fn a_large_file_arrives_whole() {
     let d = viewer();

@@ -356,6 +356,9 @@ pub struct Scene {
     /// Root instances a viewer hides for now (see [`Scene::set_view_hidden`]): not part of the
     /// model, never saved, and left out of equality.
     pub(crate) view_hidden: BTreeSet<InstanceId>,
+    /// Notes a viewer hides with the parts they point at (see [`Scene::set_view_hidden_notes`]):
+    /// not part of the model, never saved, and left out of equality.
+    pub(crate) view_hidden_notes: BTreeSet<NoteId>,
     /// The cam trees drives have built, kept while their meshes are unchanged (see
     /// [`Scene::cam_tree`]); not part of the model, and left out of equality.
     pub(crate) cam_trees: CamTrees,
@@ -405,6 +408,7 @@ impl Scene {
             location: Location::DEFAULT,
             transition: SceneTransition::DEFAULT,
             view_hidden: BTreeSet::new(),
+            view_hidden_notes: BTreeSet::new(),
             cam_trees: CamTrees::default(),
             drawn_copies: DrawnCopies::default(),
         }
@@ -446,6 +450,7 @@ impl Scene {
             transition: SceneTransition::DEFAULT,
             next_id: used,
             view_hidden: BTreeSet::new(),
+            view_hidden_notes: BTreeSet::new(),
             cam_trees: CamTrees::default(),
             drawn_copies: DrawnCopies::default(),
         }

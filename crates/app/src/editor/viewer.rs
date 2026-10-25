@@ -687,6 +687,41 @@ mod tests {
     }
 
     #[test]
+    fn isolate_hides_the_labels_pointing_at_hidden_parts() {
+        let mut e = Editor::new(DVec2::new(800.0, 600.0), 2.0);
+        add_group(&mut e, 1.0);
+        add_group(&mut e, 5.0);
+        for (x, text) in [(2.0, "Left"), (6.0, "Right")] {
+            e.execute(Command::AddNote {
+                anchor: session::AnchorInput::Point([x, 2.0, 0.0]),
+                position: [x, 2.5, 1.0],
+                text: Some(text.into()),
+            })
+            .unwrap();
+        }
+        e.set_read_only(true);
+        e.zoom_extents();
+        // Seen from where both parts are (Isolate frames the kept one).
+        let whole = e.doc().camera.clone();
+        let texts = |e: &Editor| {
+            let mut t: Vec<String> = e
+                .labels_seen_by(&whole, None, None)
+                .into_iter()
+                .map(|l| l.text)
+                .collect();
+            t.sort();
+            t
+        };
+        assert_eq!(texts(&e), ["Left", "Right"]);
+        let left = e.doc().scene().root().instances().map(|(id, _)| id).min();
+        assert!(e.select_parts(&[left.unwrap()]));
+        assert!(e.isolate_selection());
+        assert_eq!(texts(&e), ["Left"], "the right part's label goes with it");
+        assert!(e.show_all());
+        assert_eq!(texts(&e), ["Left", "Right"]);
+    }
+
+    #[test]
     fn isolate_needs_a_selected_part() {
         let mut e = two_parts();
         assert!(!e.isolate_selection());

@@ -1,6 +1,6 @@
 //! The parts of the web build that do not touch the browser: file names and types, the
-//! keys the page keeps from the browser, and the preference storage. They are plain Rust so the
-//! native gate tests them.
+//! keys the page keeps from the browser, the computer it runs on, and the preference storage.
+//! They are plain Rust so the native gate tests them.
 
 use app::platform::Filter;
 use app::prefs::{self, Prefs};
@@ -135,6 +135,28 @@ pub fn should_prevent_default(key: &str, ctrl: bool, meta: bool, alt: bool, shif
         return false;
     }
     true
+}
+
+/// Whether the browser runs on an Apple computer, phone or tablet, where keys are named and
+/// pressed with Cmd: from `navigator.userAgentData.platform` (`ua_platform`, "" where the
+/// browser has none), else `navigator.platform` (`platform`), else the user agent string
+/// (`user_agent`). An iPad that says it is a Mac counts as Apple's either way.
+pub fn is_apple(ua_platform: &str, platform: &str, user_agent: &str) -> bool {
+    let apple = |text: &str| {
+        let text = text.to_ascii_lowercase();
+        ["mac", "iphone", "ipad", "ipod", "ios"]
+            .iter()
+            .any(|name| text.starts_with(name))
+    };
+    if !ua_platform.is_empty() {
+        return apple(ua_platform);
+    }
+    if !platform.is_empty() {
+        return apple(platform);
+    }
+    ["Macintosh", "Mac OS X", "iPhone", "iPad", "iPod"]
+        .iter()
+        .any(|name| user_agent.contains(name))
 }
 
 /// A place text is kept by name: `localStorage` in the browser, a map in tests.
@@ -313,6 +335,28 @@ mod tests {
             true,
             false
         ));
+    }
+
+    #[test]
+    fn apple_computers_are_told_by_the_platform() {
+        // userAgentData (Chromium browsers) first.
+        assert!(is_apple("macOS", "Win32", ""));
+        assert!(!is_apple("Windows", "MacIntel", ""));
+        assert!(!is_apple("Linux", "", ""));
+        assert!(!is_apple("Chrome OS", "", ""));
+        // navigator.platform (Safari, Firefox).
+        assert!(is_apple("", "MacIntel", ""));
+        assert!(is_apple("", "iPhone", ""));
+        assert!(is_apple("", "iPad", ""));
+        assert!(!is_apple("", "Win32", ""));
+        assert!(!is_apple("", "Linux x86_64", ""));
+        assert!(!is_apple("", "Linux armv8l", ""));
+        // The user agent when neither says.
+        let safari = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15";
+        assert!(is_apple("", "", safari));
+        let firefox = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101";
+        assert!(!is_apple("", "", firefox));
+        assert!(!is_apple("", "", ""));
     }
 
     #[test]

@@ -1792,7 +1792,7 @@ impl<'a> Walk<'a> {
         }
         for (nid, n) in model.notes() {
             // Screen notes are the window's alone.
-            if ghost_mesh || !scene.tag_shown(n.tag()) || matches!(n, kernel::Note::Screen { .. }) {
+            if ghost_mesh || !scene.note_shown(nid, n) || matches!(n, kernel::Note::Screen { .. }) {
                 continue;
             }
             let Some(shape) = AnnotationShape::of(model, EntityId::Note(nid)) else {
@@ -2178,6 +2178,42 @@ mod tests {
         assert!(scene_geometry(&s, &[], &BTreeSet::new()).faces.is_empty());
         s.set_view_hidden(BTreeSet::new());
         assert_eq!(scene_geometry(&s, &[], &BTreeSet::new()).faces.len(), 12);
+    }
+
+    #[test]
+    fn notes_hidden_for_viewing_are_not_drawn() {
+        let (mut s, _, second) = two_squares();
+        let leader = |x: f64| kernel::Note::Leader {
+            anchor: kernel::Anchor::Point(DVec3::new(x, 0.5, 0.0)),
+            position: DVec3::new(x, 0.5, 2.0),
+            text: Some("Tile".into()),
+            tag: None,
+        };
+        s.add_note(MeshId::Root, leader(0.5)).unwrap();
+        let pointing = s
+            .add_note(MeshId::Root, leader(3.5))
+            .unwrap()
+            .summary()
+            .created[0];
+        let EntityId::Note(pointing) = pointing else {
+            panic!("a note");
+        };
+        assert_eq!(
+            scene_geometry(&s, &[], &BTreeSet::new()).annotations.len(),
+            2
+        );
+        s.set_view_hidden(BTreeSet::from([second]));
+        s.set_view_hidden_notes(BTreeSet::from([pointing]));
+        assert_eq!(
+            scene_geometry(&s, &[], &BTreeSet::new()).annotations.len(),
+            1
+        );
+        s.set_view_hidden(BTreeSet::new());
+        s.set_view_hidden_notes(BTreeSet::new());
+        assert_eq!(
+            scene_geometry(&s, &[], &BTreeSet::new()).annotations.len(),
+            2
+        );
     }
 
     #[test]

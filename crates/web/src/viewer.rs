@@ -6,6 +6,8 @@
 //! browser in a request, is not logged and is taken out of the address bar once the model is
 //! open.
 
+use std::task::Poll;
+
 use session::share::{MAX_BLOB_BYTES, parse_fragment};
 
 /// What is said when the link is wrong (the app's own text, so the two cannot differ), the model is not what the link names, or it has expired
@@ -144,10 +146,114 @@ impl Collector {
     }
 }
 
+/// Runs `a` and `b` together (the page has one thread: each goes on while the other waits on the
+/// browser) and gives both values once both are done. `a` is polled first, and its error ends
+/// the wait at once (`b` is dropped); `b`'s error is given once `a` has done well, so `a`'s
+/// error is the one told when both fail.
+pub async fn try_both<A, B, E>(
+    a: impl Future<Output = Result<A, E>>,
+    b: impl Future<Output = Result<B, E>>,
+) -> Result<(A, B), E> {
+    let mut a = std::pin::pin!(a);
+    let mut b = std::pin::pin!(b);
+    let (mut done_a, mut done_b) = (None, None);
+    std::future::poll_fn(|cx| {
+        if done_a.is_none()
+            && let Poll::Ready(v) = a.as_mut().poll(cx)
+        {
+            match v {
+                Ok(v) => done_a = Some(v),
+                Err(e) => return Poll::Ready(Err(e)),
+            }
+        }
+        if done_b.is_none()
+            && let Poll::Ready(v) = b.as_mut().poll(cx)
+        {
+            done_b = Some(v);
+        }
+        match (done_a.take(), done_b.take()) {
+            (Some(a), Some(b)) => Poll::Ready(b.map(|b| (a, b))),
+            (a, b) => {
+                (done_a, done_b) = (a, b);
+                Poll::Pending
+            }
+        }
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use session::share::{link_fragment, seal};
+
+    /// Polls `f` to the end with a waker that does nothing, counting the polls.
+    fn run<F: Future>(f: F) -> (F::Output, usize) {
+        let mut f = std::pin::pin!(f);
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        let mut polls = 0;
+        loop {
+            polls += 1;
+            if let Poll::Ready(v) = f.as_mut().poll(&mut cx) {
+                return (v, polls);
+            }
+        }
+    }
+
+    /// Ready after `n` polls (each earlier one is pending), recording its polls in `log`.
+    async fn after(n: usize, name: char, log: &std::cell::RefCell<Vec<char>>) -> char {
+        let mut left = n;
+        std::future::poll_fn(|_| {
+            log.borrow_mut().push(name);
+            if left == 0 {
+                Poll::Ready(name)
+            } else {
+                left -= 1;
+                Poll::Pending
+            }
+        })
+        .await
+    }
+
+    /// `after` as a result: `Ok` for an uppercase name, else `Err`.
+    async fn result(
+        n: usize,
+        name: char,
+        log: &std::cell::RefCell<Vec<char>>,
+    ) -> Result<char, char> {
+        let v = after(n, name, log).await;
+        if v.is_uppercase() { Ok(v) } else { Err(v) }
+    }
+
+    #[test]
+    fn try_both_runs_two_futures_together_and_waits_for_the_slower() {
+        let log = std::cell::RefCell::new(Vec::new());
+        let (both, polls) = run(try_both(result(1, 'A', &log), result(3, 'B', &log)));
+        assert_eq!(both, Ok(('A', 'B')));
+        assert_eq!(polls, 4);
+        // The first goes first, and neither is polled once it is done.
+        assert_eq!(*log.borrow(), ['A', 'B', 'A', 'B', 'B', 'B']);
+        log.borrow_mut().clear();
+        let (both, polls) = run(try_both(result(2, 'A', &log), result(0, 'B', &log)));
+        assert_eq!(both, Ok(('A', 'B')));
+        assert_eq!(polls, 3);
+        assert_eq!(*log.borrow(), ['A', 'B', 'A', 'A']);
+    }
+
+    #[test]
+    fn the_first_futures_error_does_not_wait_for_the_second() {
+        let log = std::cell::RefCell::new(Vec::new());
+        // A damaged link is told at once, the GPU still being asked for.
+        let (both, polls) = run(try_both(result(1, 'a', &log), result(9, 'B', &log)));
+        assert_eq!(both, Err('a'));
+        assert_eq!(polls, 2);
+        // The second's error waits for the first, whose own error wins.
+        let (both, polls) = run(try_both(result(3, 'A', &log), result(0, 'b', &log)));
+        assert_eq!(both, Err('b'));
+        assert_eq!(polls, 4);
+        let (both, _) = run(try_both(result(3, 'a', &log), result(0, 'b', &log)));
+        assert_eq!(both, Err('a'));
+    }
 
     #[test]
     fn a_share_fragment_starts_the_viewer() {
