@@ -22,6 +22,10 @@ pub struct Part {
     /// Width (x), depth (y) and height (z) of the axis-aligned box, in model axes, around the
     /// geometry the part places, in meters. None when it places no geometry.
     pub size: Option<[f64; 3]>,
+    /// The part's own box, as the cut list takes it: its geometry's extent along its own axes
+    /// scaled by its placement, longest to shortest (length, width, thickness), in meters.
+    /// A board turned on its side reads the same. None when it places no geometry.
+    pub own_size: Option<[f64; 3]>,
     /// For a component, which of its definition's top-level instances this is (1 first, in id
     /// order).
     pub number: usize,
@@ -66,6 +70,11 @@ pub fn list(scene: &Scene) -> Vec<Part> {
             name,
             size: extent(scene, &hidden, instance.definition, instance.transform)
                 .map(|[lo, hi]| (hi - lo).to_array()),
+            own_size: kernel::cutlist::own_size(
+                scene,
+                instance.definition,
+                instance.transform.matrix3,
+            ),
             number: *n,
             count: 0,
         });
@@ -118,7 +127,7 @@ fn extent(
     (seen > 0).then_some([lo, hi])
 }
 
-/// "1.2 m x 0.6 m x 2 m": width, depth and height in the document's units.
+/// "1.2 m x 0.6 m x 0.02 m": length, width and thickness in the document's units.
 pub fn size_text(size: [f64; 3], units: &Units) -> String {
     size.map(|v| format_length(v, units)).join(" x ")
 }
@@ -130,7 +139,7 @@ pub struct PartRow {
     pub kind: DefinitionKind,
     /// How many instances the row stands for (1 for a group).
     pub count: usize,
-    /// The first instance's size.
+    /// The first instance's own box, length x width x thickness (see `Part::own_size`).
     pub size: Option<[f64; 3]>,
     /// The instances, in id order: what tapping the row selects and frames.
     pub ids: Vec<InstanceId>,
@@ -156,7 +165,7 @@ pub fn rows(parts: &[Part]) -> Vec<PartRow> {
             name: part.name.clone(),
             kind: part.kind,
             count: 1,
-            size: part.size,
+            size: part.own_size,
             ids: vec![part.id],
         });
     }

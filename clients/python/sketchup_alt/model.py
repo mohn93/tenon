@@ -657,6 +657,17 @@ class Model:
             q["ids"] = _ids(ids)
         return self.client.query("mass_properties", **q)
 
+    def cut_list(self, ids=None, group_by=None):
+        """The parts of the open context as a cut list: ``rows`` of name, material, length, width,
+        thickness (meters, the part's own box, longest first), quantity, solid and ids.
+        ``group_by`` is ``"definition"`` (default) or ``"none"``."""
+        q = {}
+        if ids is not None:
+            q["ids"] = _ids(ids)
+        if group_by is not None:
+            q["group_by"] = group_by
+        return self.client.query("cut_list", **q)["rows"]
+
     def measure(self, distance=None, angle=None, round=None):
         """Exactly one of ``distance`` or ``angle`` (two entities each) or ``round`` (one):
         returns the measurement dict (``distance``, ``angle`` or ``round`` of the reply). An
