@@ -18,6 +18,11 @@ pub const PARALLEL: Rgba = [0xCC, 0x1A, 0xCC, 0xFF];
 /// Preview lines on no axis or edge: on a light canvas, and on a dark one.
 pub const LINE_DAY: Rgba = [0x1A, 0x1A, 0x1A, 0xFF];
 pub const LINE_NIGHT: Rgba = [0xE8, 0xE9, 0xEC, 0xFF];
+/// A placed part's ghost: its blue core, and the casing around it, light on a dark canvas
+/// and dark on a light one.
+pub const GHOST_CORE: Rgba = [0x2F, 0x8C, 0xFF, 0xFF];
+pub const GHOST_CASING_DAY: Rgba = [0x10, 0x20, 0x40, 0xC0];
+pub const GHOST_CASING_NIGHT: Rgba = [0xF4, 0xF6, 0xFA, 0xC0];
 pub const ENDPOINT: Rgba = [0x2F, 0xBF, 0x4A, 0xFF];
 pub const MIDPOINT: Rgba = [0x12, 0xB5, 0xCB, 0xFF];
 pub const INTERSECTION: Rgba = [0xFF, 0x8A, 0x00, 0xFF];
@@ -29,6 +34,9 @@ pub const MARKER_PT: f32 = 12.0;
 pub const HALO_PT: f32 = 1.5;
 pub const LINE_PT: f32 = 2.0;
 pub const LOCKED_LINE_PT: f32 = 2.5;
+/// The ghost's core and casing widths, in points.
+pub const GHOST_CORE_PT: f32 = 2.0;
+pub const GHOST_CASING_PT: f32 = 4.5;
 
 /// How a snap marker is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -186,6 +194,28 @@ pub fn preview_lines(
         .collect()
 }
 
+/// The lines of a part being placed (a pasted clip, a library item, 3D text): each in a blue core
+/// over a wider casing that contrasts with the canvas (`dark_canvas`), so the ghost shows on
+/// light and dark grounds alike. All casings come first, so no core is hidden by another
+/// line's casing.
+pub fn ghost_lines(preview: &[[DVec3; 2]], dark_canvas: bool, camera: &Camera) -> Vec<ScreenLine> {
+    let projector = camera.projector();
+    let seen: Vec<[DVec2; 2]> = preview
+        .iter()
+        .filter_map(|&[a, b]| clip_with(camera, &projector, a, b))
+        .collect();
+    let casing = if dark_canvas {
+        GHOST_CASING_NIGHT
+    } else {
+        GHOST_CASING_DAY
+    };
+    let line = |[a, b]: [DVec2; 2], color, width| ScreenLine { a, b, color, width };
+    seen.iter()
+        .map(|s| line(*s, casing, GHOST_CASING_PT))
+        .chain(seen.iter().map(|s| line(*s, GHOST_CORE, GHOST_CORE_PT)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,6 +302,21 @@ mod tests {
         );
         assert_eq!(snap_label(Ground, Within::Open), None);
         assert_eq!(snap_label(Free, Within::Open), None);
+    }
+
+    #[test]
+    fn a_ghost_is_a_core_over_a_casing_that_contrasts_with_the_canvas() {
+        let c = cam();
+        let seg = [[DVec3::ZERO, DVec3::new(0.0, 3.0, 0.0)]];
+        let day = ghost_lines(&seg, false, &c);
+        assert_eq!(day.len(), 2);
+        assert_eq!(
+            (day[0].color, day[0].width),
+            (GHOST_CASING_DAY, GHOST_CASING_PT)
+        );
+        assert_eq!((day[1].color, day[1].width), (GHOST_CORE, GHOST_CORE_PT));
+        assert_eq!(ghost_lines(&seg, true, &c)[0].color, GHOST_CASING_NIGHT);
+        assert!(ghost_lines(&[], false, &c).is_empty());
     }
 
     #[test]

@@ -39,6 +39,7 @@ mod primitives;
 mod push_pull;
 mod regions;
 pub mod revolve;
+mod same;
 mod scene;
 mod section;
 mod section_loops;
@@ -97,6 +98,7 @@ pub use primitives::{
     DEFAULT_SEGMENTS, DEFAULT_SIDES, DEFAULT_TUBE_SEGMENTS, MAX_SEGMENTS, MIN_LENGTH, MIN_SEGMENTS,
     PrimitiveError, Solid,
 };
+pub use same::{Fingerprints, base_name};
 pub use scene::{Definition, DefinitionKind, MeshId, Parts, Scene, SceneChange, Step};
 pub use section::SectionPlane;
 pub use section_loops::{SectionLoops, section_loops, triangulate_section};

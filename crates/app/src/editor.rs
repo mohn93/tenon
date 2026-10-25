@@ -18,7 +18,7 @@ use session::{
     Lighting, Origin, Outcome, Projection, SelectMode, StandardView, TextureSource,
 };
 pub use session::{ImportAs, ImportUnits, UpAxis};
-use tools::overlay::{marker, preview_lines, snap_label};
+use tools::overlay::{ghost_lines, marker, preview_lines, snap_label};
 use tools::{
     Axis, Guides, Inference, Layout, Lock, NoteRequest, Owner, Phase, Remembered, Scenery, Slab,
     SnapKind, Solid, Tool, ToolContext, ToolEvent, ToolKind, ToolOutput, Within, edge_under_in,
@@ -2118,13 +2118,36 @@ impl Editor {
             point: t.transform_point3(h.point),
             ..h
         });
-        hud.lines = preview_lines(
-            &preview,
-            hit.as_ref(),
-            self.lock.is_some(),
-            dark_canvas,
-            camera,
-        );
+        // A part being placed is a ghost in its own colors, not a tool's drawing line.
+        hud.lines = if self.pasting() {
+            let mut lines = ghost_lines(&preview, dark_canvas, camera);
+            // The axis, parallel and lock feedback stays, drawn over the ghost.
+            let feedback = self.lock.is_some()
+                || hit.as_ref().is_some_and(|h| {
+                    matches!(
+                        h.kind,
+                        SnapKind::Axis(_) | SnapKind::Parallel | SnapKind::Perpendicular
+                    )
+                });
+            if feedback {
+                lines.extend(preview_lines(
+                    &preview,
+                    hit.as_ref(),
+                    self.lock.is_some(),
+                    dark_canvas,
+                    camera,
+                ));
+            }
+            lines
+        } else {
+            preview_lines(
+                &preview,
+                hit.as_ref(),
+                self.lock.is_some(),
+                dark_canvas,
+                camera,
+            )
+        };
         hud.lines.extend(self.measure_lines());
         if self.hover_hidden {
             return hud;

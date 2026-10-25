@@ -216,6 +216,22 @@ pub(crate) fn from_scene(scene: Scene, source: String) -> Result<Clip, CommandEr
     })
 }
 
+/// A library item as a clip: held by the minimum corner of its box like any clip, unless the
+/// item's origin (the scene's origin) lies away from the box, as in a part modelled in place
+/// and far from its own origin: then by the bottom centre of the box, so the part lands under
+/// the cursor. "Away" is farther than a quarter of the box's diagonal.
+pub(crate) fn from_item(scene: Scene, source: String) -> Result<Clip, CommandError> {
+    let mut clip = from_scene(scene, source)?;
+    let root = clip.scene.mesh(MeshId::Root).expect("a scene has a root");
+    if let Some([lo, hi]) = mesh_box(root, &definition_boxes(&clip.scene)) {
+        let away = DVec3::ZERO.clamp(lo, hi).distance(DVec3::ZERO);
+        if away > 0.25 * (hi - lo).length() {
+            clip.base = DVec3::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0, lo.z);
+        }
+    }
+    Ok(clip)
+}
+
 /// The Paste tool's preview of clip text: its base point and edges. Fails as paste would.
 pub fn outline(text: &str) -> Result<ClipOutline, CommandError> {
     Ok(outline_of(&decode(text)?))
