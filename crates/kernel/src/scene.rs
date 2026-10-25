@@ -583,13 +583,17 @@ impl Scene {
     /// A name for a copy of the definition named `name`: `name` without a trailing `#<digits>`,
     /// then `#N`, the smallest N of 2 or more that no definition's name already is.
     pub fn unique_name(&self, name: &str) -> String {
-        let base = match name.rsplit_once('#') {
-            Some((base, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => base,
-            _ => name,
-        };
+        self.unique_name_avoiding(name, &|_| false)
+    }
+
+    /// `unique_name`, also skipping the names `taken` says are.
+    pub fn unique_name_avoiding(&self, name: &str, taken: &dyn Fn(&str) -> bool) -> String {
+        let base = crate::same::base_name(name);
         (2..)
             .map(|n| format!("{base}#{n}"))
-            .find(|candidate| self.definitions().all(|(_, d)| d.name != *candidate))
+            .find(|candidate| {
+                !taken(candidate) && self.definitions().all(|(_, d)| d.name != *candidate)
+            })
             .expect("some name is free")
     }
 

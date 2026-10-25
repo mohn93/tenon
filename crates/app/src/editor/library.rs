@@ -186,21 +186,27 @@ mod tests {
         e.button(Button::Left, false);
         assert!(!e.pasting(), "the click ends the tool");
         assert_eq!(e.doc().undo_label(), Some("insert"));
-        assert_eq!(definitions(&e), before + 1, "a new definition");
+        assert_eq!(
+            definitions(&e),
+            before,
+            "the same component: no new definition"
+        );
         assert_eq!(
             e.doc().selection().len(),
             1,
             "what was inserted is selected"
         );
-        // Placing again makes another definition (a fresh token each time).
+        // Placing again adds an instance of it.
         e.place_library_item(&path).unwrap();
         point_at(&mut e, DVec3::new(-6.0, 0.0, 0.0));
         e.button(Button::Left, true);
         e.button(Button::Left, false);
-        assert_eq!(definitions(&e), before + 2);
+        assert_eq!(definitions(&e), before);
         // One undo takes the last insert back.
+        let instances = |e: &Editor| e.doc().model().instances().count();
+        let placed = instances(&e);
         assert!(e.undo());
-        assert_eq!(definitions(&e), before + 1);
+        assert_eq!(instances(&e), placed - 1);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

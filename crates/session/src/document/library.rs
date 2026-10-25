@@ -1,10 +1,14 @@
 //! Library items: saving the selection's component, a material or the model to a `.skr` file
 //! with a `library.json` entry, and inserting an item.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use glam::{DAffine3, DVec3};
-use kernel::{DefinitionKind, EntityId, Material, MaterialId, Scene, SceneChange};
+use kernel::{
+    DefinitionId, DefinitionKind, EntityId, Fingerprints, Material, MaterialId, Scene, SceneChange,
+    base_name,
+};
 
 use super::{Document, check_coordinates};
 use crate::clip;
@@ -81,9 +85,18 @@ impl Document {
         }
         let info = library::encode_info(kind, &name)?;
         let extra: [(&str, &[u8]); 1] = [(library::INFO_ENTRY, &info)];
+        // A component's view frames the component, not the model it came from.
+        let mut camera = self.camera.clone();
+        if let Some([lo, hi]) = scene
+            .as_ref()
+            .filter(|_| kind == LibraryKind::Component)
+            .and_then(|s| s.shown_bounds(kernel::MeshId::Root, &[]))
+        {
+            camera.fit(lo, hi);
+        }
         let bytes = file::write_bytes(
             scene.as_ref().unwrap_or(&self.scene),
-            &self.camera,
+            &camera,
             self.view_look(),
             file::ENTRY,
             &extra,
@@ -156,14 +169,66 @@ impl Document {
         if item.kind == LibraryKind::Material {
             return self.insert_material(&item.scene);
         }
-        let clip = clip::from_scene(item.scene, new_token())?;
+        let mut clip = clip::from_item(item.scene, new_token())?;
+        let known = self.settle_item_definitions(&mut clip.scene);
         // World orientation and size are kept: the item's world box minimum lands at the world
         // point of `at` (a point of the open context), or of the context's origin.
         let context = self.context_transform();
         let point = at.map_or(DVec3::ZERO, DVec3::from);
         let placement = context.inverse()
             * DAffine3::from_translation(context.transform_point3(point) - clip.base);
-        self.paste_clip(clip, placement, false)
+        self.paste_clip(clip, placement, false, known)
+    }
+
+    /// Settles each component definition of an item about to be inserted against the model's:
+    /// one the model has with the same name (but for a `#<number>` of its own) and the same content (`Fingerprints`) is returned
+    /// in the map, to be placed as it is; any other whose name the model uses is renamed in
+    /// the item to a free one (`Scene::unique_name`: "Name#2"), so the model never holds two
+    /// different components of one name. Groups are copied as they are.
+    fn settle_item_definitions(&self, item: &mut Scene) -> BTreeMap<DefinitionId, DefinitionId> {
+        let components: Vec<(DefinitionId, String)> = item
+            .definitions()
+            .filter(|(_, d)| d.kind == DefinitionKind::Component)
+            .map(|(id, d)| (id, d.name.clone()))
+            .collect();
+        let mut known = BTreeMap::new();
+        let mut theirs = Fingerprints::new(item);
+        let mut ours = Fingerprints::new(&self.scene);
+        let mut renames = Vec::new();
+        for (id, name) in &components {
+            let same_name: Vec<DefinitionId> = self
+                .scene
+                .definitions()
+                .filter(|(_, d)| {
+                    d.kind == DefinitionKind::Component && base_name(&d.name) == base_name(name)
+                })
+                .map(|(id, _)| id)
+                .collect();
+            if same_name.is_empty() {
+                continue;
+            }
+            let print = theirs.of(*id);
+            match same_name
+                .into_iter()
+                .find(|o| print.is_some() && ours.of(*o) == print)
+            {
+                Some(found) => {
+                    known.insert(*id, found);
+                }
+                None => renames.push((*id, name.clone())),
+            }
+        }
+        drop(theirs);
+        let mut used: BTreeSet<String> = components.iter().map(|(_, n)| n.clone()).collect();
+        for (id, name) in renames {
+            let free = self
+                .scene
+                .unique_name_avoiding(&name, &|n| used.contains(n));
+            used.insert(free.clone());
+            // The item is ours alone and the definition is there, so this cannot fail.
+            let _ = item.rename_definition(id, &free);
+        }
+        known
     }
 
     fn insert_material(&mut self, item: &Scene) -> Result<SceneChange, CommandError> {
