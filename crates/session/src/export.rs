@@ -130,7 +130,8 @@ pub struct ExportReport {
 /// One object of a 3MF export.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ExportObject {
-    /// The part's name: its definition's, or "Loose geometry" for the root's own faces.
+    /// The part's name: its definition's (unnamed: "Group" or "Component"), or "Loose
+    /// geometry" for the root's own faces.
     pub name: String,
     /// Welded vertices.
     pub vertices: usize,

@@ -314,3 +314,54 @@ fn an_empty_model_has_nothing_to_export() {
     .unwrap_err();
     assert_eq!(err.0, ErrorKind::InvalidInput);
 }
+
+/// The signed volume (mm^3) of each object in a model part, from its vertices and triangles.
+fn volumes(xml: &str) -> Vec<f64> {
+    let mut out = Vec::new();
+    let mut vertices: Vec<[f64; 3]> = Vec::new();
+    for e in elements(xml) {
+        match e.0.as_str() {
+            "object" => {
+                out.push(0.0);
+                vertices.clear();
+            }
+            "vertex" => {
+                vertices.push(["x", "y", "z"].map(|k| attr(&e, k).unwrap().parse().unwrap()));
+            }
+            "triangle" => {
+                let [a, b, c] = ["v1", "v2", "v3"].map(|k| {
+                    glam::DVec3::from(vertices[attr(&e, k).unwrap().parse::<usize>().unwrap()])
+                });
+                *out.last_mut().unwrap() += a.dot(b.cross(c)) / 6.0;
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+#[test]
+fn a_mirrored_part_exports_closed_with_positive_volume() {
+    let mut d = doc();
+    add_box(&mut d, [1.0, 2.0, 3.0], [0.0, 0.0, 0.0], "Plain", None);
+    add_box(&mut d, [1.0, 2.0, 3.0], [5.0, 0.0, 0.0], "Flipped", None);
+    let q: session::Query = serde_json::from_value(json!({"type": "selection"})).unwrap();
+    let selected = serde_json::to_value(d.query(&q).unwrap()).unwrap();
+    let ids = selected["ids"].clone();
+    run(
+        &mut d,
+        json!({"type": "flip", "ids": ids, "axis": "red", "frame": "own"}),
+    )
+    .unwrap();
+    // Nested in a plain group, the mirror is still in the placement.
+    run(&mut d, json!({"type": "make_group", "ids": ids})).unwrap();
+    let (bytes, report) = export(&mut d, "mirrored.3mf", json!({}));
+    let objects = report["objects"].as_array().unwrap();
+    assert_eq!(objects.len(), 2, "{report}");
+    assert!(objects.iter().all(|o| o["closed"] == true), "{report}");
+    // The unnamed outer group is named for its kind.
+    assert_eq!(objects[1]["name"], "Group", "{report}");
+    for v in volumes(&entry(&bytes, "3D/3dmodel.model")) {
+        assert!((v - 6.0e9).abs() < 1.0, "volume {v}");
+    }
+}

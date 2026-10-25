@@ -563,7 +563,14 @@ impl Document {
                 let name = instance
                     .and_then(|i| self.scene.root().instance(i))
                     .and_then(|i| self.scene.definition(i.definition))
-                    .map_or_else(|| "Loose geometry".to_string(), |d| d.name.clone());
+                    .map_or_else(
+                        || "Loose geometry".to_string(),
+                        |d| match d.kind {
+                            _ if !d.name.trim().is_empty() => d.name.clone(),
+                            kernel::DefinitionKind::Group => "Group".to_string(),
+                            kernel::DefinitionKind::Component => "Component".to_string(),
+                        },
+                    );
                 (name, triangles)
             })
             .collect();
