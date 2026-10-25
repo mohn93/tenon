@@ -145,6 +145,10 @@ pub enum AppEvent {
     /// A native menu item was chosen; `repeat` when a held key chose it.
     #[cfg(target_os = "macos")]
     Menu { id: String, repeat: bool },
+    /// The system asked to quit with unsaved changes (Dock > Quit, log out, shut down) and
+    /// waits for the window's answer (see `system_quit`).
+    #[cfg(target_os = "macos")]
+    SystemQuit,
     /// The AccessKit adapter: a screen reader asked for the tree, asked for an action, or went
     /// away.
     AccessKit(egui_winit::accesskit_winit::Event),
@@ -353,9 +357,10 @@ enum AtExit {
 
 /// What happens to the autosave as the window exits: removed when the exit was settled (the
 /// unsaved prompt answered, or an agent's `quit`) or there is nothing unsaved. An exit the
-/// system asks for without the prompt (macOS: Dock > Quit, log out, shut down) keeps it, to be
-/// offered at the next start, written first when autosave is on (`minutes` not 0) and the
-/// model's `revision` is not the one last autosaved.
+/// system asks for without the prompt (macOS: Dock > Quit, log out, shut down, once
+/// `system_quit` found the changes autosaved) keeps it, to be offered at the next start,
+/// written first when autosave is on (`minutes` not 0) and the model's `revision` is not the
+/// one last autosaved.
 fn at_exit(
     settled: bool,
     modified: bool,
@@ -369,6 +374,49 @@ fn at_exit(
         AtExit::Write
     } else {
         AtExit::Keep
+    }
+}
+
+/// What the window answers when the system asks it to quit (macOS: Dock > Quit, log out, shut
+/// down).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+enum SystemQuit {
+    /// Let the system end the app, without asking.
+    Exit,
+    /// Cancel the system's quit and ask about the unsaved changes, as Cmd+Q does.
+    Prompt,
+}
+
+/// Whether a quit the system asks for goes ahead without the unsaved prompt: only when the exit
+/// is settled (see `at_exit`), nothing is unsaved, or the changes are in the autosave, which
+/// with autosave on (`minutes` not 0) is the model's `revision` autosaved already or `write`
+/// writing it now. With autosave off, or a write that fails (no recovery folder, a full disk),
+/// the prompt shows.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn system_quit(
+    settled: bool,
+    modified: bool,
+    revision: u64,
+    saved_revision: Option<u64>,
+    minutes: u32,
+    write: impl FnOnce() -> Result<(), String>,
+) -> SystemQuit {
+    if settled || !modified {
+        return SystemQuit::Exit;
+    }
+    if minutes == 0 {
+        return SystemQuit::Prompt;
+    }
+    if saved_revision == Some(revision) {
+        return SystemQuit::Exit;
+    }
+    match write() {
+        Ok(()) => SystemQuit::Exit,
+        Err(why) => {
+            eprintln!("warning: autosave failed as the system asked to quit: {why}");
+            SystemQuit::Prompt
+        }
     }
 }
 
@@ -1434,17 +1482,48 @@ impl State {
         match action {
             AtExit::Clear => self.clear_autosave(),
             AtExit::Write => {
-                let original = doc
-                    .path()
-                    .map(Path::to_path_buf)
-                    .or_else(|| self.recovered_doc().and_then(|r| r.original.clone()));
-                if let Some(session) = &self.session
-                    && let Err(why) = session.write_autosave(self.editor.doc(), original.as_deref())
-                {
+                if let Err(why) = self.write_autosave_now() {
                     eprintln!("warning: autosave failed as the app ended: {why}");
                 }
             }
             AtExit::Keep => {}
+        }
+    }
+
+    /// Copies the open model to this window's autosave now, naming the model's file, else the
+    /// file a recovered model was a copy of.
+    fn write_autosave_now(&mut self) -> Result<(), String> {
+        let session = self.session.as_ref().ok_or("no recovery folder")?;
+        let doc = self.editor.doc();
+        let original = doc
+            .path()
+            .map(Path::to_path_buf)
+            .or_else(|| self.recovered_doc().and_then(|r| r.original.clone()));
+        session.write_autosave(doc, original.as_deref())?;
+        self.autosave.revision = Some(doc.revision());
+        Ok(())
+    }
+
+    /// The system asked to quit (see `system_quit`): lets it go ahead when the changes are
+    /// safe in the autosave, else cancels it and asks about them as Cmd+Q does.
+    #[cfg(target_os = "macos")]
+    fn system_quit(&mut self) {
+        let doc = self.editor.doc();
+        let (modified, revision) = (doc.is_modified(), doc.revision());
+        let answer = system_quit(
+            self.quit,
+            modified,
+            revision,
+            self.autosave.revision,
+            self.prefs.autosave_minutes,
+            || self.write_autosave_now(),
+        );
+        match answer {
+            SystemQuit::Exit => crate::system_quit::reply(true),
+            SystemQuit::Prompt => {
+                crate::system_quit::reply(false);
+                self.settle_and(Then::Quit);
+            }
         }
     }
 
@@ -3797,6 +3876,11 @@ impl ApplicationHandler<AppEvent> for App {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let now = Instant::now();
+        // What a quit the system asks for finds (see `system_quit`).
+        #[cfg(target_os = "macos")]
+        if let Some(s) = self.state.as_ref() {
+            crate::system_quit::set_unsaved(!s.quit && s.editor.doc().is_modified());
+        }
         let deadline = self
             .state
             .as_mut()
@@ -3819,6 +3903,19 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::Api => self.serve_api(event_loop),
             #[cfg(target_os = "macos")]
             AppEvent::Menu { id, repeat } => self.menu_event(event_loop, &id, repeat),
+            #[cfg(target_os = "macos")]
+            AppEvent::SystemQuit => {
+                if let Some(s) = self.state.as_mut() {
+                    s.system_quit();
+                    s.notify_api(&mut self.hub);
+                    s.window.request_redraw();
+                    if s.quit {
+                        event_loop.exit();
+                    }
+                } else {
+                    crate::system_quit::reply(true);
+                }
+            }
             AppEvent::Error(text) => {
                 if let Some(s) = self.state.as_mut() {
                     s.editor.show_error(&text);
@@ -3873,6 +3970,12 @@ impl ApplicationHandler<AppEvent> for App {
                     repeat: native_menu::current_event_repeats(),
                 });
             }));
+            // Dock > Quit, log out and shut down ask the window first when it has unsaved
+            // changes.
+            let proxy = self.proxy.clone();
+            crate::system_quit::install(move || {
+                let _ = proxy.send_event(AppEvent::SystemQuit);
+            });
         }
         let Some(platform) = self.platform.take() else {
             return;
@@ -5608,6 +5711,53 @@ mod tests {
             at_exit(false, true, 7, Some(6), 0),
             AtExit::Keep,
             "autosave off"
+        );
+    }
+
+    #[test]
+    fn a_system_quit_goes_ahead_only_with_the_changes_autosaved() {
+        let written = || Ok(());
+        let failed = || Err("no recovery folder".to_string());
+        let unused = || -> Result<(), String> { panic!("no autosave written") };
+        // Nothing unsaved, or the prompt was answered: the app ends at once.
+        assert_eq!(
+            system_quit(false, false, 7, None, 5, unused),
+            SystemQuit::Exit
+        );
+        assert_eq!(
+            system_quit(true, true, 7, None, 5, unused),
+            SystemQuit::Exit
+        );
+        assert_eq!(
+            system_quit(false, false, 7, None, 0, unused),
+            SystemQuit::Exit
+        );
+        // Unsaved and autosaved: the newest changes are written first, or are in it already.
+        assert_eq!(
+            system_quit(false, true, 7, None, 5, written),
+            SystemQuit::Exit
+        );
+        assert_eq!(
+            system_quit(false, true, 7, Some(6), 5, written),
+            SystemQuit::Exit
+        );
+        assert_eq!(
+            system_quit(false, true, 7, Some(7), 5, unused),
+            SystemQuit::Exit
+        );
+        // The write failed (or there is no recovery folder): ask.
+        assert_eq!(
+            system_quit(false, true, 7, Some(6), 5, failed),
+            SystemQuit::Prompt
+        );
+        // Autosave off: ask, even with an older autosave of the same revision.
+        assert_eq!(
+            system_quit(false, true, 7, None, 0, unused),
+            SystemQuit::Prompt
+        );
+        assert_eq!(
+            system_quit(false, true, 7, Some(7), 0, unused),
+            SystemQuit::Prompt
         );
     }
 
