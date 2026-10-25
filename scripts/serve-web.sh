@@ -17,17 +17,22 @@ import sys
 directory, port = sys.argv[1], int(sys.argv[2])
 
 
-def takes(part):
-    """Whether one Accept-Encoding item takes gzip (and does not refuse it with q=0)."""
-    coding, *params = [p.strip() for p in part.split(";")]
-    for p in params:
-        if p.startswith("q="):
-            try:
-                if float(p[2:]) <= 0:
-                    return False
-            except ValueError:
-                pass
-    return coding.lower() in ("gzip", "*")
+def takes_gzip(accept):
+    """Whether an Accept-Encoding value takes gzip: as gzip says (refused with q=0), else as *
+    says, else not."""
+    said = {}
+    for part in accept.split(","):
+        coding, *params = [p.strip() for p in part.split(";")]
+        refused = False
+        for p in params:
+            if p.startswith("q="):
+                try:
+                    refused = float(p[2:]) <= 0
+                except ValueError:
+                    pass
+        if coding.lower() in ("gzip", "*"):
+            said[coding.lower()] = not refused
+    return said.get("gzip", said.get("*", False))
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -38,13 +43,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     }
 
     def send_head(self):
-        # The build's gzip copy, for a browser that takes gzip.
+        # The build's gzip copy, for a browser that takes gzip, unless it is older than the file
+        # (left from an earlier build) or cannot be opened.
         path = self.translate_path(self.path)
         gz = path + ".gz"
-        accept = self.headers.get("Accept-Encoding", "")
-        takes_gzip = any(takes(part) for part in accept.split(","))
-        if takes_gzip and os.path.isfile(path) and os.path.isfile(gz):
-            f = open(gz, "rb")
+        f = None
+        if takes_gzip(self.headers.get("Accept-Encoding", "")) and os.path.isfile(path):
+            try:
+                # Within a millisecond counts as as new (gzip keeps microseconds).
+                if os.path.isfile(gz) and os.stat(gz).st_mtime_ns + 1_000_000 >= os.stat(path).st_mtime_ns:
+                    f = open(gz, "rb")
+            except OSError:
+                f = None
+        if f is not None:
             self.send_response(200)
             self.send_header("Content-Type", self.guess_type(path))
             self.send_header("Content-Encoding", "gzip")

@@ -20,7 +20,12 @@ cp web/index.html web/dist/index.html
 # Gzip copies beside the module and its glue: the Open on Phone server and serve-web.sh send them
 # to browsers that take gzip (the module is about a third the size). -n leaves the name and time
 # out, so the same build makes the same bytes.
-gzip -9 -n -k -f web/dist/web_bg.wasm web/dist/web.js
+# The copies take their files' times to the nanosecond (gzip keeps only microseconds): a copy
+# older than its file is taken for one left from an earlier build and not sent.
+for f in web/dist/web_bg.wasm web/dist/web.js; do
+    gzip -9 -n -k -f "$f"
+    touch -r "$f" "$f.gz"
+done
 
 echo "built web/dist:"
 ls -l web/dist

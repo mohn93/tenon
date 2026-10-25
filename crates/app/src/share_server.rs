@@ -485,12 +485,8 @@ fn serve(stream: TcpStream, shared: &Shared) {
             }
         }
         Route::File(path) => {
-            // The precompressed copy when the browser takes gzip: the viewer's module is about
-            // a third the size that way.
-            let gzipped = accepts_gzip(&head).then(|| gzip_copy(&path)).flatten();
             let content_type = mime(&path);
-            let path = gzipped.clone().unwrap_or(path);
-            let Ok(file) = File::open(&path) else {
+            let Some(plain) = open_regular(&path) else {
                 let _ = send(
                     &mut stream,
                     404,
@@ -501,18 +497,13 @@ fn serve(stream: TcpStream, shared: &Shared) {
                 );
                 return;
             };
-            let Ok(meta) = file.metadata() else { return };
-            if !meta.is_file() {
-                let _ = send(
-                    &mut stream,
-                    404,
-                    "Not Found",
-                    &[],
-                    b"Not Found\n",
-                    head_only,
-                );
-                return;
-            }
+            // The precompressed copy when the browser takes gzip (the viewer's module is about
+            // a third the size that way), unless it is older than the file itself.
+            let gzipped = accepts_gzip(&head)
+                .then(|| gzip_copy(&path, &plain.1))
+                .flatten();
+            let is_gzip = gzipped.is_some();
+            let (file, meta) = gzipped.unwrap_or(plain);
             let tag = etag(&meta);
             let mut extra = vec![
                 ("Content-Type", content_type),
@@ -522,11 +513,13 @@ fn serve(stream: TcpStream, shared: &Shared) {
                 ("ETag", tag.as_str()),
                 ("Vary", "Accept-Encoding"),
             ];
-            if gzipped.is_some() {
+            if is_gzip {
                 extra.push(("Content-Encoding", "gzip"));
             }
             if header(&head, "if-none-match").is_some_and(|tags| matches_etag(tags, &tag)) {
-                let _ = send(&mut stream, 304, "Not Modified", &extra, b"", true);
+                // No body; the length is the one a 200 would have.
+                let _ = write_head(&mut stream, 304, "Not Modified", &extra, meta.len(), false)
+                    .and_then(|()| stream.flush());
                 return;
             }
             let _ = send_stream(&mut stream, 200, "OK", &extra, file, meta.len(), head_only);
@@ -611,29 +604,70 @@ fn header<'a>(head: &'a [u8], name: &str) -> Option<&'a str> {
     })
 }
 
-/// Whether the request's `Accept-Encoding` takes gzip (and does not refuse it with `q=0`).
+/// Whether the request's `Accept-Encoding` takes gzip: as `gzip` says (refused with `q=0`),
+/// else as `*` says, else not.
 fn accepts_gzip(head: &[u8]) -> bool {
-    header(head, "accept-encoding").is_some_and(|value| {
-        value.split(',').any(|item| {
-            let mut parts = item.split(';').map(str::trim);
-            let coding = parts.next().unwrap_or_default();
-            let refused = parts.any(|p| {
-                p.strip_prefix("q=")
-                    .is_some_and(|q| q.trim().parse::<f32>().is_ok_and(|q| q <= 0.0))
-            });
-            (coding.eq_ignore_ascii_case("gzip") || coding == "*") && !refused
-        })
-    })
+    let Some(value) = header(head, "accept-encoding") else {
+        return false;
+    };
+    let (mut gzip, mut any) = (None, None);
+    for item in value.split(',') {
+        let mut parts = item.split(';').map(str::trim);
+        let coding = parts.next().unwrap_or_default();
+        let refused = parts.any(|p| {
+            p.strip_prefix("q=")
+                .is_some_and(|q| q.trim().parse::<f32>().is_ok_and(|q| q <= 0.0))
+        });
+        if coding.eq_ignore_ascii_case("gzip") {
+            gzip = Some(!refused);
+        } else if coding == "*" {
+            any = Some(!refused);
+        }
+    }
+    gzip.or(any).unwrap_or(false)
 }
 
-/// The gzip copy of `path` (`<name>.gz` beside it, a regular file, not a link), if there is one.
-fn gzip_copy(path: &Path) -> Option<PathBuf> {
+/// Opens `path` for reading when it is a regular file. A link is never followed: on Unix the
+/// open itself refuses one, so nothing can swap a link in between a check and the open.
+fn open_regular(path: &Path) -> Option<(File, std::fs::Metadata)> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Non-blocking too, so a named pipe put there cannot hold the connection.
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(not(unix))]
+    if std::fs::symlink_metadata(path)
+        .ok()?
+        .file_type()
+        .is_symlink()
+    {
+        return None;
+    }
+    let file = options.open(path).ok()?;
+    let meta = file.metadata().ok()?;
+    meta.is_file().then_some((file, meta))
+}
+
+/// How much older than its file a gzip copy may say it is and still count as made from it.
+const GZIP_TIME_SLACK: Duration = Duration::from_millis(1);
+
+/// The gzip copy of `path` (`<name>.gz` beside it, a regular file, not a link), opened, if
+/// there is one that can be opened and is not older than the file itself (`plain`): a copy
+/// left from an earlier build is not sent.
+fn gzip_copy(path: &Path, plain: &std::fs::Metadata) -> Option<(File, std::fs::Metadata)> {
     let mut name = path.file_name()?.to_os_string();
     name.push(".gz");
-    let gz = path.with_file_name(name);
-    std::fs::symlink_metadata(&gz)
-        .is_ok_and(|m| m.file_type().is_file())
-        .then_some(gz)
+    let (file, meta) = open_regular(&path.with_file_name(name))?;
+    // Within a millisecond counts as as new: gzip keeps the file's time only to the
+    // microsecond.
+    let fresh = match (meta.modified(), plain.modified()) {
+        (Ok(gz), Ok(original)) => gz + GZIP_TIME_SLACK >= original,
+        _ => false,
+    };
+    fresh.then_some((file, meta))
 }
 
 /// A file's entity tag: its size and modification time, which change when it is rebuilt.
