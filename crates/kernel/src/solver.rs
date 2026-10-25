@@ -589,10 +589,19 @@ impl System {
 
 /// Solves `a x = b` for a symmetric positive definite `a` (row-major `n` x `n`, overwritten
 /// by its Cholesky factor); `b` becomes `x`. False when `a` is not positive definite.
+///
+/// The factor of an assembly is mostly zeros (each joint ties two parts), so each column's
+/// sums run over only the nonzero entries of its row of the factor. The terms left out are
+/// products with a zero, which change no sum, so the factor is that of the full sums; a
+/// factor entry that is infinite or NaN is nonzero and taken, failing its row's diagonal
+/// either way.
 fn cholesky_solve(a: &mut [f64], n: usize, b: &mut [f64]) -> bool {
+    let mut nonzero: Vec<usize> = Vec::with_capacity(n);
     for j in 0..n {
+        nonzero.clear();
+        nonzero.extend((0..j).filter(|k| a[j * n + k] != 0.0));
         let mut d = a[j * n + j];
-        for k in 0..j {
+        for &k in &nonzero {
             d -= a[j * n + k] * a[j * n + k];
         }
         if d.is_nan() || d <= 0.0 {
@@ -602,7 +611,7 @@ fn cholesky_solve(a: &mut [f64], n: usize, b: &mut [f64]) -> bool {
         a[j * n + j] = d;
         for i in j + 1..n {
             let mut s = a[i * n + j];
-            for k in 0..j {
+            for &k in &nonzero {
                 s -= a[i * n + k] * a[j * n + k];
             }
             a[i * n + j] = s / d;
@@ -1088,6 +1097,84 @@ fn drive_steps(joint: &Joint, value: f64, slide: f64) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cholesky_skipping_zeros_matches_the_full_sums_exactly() {
+        // Like an assembly's normal equations: parts in a chain and a few on a hub, 6 unknowns
+        // each, every joint adding a dense block between its two parts.
+        let (parts, n) = (20, 120);
+        let mut a = vec![0.0; n * n];
+        let mut seed = 1u64;
+        let mut next = || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64 - 0.5
+        };
+        let joints: Vec<(usize, usize)> = (1..parts)
+            .map(|i| (i - 1, i))
+            .chain([(3, 11), (3, 15), (7, 19)])
+            .collect();
+        for (p, q) in joints {
+            let cols: Vec<usize> = (0..6)
+                .map(|k| 6 * p + k)
+                .chain((0..6).map(|k| 6 * q + k))
+                .collect();
+            let rows: Vec<Vec<f64>> = (0..3)
+                .map(|_| cols.iter().map(|_| next()).collect())
+                .collect();
+            for (x, &i) in cols.iter().enumerate() {
+                for (y, &j) in cols.iter().enumerate() {
+                    a[i * n + j] += rows.iter().map(|r| r[x] * r[y]).sum::<f64>();
+                }
+            }
+        }
+        for i in 0..n {
+            a[i * n + i] += 1e-6;
+        }
+        let b: Vec<f64> = (0..n).map(|_| next()).collect();
+        // The full sums, as the factor was computed before.
+        let (mut full, mut x) = (a.clone(), b.clone());
+        for j in 0..n {
+            let mut d = full[j * n + j];
+            for k in 0..j {
+                d -= full[j * n + k] * full[j * n + k];
+            }
+            let d = d.sqrt();
+            full[j * n + j] = d;
+            for i in j + 1..n {
+                let mut s = full[i * n + j];
+                for k in 0..j {
+                    s -= full[i * n + k] * full[j * n + k];
+                }
+                full[i * n + j] = s / d;
+            }
+        }
+        for i in 0..n {
+            let mut s = x[i];
+            for k in 0..i {
+                s -= full[i * n + k] * x[k];
+            }
+            x[i] = s / full[i * n + i];
+        }
+        for i in (0..n).rev() {
+            let mut s = x[i];
+            for k in i + 1..n {
+                s -= full[k * n + i] * x[k];
+            }
+            x[i] = s / full[i * n + i];
+        }
+        let (mut sparse, mut y) = (a, b);
+        assert!(cholesky_solve(&mut sparse, n, &mut y));
+        let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&y), bits(&x));
+        let lower = |m: &[f64]| {
+            (0..n)
+                .flat_map(|i| (0..=i).map(move |k| m[i * n + k].to_bits()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(lower(&sparse), lower(&full));
+    }
 
     #[test]
     fn cholesky_solves_a_small_system() {
