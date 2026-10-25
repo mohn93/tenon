@@ -156,6 +156,41 @@ struct GBuffer {
     byte_length: u64,
 }
 
+/// Most objects a glTF's JSON may hold, and most values its arrays may hold in all: each
+/// becomes a few hundred bytes at most once read, so a small file cannot ask for gigabytes.
+const MAX_JSON_OBJECTS: usize = 1_000_000;
+const MAX_JSON_VALUES: usize = 8_000_000;
+
+/// Fails when `json` holds more objects or array values than the limits (strings are skipped).
+fn check_json_size(json: &[u8]) -> Result<(), String> {
+    let (mut objects, mut values) = (0usize, 0usize);
+    let (mut in_string, mut escaped) = (false, false);
+    for &b in json {
+        if in_string {
+            match b {
+                _ if escaped => escaped = false,
+                b'\\' => escaped = true,
+                b'"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'{' => objects += 1,
+            b'[' | b',' => values += 1,
+            _ => {}
+        }
+    }
+    if objects > MAX_JSON_OBJECTS || values > MAX_JSON_VALUES {
+        return Err(format!(
+            "the file's JSON holds too many items (at most {MAX_JSON_OBJECTS} objects and \
+             {MAX_JSON_VALUES} values)"
+        ));
+    }
+    Ok(())
+}
+
 /// A `.glb`'s JSON chunk and BIN chunk.
 type Chunks<'a> = (&'a [u8], Option<&'a [u8]>);
 
@@ -206,6 +241,7 @@ pub(crate) fn read_gltf(bytes: &[u8], side: &SideFiles) -> Result<ReadScene, Str
         Some(chunks) => chunks?,
         None => (bytes, None),
     };
+    check_json_size(json)?;
     let doc: Gltf = serde_json::from_slice(json).map_err(|e| format!("not a glTF file ({e})"))?;
     let version = doc
         .asset

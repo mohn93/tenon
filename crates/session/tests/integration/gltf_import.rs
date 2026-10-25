@@ -314,6 +314,44 @@ fn broken_and_hostile_files_are_refused_and_change_nothing() {
     assert_eq!(err.0, ErrorKind::File, "{}", err.1);
 }
 
+#[test]
+fn a_small_file_asking_for_millions_of_items_is_refused_before_they_are_read() {
+    // A few megabytes of empty objects would be hundreds of megabytes once read.
+    let objects = vec!["{}"; 1_100_000].join(",");
+    let text = format!(r#"{{"asset":{{"version":"2.0"}},"accessors":[{objects}]}}"#);
+    let path = scratch("many.gltf");
+    std::fs::write(&path, text).unwrap();
+    let err = run(
+        &mut doc(),
+        json!({"type": "import", "path": path.to_str().unwrap()}),
+    )
+    .unwrap_err();
+    assert_eq!(err.0, ErrorKind::File, "{}", err.1);
+    assert!(err.1.contains("too many items"), "{}", err.1);
+    // Values in arrays count too; strings (data URIs) do not.
+    let values = vec!["0"; 8_100_000].join(",");
+    let text = format!(r#"{{"asset":{{"version":"2.0"}},"extras":[{values}]}}"#);
+    std::fs::write(&path, text).unwrap();
+    let err = run(
+        &mut doc(),
+        json!({"type": "import", "path": path.to_str().unwrap()}),
+    )
+    .unwrap_err();
+    assert!(err.1.contains("too many items"), "{}", err.1);
+    let text = format!(
+        r#"{{"asset":{{"version":"2.0"}},"extras":"{}"}}"#,
+        ",[{".repeat(3_000_000)
+    );
+    std::fs::write(&path, text).unwrap();
+    // Read through to the end: it holds nothing to import.
+    let err = run(
+        &mut doc(),
+        json!({"type": "import", "path": path.to_str().unwrap()}),
+    )
+    .unwrap_err();
+    assert!(err.1.contains("nothing to import"), "{}", err.1);
+}
+
 /// A 2 x 2 x 1 box with its top painted red, and a cylinder whose sides are soft.
 fn model(d: &mut Document) {
     run(
