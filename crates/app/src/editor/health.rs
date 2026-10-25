@@ -61,6 +61,12 @@ impl Editor {
     /// Checks the selected groups and components (all of the open context's when none is
     /// selected) and opens the window with the parts that are not solids.
     pub fn check_health(&mut self) -> bool {
+        if !self.doc.context().is_empty() {
+            self.message = Some(Message::error(
+                "Close the open group or component to check model health",
+            ));
+            return true;
+        }
         let selected = self.doc.selection().len();
         let ids: Vec<EntityId> = self
             .doc
@@ -274,6 +280,27 @@ mod tests {
         assert!(e.make_solid_from_window());
         assert!(e.health_window().unwrap().rows.is_empty());
         assert_eq!(e.doc().undo_label(), Some("make_solid"));
+    }
+
+    #[test]
+    fn check_is_refused_inside_an_open_group() {
+        let mut e = editor();
+        let a = add_box(&mut e, 0.0);
+        e.execute(Command::OpenInstance { id: a }).unwrap();
+        assert!(e.check_health());
+        assert!(e.health_window().is_none());
+        assert!(e.status().contains("Close the open"), "{}", e.status());
+    }
+
+    #[test]
+    fn a_new_document_drops_the_window() {
+        let mut e = editor();
+        let bad = add_box(&mut e, 0.0);
+        break_box(&mut e, bad);
+        e.check_health();
+        assert!(e.health_window().is_some());
+        e.document_replaced();
+        assert!(e.health_window().is_none());
     }
 
     #[test]
