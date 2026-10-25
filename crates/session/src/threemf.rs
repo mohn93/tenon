@@ -129,13 +129,17 @@ fn escape(s: &str) -> String {
     out
 }
 
-/// The package holding `parts` (name and triangles in meters), with a report per object.
-/// Materials are looked up in `scene`.
+/// The package holding `parts` (name and triangles in meters), with a report per part. A
+/// part whose triangles all collapse is reported but not written (an object needs
+/// triangles); when no part is left that is an error. Materials are looked up in `scene`.
 pub(crate) fn encode(
     scene: &Scene,
     parts: &[(String, Vec<Triangle>)],
 ) -> Result<(Vec<u8>, Vec<ExportObject>), String> {
     let meshes: Vec<Mesh> = parts.iter().map(|(_, t)| weld(t)).collect();
+    if meshes.iter().all(|m| m.triangles.is_empty()) {
+        return Err("nothing to export: every triangle collapses to a line".to_string());
+    }
     // The base materials: each one used, in first-use order; None is the default.
     let mut used: Vec<Option<MaterialId>> = Vec::new();
     for mesh in &meshes {
@@ -177,8 +181,21 @@ pub(crate) fn encode(
         xml.push_str("</basematerials>\n");
     }
     let mut objects = Vec::new();
-    for (i, ((name, _), mesh)) in parts.iter().zip(&meshes).enumerate() {
-        let id = i + 2;
+    let mut ids = Vec::new();
+    for ((name, _), mesh) in parts.iter().zip(&meshes) {
+        let why = open_reason(mesh);
+        objects.push(ExportObject {
+            name: name.clone(),
+            vertices: mesh.vertices.len(),
+            triangles: mesh.triangles.len(),
+            closed: why.is_none(),
+            why,
+        });
+        if mesh.triangles.is_empty() {
+            continue;
+        }
+        let id = ids.len() + 2;
+        ids.push(id);
         // The object's own color is its most used one.
         let mut counts = vec![0usize; used.len()];
         for (_, m) in &mesh.triangles {
@@ -210,18 +227,10 @@ pub(crate) fn encode(
             );
         }
         xml.push_str("</triangles>\n</mesh>\n</object>\n");
-        let why = open_reason(mesh);
-        objects.push(ExportObject {
-            name: name.clone(),
-            vertices: mesh.vertices.len(),
-            triangles: mesh.triangles.len(),
-            closed: why.is_none(),
-            why,
-        });
     }
     xml.push_str("</resources>\n<build>\n");
-    for i in 0..parts.len() {
-        let _ = writeln!(xml, "<item objectid=\"{}\"/>", i + 2);
+    for id in ids {
+        let _ = writeln!(xml, "<item objectid=\"{id}\"/>");
     }
     xml.push_str("</build>\n</model>\n");
 
@@ -240,4 +249,47 @@ pub(crate) fn encode(
         zip.finish().map_err(|e| e.to_string())?.into_inner(),
         objects,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use glam::{DVec2, DVec3};
+
+    use super::*;
+
+    fn triangle(corners: [DVec3; 3]) -> Triangle {
+        Triangle {
+            corners,
+            normal: DVec3::Z,
+            normals: [DVec3::Z; 3],
+            uvs: [DVec2::ZERO; 3],
+            front: None,
+            back: None,
+        }
+    }
+
+    #[test]
+    fn a_part_whose_triangles_all_collapse_is_not_written() {
+        // Two corners within a nanometer weld into one.
+        let line = triangle([DVec3::ZERO, DVec3::X, DVec3::X + DVec3::Y * 1e-13]);
+        let flat = triangle([DVec3::ZERO, DVec3::X, DVec3::Y]);
+        let parts = vec![
+            ("Sliver".to_string(), vec![line]),
+            ("Sheet".to_string(), vec![flat]),
+        ];
+        let (bytes, objects) = encode(&Scene::new(), &parts).unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut xml = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("3D/3dmodel.model").unwrap(), &mut xml)
+            .unwrap();
+        // Every object written holds triangles, and every build item names one.
+        assert_eq!(xml.matches("<object ").count(), 1, "{xml}");
+        assert!(!xml.contains("<triangles>\n</triangles>"), "{xml}");
+        assert!(xml.contains("<item objectid=\"2\"/>") && !xml.contains("objectid=\"3\""));
+        assert_eq!(objects.len(), 2);
+        assert_eq!(objects[0].why.as_deref(), Some("it has no triangles"));
+        assert_eq!(objects[1].name, "Sheet");
+        // Nothing but collapsed triangles is nothing to write.
+        assert!(encode(&Scene::new(), &parts[..1]).is_err());
+    }
 }

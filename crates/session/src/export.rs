@@ -118,7 +118,8 @@ pub struct ExportReport {
     /// SVG: polylines drawn (visible edges and cut edges). Absent when 0.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub lines: usize,
-    /// 3MF: one entry per object written, in file order. Absent when empty.
+    /// 3MF: one entry per part, in file order (a part without triangles is listed but not
+    /// written). Absent when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub objects: Vec<ExportObject>,
     /// What the file could not hold (glowing materials, curves, empty groups; for every
