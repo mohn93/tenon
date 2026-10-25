@@ -47,6 +47,15 @@ impl Document {
         Ok(to_csv(&self.cut_list_root()?, &self.units))
     }
 
+    /// The open context's cut list (every instance, grouped by definition, as the Cut List
+    /// window shows it) as CSV in the display units.
+    pub fn cut_list_text(&self) -> Result<String, CommandError> {
+        Ok(to_csv(
+            &self.cut_list(&[], CutListGrouping::Definition)?,
+            &self.units,
+        ))
+    }
+
     fn cut_rows(
         &self,
         mesh: &kernel::Model,

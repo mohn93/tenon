@@ -1,6 +1,8 @@
 //! Tools > Cut List: the `cut_list` query on the open context shown in a window, in the
 //! model's display units, with the rows selecting their parts and the list exportable as CSV.
 
+use std::path::Path;
+
 use kernel::{EntityId, InstanceId};
 use session::cutlist::{header, table_cells};
 use session::{Command, CutListGrouping, Query, QueryResult, SelectMode};
@@ -95,6 +97,36 @@ impl Editor {
             revision: self.doc.revision(),
             context: self.doc.context().to_vec(),
         })
+    }
+
+    /// The window's Export CSV where files have no path: the open context's cut list (what
+    /// the window shows) as the bytes of `name`. None, with the status saying why, on failure.
+    pub fn cut_list_bytes(&mut self, name: &str) -> Option<Vec<u8>> {
+        match self.doc.cut_list_text() {
+            Ok(text) => {
+                self.message = Some(Message::info(format!("Exported {name}")));
+                Some(text.into_bytes())
+            }
+            Err(e) => {
+                self.message = Some(Message::error(e.message));
+                None
+            }
+        }
+    }
+
+    /// The window's Export CSV: writes the open context's cut list (what the window shows) to
+    /// `path`. False, with the status saying why, on failure.
+    pub fn write_cut_list(&mut self, path: &Path) -> bool {
+        match self.doc.write_cut_list(path) {
+            Ok(()) => {
+                self.message = Some(Message::info(format!("Exported {}", path.display())));
+                true
+            }
+            Err(e) => {
+                self.message = Some(Message::error(e.message));
+                false
+            }
+        }
     }
 
     /// Selects the parts of row `index` of the window and zooms to them.

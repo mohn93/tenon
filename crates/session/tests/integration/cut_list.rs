@@ -376,3 +376,30 @@ fn the_csv_export_escapes_names_and_follows_the_display_units() {
     assert!(d.execute(cmd).is_err());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
 }
+
+#[test]
+fn the_open_contexts_cut_list_is_written_as_the_window_shows_it() {
+    let mut d = doc();
+    let shelf = top(&mut d);
+    let cabinet = run(
+        &mut d,
+        json!({"type": "make_group", "ids": [shelf], "name": "Cabinet"}),
+    )["placed"][0]
+        .clone();
+    board(&mut d);
+    run(&mut d, json!({"type": "open_instance", "id": cabinet}));
+    let text = d.cut_list_text().unwrap();
+    assert!(text.contains("\r\nTop,"), "{text}");
+    assert!(!text.contains("Board"), "only the open context: {text}");
+    let path = scratch("context.csv");
+    std::fs::write(&path, "not a cut list").unwrap();
+    d.write_cut_list(&path).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    // The export command still writes the whole model.
+    let whole = scratch("whole.csv");
+    run(
+        &mut d,
+        json!({"type": "export", "path": whole.to_str().unwrap()}),
+    );
+    assert!(std::fs::read_to_string(&whole).unwrap().contains("Board"));
+}

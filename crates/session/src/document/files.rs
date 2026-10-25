@@ -662,6 +662,14 @@ impl Document {
         Ok(ExportReport::default())
     }
 
+    /// Writes the open context's cut list (see `cut_list_text`) to `path`, replacing what is
+    /// there: the window's Export CSV, whose file dialog asked first.
+    pub fn write_cut_list(&self, path: &Path) -> Result<(), CommandError> {
+        let text = self.cut_list_text()?;
+        file::replace_file(path, text.as_bytes(), Access::Default)
+            .map_err(|e| file_error(&path.display().to_string(), e))
+    }
+
     /// Writes the current view as a line drawing in SVG (see `drawing` and `svg`): in pixels at
     /// the viewport's size, or with `scale` (1:N, a parallel view) in millimetres.
     fn export_svg(
