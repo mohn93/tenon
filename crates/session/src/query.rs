@@ -118,6 +118,16 @@ pub enum Query {
         #[serde(default)]
         report_within: Option<f64>,
     },
+    /// Which of the open context's groups and components (`ids`; every one when empty) are
+    /// not solids and why: each part with every definition it places at any depth, each
+    /// definition's own geometry checked for open edges, edges shared by more than two faces,
+    /// stray edges, faces turned inside out, tiny gaps, internal faces and no volume. Only
+    /// parts that are not solids are listed; `fixable` says whether `make_solid` would close
+    /// them. Never changes the model.
+    ModelHealth {
+        #[serde(default)]
+        ids: Vec<EntityId>,
+    },
     Camera {},
     /// Where the model stands (see `set_location`).
     Location {},
@@ -184,6 +194,48 @@ pub enum Query {
     Library {
         folder: String,
     },
+}
+
+/// What a `model_health` problem is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProblemKind {
+    /// Edges bounding exactly one face.
+    OpenEdges,
+    /// Edges bounding more than two faces.
+    SharedEdges,
+    /// Edges bounding no face.
+    StrayEdges,
+    /// Faces turned inside out.
+    ReversedFaces,
+    /// Vertices on open edges nearer each other than the weld tolerance, in pairs.
+    Gaps,
+    /// Faces every one of whose edges bounds three or more faces.
+    InternalFaces,
+    /// Closed, but enclosing no volume.
+    NoVolume,
+    /// The part has no faces at all.
+    NoFaces,
+}
+
+/// One problem in the own geometry of `definition`: `ids` are its entities (edges, faces, or
+/// vertex pairs for `gaps`; empty for `no_volume` and `no_faces`), `text` says it in words.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct HealthProblem {
+    pub definition: DefinitionId,
+    pub kind: ProblemKind,
+    pub ids: Vec<EntityId>,
+    pub text: String,
+}
+
+/// A part that is not a solid: the instance, its definition's name, whether `make_solid`
+/// would close it and its problems, definition by definition.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct HealthPart {
+    pub id: EntityId,
+    pub name: String,
+    pub fixable: bool,
+    pub problems: Vec<HealthProblem>,
 }
 
 /// Most parts a `clearance` query compares pairwise.
@@ -1015,6 +1067,13 @@ pub enum QueryResult {
         skipped: Vec<SkippedPart>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         failed: Vec<FailedPair>,
+        revision: u64,
+    },
+    /// The `model_health` query: the parts that are not solids, in order; `checked` parts
+    /// in all.
+    ModelHealth {
+        parts: Vec<HealthPart>,
+        checked: usize,
         revision: u64,
     },
     /// The `clearance` query: one entry per pair of solid parts, in the order asked.

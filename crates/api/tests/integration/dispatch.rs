@@ -275,6 +275,7 @@ fn describe_lists_methods_and_schemas() {
         "solid_trim",
         "solid_split",
         "outer_shell",
+        "make_solid",
         "chamfer_edges",
         "fillet_edges",
         "paste",
@@ -311,6 +312,7 @@ fn describe_lists_methods_and_schemas() {
         "section_planes",
         "section_display",
         "interference",
+        "model_health",
         "clearance",
         "sweep_check",
     ] {

@@ -839,6 +839,7 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::SolidUnion { ids }
         | Command::SolidIntersect { ids }
         | Command::OuterShell { ids }
+        | Command::MakeSolid { ids }
         | Command::PositionTexture { ids, .. }
         | Command::SetTag { ids, .. }
         | Command::Select { ids, .. } => f(Slot::List(ids)),

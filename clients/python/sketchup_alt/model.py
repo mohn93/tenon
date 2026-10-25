@@ -650,6 +650,23 @@ class Model:
             q["report_within"] = report_within
         return self.client.query("sweep_check", **q)
 
+    def model_health(self, ids=None):
+        """Which parts (``ids``, every group and component when None) are not solids and why:
+        the reply's ``parts``, each with ``fixable`` and ``problems``."""
+        q = {}
+        if ids is not None:
+            q["ids"] = _ids(ids)
+        return self.client.query("model_health", **q)["parts"]
+
+    def make_solid(self, ids=None):
+        """Close the parts ``ids`` (every group and component when None) where that is safe, as
+        one undo step; returns the report (``entries`` per definition that was not a solid,
+        ``solid`` the count that were)."""
+        cmd = {"type": "make_solid"}
+        if ids is not None:
+            cmd["ids"] = _ids(ids)
+        return self.client.execute(cmd)["make_solid"]
+
     def mass_properties(self, ids=None):
         """Volume, mass, centre of gravity and inertia of ``ids`` (every instance when None)."""
         q = {}

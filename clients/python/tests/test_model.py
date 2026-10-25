@@ -252,6 +252,25 @@ class ModelTests(unittest.TestCase):
         self.assertTrue(close(mp["total"]["centroid"], (0.5, 0.5, 0.5), 1e-6))
         self.assertAlmostEqual(self.m.mass_properties()["total"]["volume"], 3.0, places=6)
 
+    def test_model_health_and_make_solid(self):
+        good = self.m.box((0, 0, 0), (1, 1, 1))
+        bad = self.m.box((3, 0, 0), (1, 1, 1))
+        self.assertEqual(self.m.model_health(), [])
+        self.client.execute({"type": "open_path", "path": [bad.id]})
+        faces = self.client.query("entities", kinds=["face"])["faces"]
+        top = next(f["id"] for f in faces if f["normal"][2] > 0.5)
+        self.client.execute({"type": "erase", "ids": [top]})
+        self.client.execute({"type": "open_path", "path": []})
+        parts = self.m.model_health()
+        self.assertEqual([p["id"] for p in parts], [bad.id])
+        self.assertTrue(parts[0]["fixable"])
+        self.assertEqual(parts[0]["problems"][0]["kind"], "open_edges")
+        r = self.m.make_solid()
+        self.assertEqual(r["solid"], 1)
+        self.assertTrue(r["entries"][0]["fixed"])
+        self.assertEqual(r["entries"][0]["holes_filled"], 1)
+        self.assertEqual(self.m.model_health([good, bad]), [])
+
     def test_sweep_check_and_measure(self):
         base = self.m.box((-1, -1, -1), (2, 2, 0.5))
         arm = self.m.box((0, -0.1, 0), (1.5, 0.2, 0.2))

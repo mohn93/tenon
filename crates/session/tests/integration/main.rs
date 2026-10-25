@@ -24,6 +24,7 @@ mod finish;
 mod follow_me;
 mod groups;
 mod guides;
+mod health;
 mod helix;
 mod hide;
 mod history_origin;

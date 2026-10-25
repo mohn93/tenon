@@ -1161,6 +1161,18 @@ pub enum Command {
     /// them) are dropped. A single solid with a void inside becomes the solid without it.
     /// Placed and erased as `solid_union`.
     OuterShell { ids: Vec<EntityId> },
+    /// Close the groups and components `ids` (of the open context; every one when empty)
+    /// where that is safe, as one undo step: each definition they place at any depth that is
+    /// not a solid is repaired once (so every instance of a component is fixed) by welding
+    /// vertices across tiny gaps, removing stray edges and internal faces, making faces agree,
+    /// filling flat holes and turning closed shells outward. A definition changes only when
+    /// it is a solid afterwards; otherwise it is left as it was and the report says what is
+    /// left and why. Solids are never changed; nothing to change makes no undo step. The
+    /// outcome's `make_solid` reports each definition.
+    MakeSolid {
+        #[serde(default)]
+        ids: Vec<EntityId>,
+    },
     /// Chamfer straight edges of a solid, as one undo step: each edge in `edges` becomes a
     /// flat face set back `distance` meters (more than 0.000001, measured in the edited mesh's
     /// own coordinates) on both faces beside it. A convex edge loses material, a concave one
@@ -1789,6 +1801,33 @@ pub struct OrientOutcome {
     pub conflicts: usize,
 }
 
+/// What a `make_solid` did.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MakeSolidReport {
+    /// One entry per definition that was not a solid, in the order the parts reach them.
+    pub entries: Vec<MakeSolidEntry>,
+    /// How many of the definitions were solids already (left untouched).
+    pub solid: usize,
+}
+
+/// What `make_solid` did to one definition: when `fixed`, what it changed; otherwise the
+/// problems still found after trying (`left`) and why it stopped (`reasons`), the definition
+/// left as it was.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MakeSolidEntry {
+    pub definition: DefinitionId,
+    /// The parts named (or all) that place it.
+    pub parts: Vec<EntityId>,
+    pub fixed: bool,
+    pub welded: usize,
+    pub strays_removed: usize,
+    pub internal_removed: usize,
+    pub holes_filled: usize,
+    pub faces_flipped: usize,
+    pub left: Vec<crate::query::HealthProblem>,
+    pub reasons: Vec<String>,
+}
+
 /// What a successful command changed.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Outcome {
@@ -1806,6 +1845,9 @@ pub struct Outcome {
     /// What an `orient_faces` turned over; absent for other commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orient: Option<OrientOutcome>,
+    /// What a `make_solid` fixed and could not; absent for other commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub make_solid: Option<MakeSolidReport>,
     /// What an `intersect_faces` drew and split; absent for other commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intersect: Option<IntersectReport>,
