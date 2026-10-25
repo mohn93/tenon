@@ -147,6 +147,13 @@ impl SideFiles<'_> {
         if name.split(['/', '\\']).any(|part| part == "..") {
             return Err("it names a file outside this one's folder".into());
         }
+        // Refused everywhere, so a file reads alike on every system: on Windows `C:x` is
+        // relative to another folder and `a:b` names a stream.
+        if let Some(why) = crate::fspath::windows_refusal(&name) {
+            return Err(format!(
+                "it names {why}, which may lie outside this file's folder"
+            ));
+        }
         let Some(folder) = self.folder else {
             return Err("a file read from memory has no folder to read it from".into());
         };
@@ -182,7 +189,7 @@ fn data_uri(data: &str, limit: u64) -> Result<Vec<u8>, String> {
         }
         Ok(bytes)
     } else {
-        let bytes = percent_decode(body).into_bytes();
+        let bytes = percent_decode_bytes(body);
         if bytes.len() as u64 > limit {
             return Err(too_large());
         }
@@ -190,8 +197,13 @@ fn data_uri(data: &str, limit: u64) -> Result<Vec<u8>, String> {
     }
 }
 
-/// `%XX` escapes decoded; anything else as it is.
+/// `%XX` escapes decoded, as text (a file name).
 fn percent_decode(s: &str) -> String {
+    String::from_utf8_lossy(&percent_decode_bytes(s)).into_owned()
+}
+
+/// `%XX` escapes decoded; anything else as it is.
+fn percent_decode_bytes(s: &str) -> Vec<u8> {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -210,7 +222,7 @@ fn percent_decode(s: &str) -> String {
             i += 1;
         }
     }
-    String::from_utf8_lossy(&out).into_owned()
+    out
 }
 
 /// A linear color component (0 to 1, clamped) as an sRGB byte.
@@ -792,6 +804,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("side-files-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         std::fs::write(dir.join("sub/a b.bin"), b"abc").unwrap();
+        // Names Windows would read as another place, present so only the refusal stops them.
+        for name in ["C:x.bin", "sub/a:b.bin", "sub/NUL.bin"] {
+            std::fs::write(dir.join(name), b"abc").unwrap();
+        }
         let side = SideFiles {
             folder: Some(&dir),
             roots: None,
@@ -812,6 +828,10 @@ mod tests {
             "http://example.com/x.bin",
             "file:///etc/passwd",
             "C:/x.bin",
+            // Drive-relative and alternate data streams once decoded, as Windows reads them.
+            "C%3Ax.bin",
+            "sub/a%3Ab.bin",
+            "sub/NUL.bin",
         ] {
             assert!(side.read(refused, 10).is_err(), "{refused}");
         }
@@ -821,6 +841,7 @@ mod tests {
             b"abc"
         );
         assert_eq!(side.read("data:,a%20b", 10).unwrap(), b"a b");
+        assert_eq!(side.read("data:,%FF%00", 10).unwrap(), [0xFF, 0x00]);
         assert!(side.read("data:;base64,YWJjZGVm", 3).is_err());
         let memory = SideFiles {
             folder: None,
