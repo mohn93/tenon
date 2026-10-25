@@ -11,10 +11,9 @@ use serde_json::Value;
 
 use crate::import::{MAX_IMPORT_BYTES, MAX_IMPORT_POINTS, MAX_IMPORT_POLYGONS};
 use crate::scene_read::{
-    FileUp, IMAGE_MISSING, IMAGE_REFUSED, MAX_SCENE_ITEMS, MAX_SCENE_NODES, ReadScene,
-    SceneMaterial, SceneMesh, SceneNode, ScenePolygon, SideFiles, counted, srgb_byte,
+    FileUp, IMAGE_MISSING, ImageBudget, MAX_SCENE_ITEMS, MAX_SCENE_NODES, ReadScene, SceneMaterial,
+    SceneMesh, SceneNode, ScenePolygon, SideFiles, counted, srgb_byte,
 };
-use crate::texture::MAX_TEXTURE_BYTES;
 
 /// Extensions a file may require that change nothing this reader reads.
 const HARMLESS: [&str; 5] = [
@@ -288,6 +287,7 @@ pub(crate) fn read_gltf(bytes: &[u8], side: &SideFiles) -> Result<ReadScene, Str
     let mut uv_set: Vec<Option<usize>> = vec![None; doc.materials.len()];
     let mut materials = Vec::with_capacity(doc.materials.len());
     let mut image_cache: BTreeMap<usize, Result<Vec<u8>, &'static str>> = BTreeMap::new();
+    let mut budget = ImageBudget::default();
     for (i, m) in doc.materials.iter().enumerate() {
         let f = m.pbr_metallic_roughness.base_color_factor;
         let image = m
@@ -300,7 +300,7 @@ pub(crate) fn read_gltf(bytes: &[u8], side: &SideFiles) -> Result<ReadScene, Str
                 Some(
                     image_cache
                         .entry(source)
-                        .or_insert_with(|| data.image(source, side))
+                        .or_insert_with(|| data.image(source, side, &mut budget))
                         .clone(),
                 )
             });
@@ -694,19 +694,93 @@ impl Data<'_> {
     }
 
     /// Image `i`'s file bytes, from its buffer view or URI, or why they could not be read.
-    fn image(&self, i: usize, side: &SideFiles) -> Result<Vec<u8>, &'static str> {
+    fn image(
+        &self,
+        i: usize,
+        side: &SideFiles,
+        budget: &mut ImageBudget,
+    ) -> Result<Vec<u8>, &'static str> {
         let image = self.doc.images.get(i).ok_or(IMAGE_MISSING)?;
         if let Some(v) = image.buffer_view {
             let (bytes, _) = self.view(v).map_err(|_| IMAGE_MISSING)?;
-            return Ok(bytes.to_vec());
+            return budget.keep(bytes);
         }
         let uri = image.uri.as_deref().ok_or(IMAGE_MISSING)?;
-        side.read(uri, MAX_TEXTURE_BYTES).map_err(|e| {
-            if e.contains("URL") || e.contains("absolute") || e.contains("outside") {
-                IMAGE_REFUSED
-            } else {
-                IMAGE_MISSING
-            }
+        budget.read(side, uri)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene_read::{IMAGE_OVERSIZE, IMAGES_TOO_LARGE, MAX_SCENE_IMAGE_BYTES};
+
+    #[test]
+    fn many_images_naming_one_large_file_do_not_each_hold_a_copy() {
+        let dir = std::env::temp_dir().join(format!("gltf-images-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let big = 10 * 1024 * 1024;
+        std::fs::write(dir.join("big.png"), vec![0u8; big]).unwrap();
+        let n = 20;
+        let json = serde_json::json!({
+            "asset": {"version": "2.0"},
+            "images": vec![serde_json::json!({"uri": "big.png"}); n],
+            "textures": (0..n).map(|i| serde_json::json!({"source": i})).collect::<Vec<_>>(),
+            "materials": (0..n)
+                .map(|i| serde_json::json!({"pbrMetallicRoughness": {"baseColorTexture": {"index": i}}}))
+                .collect::<Vec<_>>(),
+        });
+        let side = SideFiles {
+            folder: Some(&dir),
+            roots: None,
+        };
+        let scene = read_gltf(json.to_string().as_bytes(), &side).unwrap();
+        let kept: u64 = scene
+            .materials
+            .iter()
+            .filter_map(|m| m.image.as_ref()?.as_ref().ok())
+            .map(|b| b.len() as u64)
+            .sum();
+        assert!(kept <= MAX_SCENE_IMAGE_BYTES, "{kept}");
+        assert_eq!(kept, 12 * big as u64);
+        assert_eq!(
+            scene.materials[n - 1].image,
+            Some(Err(IMAGES_TOO_LARGE)),
+            "past the budget"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        // An image in the file's own buffer over the texture limit is not copied.
+        let bytes = vec![0u8; 17 * 1024 * 1024];
+        let json = serde_json::json!({
+            "asset": {"version": "2.0"},
+            "buffers": [{"byteLength": bytes.len()}],
+            "bufferViews": [{"buffer": 0, "byteLength": bytes.len()}],
+            "images": [{"bufferView": 0}],
+            "textures": [{"source": 0}],
+            "materials": [{"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}],
         })
+        .to_string();
+        let mut json = json.into_bytes();
+        while json.len() % 4 != 0 {
+            json.push(b' ');
+        }
+        let mut glb = Vec::new();
+        let total = 12 + 8 + json.len() + 8 + bytes.len();
+        glb.extend_from_slice(b"glTF");
+        glb.extend_from_slice(&2u32.to_le_bytes());
+        glb.extend_from_slice(&(total as u32).to_le_bytes());
+        glb.extend_from_slice(&(json.len() as u32).to_le_bytes());
+        glb.extend_from_slice(&0x4E4F_534Au32.to_le_bytes());
+        glb.extend_from_slice(&json);
+        glb.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        glb.extend_from_slice(&0x004E_4942u32.to_le_bytes());
+        glb.extend_from_slice(&bytes);
+        let memory = SideFiles {
+            folder: None,
+            roots: None,
+        };
+        let scene = read_gltf(&glb, &memory).unwrap();
+        assert_eq!(scene.materials[0].image, Some(Err(IMAGE_OVERSIZE)));
     }
 }

@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 use base64::Engine;
 use glam::{DAffine3, DMat3, DMat4, DVec2, DVec3};
 use kernel::geom::vector_area;
+
+use crate::texture::MAX_TEXTURE_BYTES;
 use kernel::{
     DefinitionKind, ImportDefinition, ImportFace, ImportGeometry, ImportInstance, ImportTree,
     MAX_TEXTURE_OFFSET, MAX_TEXTURE_SCALE, MAX_TEXTURE_SIZE, MIN_DETERMINANT, MIN_TEXTURE_SCALE,
@@ -115,6 +117,62 @@ pub(crate) struct SceneNode {
 pub(crate) const IMAGE_MISSING: &str = "the image file could not be read";
 pub(crate) const IMAGE_REFUSED: &str =
     "the image is not beside the file (an absolute path, a path out of its folder or a URL)";
+
+/// Why a texture image was not read: too large on its own, or past what the file's images
+/// may hold together.
+pub(crate) const IMAGE_OVERSIZE: &str = "the image is over 16 MiB or 4096 pixels a side";
+pub(crate) const IMAGES_TOO_LARGE: &str = "the file's images together hold over 128 MiB";
+
+/// Most bytes of images one scene file may bring in, all told: many images naming one large
+/// file must not each hold a copy.
+pub(crate) const MAX_SCENE_IMAGE_BYTES: u64 = 128 * 1024 * 1024;
+
+/// What is left of a scene file's image bytes (see `MAX_SCENE_IMAGE_BYTES`).
+pub(crate) struct ImageBudget(u64);
+
+impl Default for ImageBudget {
+    fn default() -> Self {
+        ImageBudget(MAX_SCENE_IMAGE_BYTES)
+    }
+}
+
+impl ImageBudget {
+    /// The image file `uri` names (see `SideFiles::read`), at most `MAX_TEXTURE_BYTES` and
+    /// what is left, or why it could not be read.
+    pub fn read(&mut self, side: &SideFiles, uri: &str) -> Result<Vec<u8>, &'static str> {
+        let limit = MAX_TEXTURE_BYTES.min(self.0);
+        match side.read(uri, limit) {
+            Ok(bytes) => {
+                self.0 -= bytes.len() as u64;
+                Ok(bytes)
+            }
+            Err(e) if e.contains("too large") || e.contains("holds over") => {
+                Err(if limit < MAX_TEXTURE_BYTES {
+                    IMAGES_TOO_LARGE
+                } else {
+                    IMAGE_OVERSIZE
+                })
+            }
+            Err(e) if e.contains("URL") || e.contains("absolute") || e.contains("outside") => {
+                Err(IMAGE_REFUSED)
+            }
+            Err(_) => Err(IMAGE_MISSING),
+        }
+    }
+
+    /// A copy of image `bytes` held in the file itself, or why it is not kept.
+    pub fn keep(&mut self, bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
+        let n = bytes.len() as u64;
+        if n > MAX_TEXTURE_BYTES {
+            return Err(IMAGE_OVERSIZE);
+        }
+        if n > self.0 {
+            return Err(IMAGES_TOO_LARGE);
+        }
+        self.0 -= n;
+        Ok(bytes.to_vec())
+    }
+}
 
 /// Where a scene file's side files (buffers, images) are read from.
 pub(crate) struct SideFiles<'a> {

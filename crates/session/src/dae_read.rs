@@ -11,10 +11,9 @@ use roxmltree::{Document, Node, NodeId, ParsingOptions};
 
 use crate::import::{MAX_IMPORT_POINTS, MAX_IMPORT_POLYGONS};
 use crate::scene_read::{
-    FileUp, IMAGE_MISSING, IMAGE_REFUSED, MAX_SCENE_DEPTH, MAX_SCENE_ITEMS, MAX_SCENE_NODES,
+    FileUp, IMAGE_MISSING, ImageBudget, MAX_SCENE_DEPTH, MAX_SCENE_ITEMS, MAX_SCENE_NODES,
     ReadScene, SceneMaterial, SceneMesh, SceneNode, ScenePolygon, SideFiles, counted,
 };
-use crate::texture::MAX_TEXTURE_BYTES;
 
 /// Most XML nodes (elements and text) a COLLADA file may have. Geometry lies in the text of
 /// a few elements, so real files hold far fewer; each node takes tens of bytes once parsed.
@@ -133,6 +132,7 @@ pub(crate) fn read_dae(bytes: &[u8], side: &SideFiles) -> Result<ReadScene, Stri
         node_index: HashMap::new(),
         images: HashMap::new(),
         sources: HashMap::new(),
+        budget: ImageBudget::default(),
         points: 0,
         polygons: 0,
         lines: 0,
@@ -199,6 +199,8 @@ struct Reader<'a, 'i, 's> {
     images: HashMap<&'a str, Result<Vec<u8>, &'static str>>,
     /// Each `<source>`'s numbers and stride, read once however many geometries use it.
     sources: HashMap<NodeId, (Vec<f64>, usize)>,
+    /// What the images may still hold.
+    budget: ImageBudget,
     points: usize,
     polygons: usize,
     lines: usize,
@@ -442,13 +444,7 @@ impl<'a, 'i> Reader<'a, 'i, '_> {
             .map(str::trim);
         let read = match uri {
             None => Err(IMAGE_MISSING),
-            Some(uri) => self.side.read(uri, MAX_TEXTURE_BYTES).map_err(|e| {
-                if e.contains("URL") || e.contains("absolute") || e.contains("outside") {
-                    IMAGE_REFUSED
-                } else {
-                    IMAGE_MISSING
-                }
-            }),
+            Some(uri) => self.budget.read(self.side, uri),
         };
         self.images.insert(key, read.clone());
         read
