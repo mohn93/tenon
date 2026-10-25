@@ -294,6 +294,11 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         Item::new("Cut List", UiAction::ShowCutList)
             .tooltip("List the parts with their sizes, materials and quantities")
             .entry(),
+        Item::new("Model Health", UiAction::CheckHealth)
+            .tooltip(
+                "List selected parts that are not solids and why (all parts when none is selected)",
+            )
+            .entry(),
     ])
     .collect();
 

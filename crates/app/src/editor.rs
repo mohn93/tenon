@@ -39,6 +39,10 @@ mod input;
 mod intersect;
 pub use input::{DriveError, Driven, Stopped};
 mod cut_list;
+mod health;
+pub use health::HealthReport;
+#[cfg(test)]
+pub use health::HealthRow;
 mod interference;
 pub use cut_list::CutListReport;
 #[cfg(test)]
@@ -319,6 +323,8 @@ pub struct Editor {
     interference: Option<InterferenceReport>,
     /// The Cut List window: the parts as of the revision it was read at, while it is open.
     cut_list: Option<CutListReport>,
+    /// The Model Health window: what the last check found, while it is open.
+    health: Option<HealthReport>,
     /// While an agent's `tool_input` runs: every command run, with its result.
     issued: Option<Vec<(Command, Result<Outcome, CommandError>)>>,
     /// The modifier keys the window reports the user holding.
@@ -429,6 +435,7 @@ impl Editor {
             soften: SoftenWindow::default(),
             interference: None,
             cut_list: None,
+            health: None,
             issued: None,
             user_mods: Mods::default(),
             agent_mods: Mods::default(),
@@ -495,6 +502,7 @@ impl Editor {
         self.style_before_add.clear();
         self.interference = None;
         self.cut_list = None;
+        self.health = None;
     }
 
     /// How many times the document was replaced (new or open, by the window or an agent).

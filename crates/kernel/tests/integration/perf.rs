@@ -391,3 +391,90 @@ fn time_a_polygon_of_ten_thousand_corners() {
     m.validate().unwrap();
     assert!(took < Duration::from_secs(2), "add_polygon took {took:?}");
 }
+
+/// A sphere of radius 1 m in `n` bands of `n` slices (`n` even), two triangles to each quad
+/// apart from the fans at the poles; with `crack` the upper half ends on equator points of its
+/// own, that far above the lower half's. `skip` drops that many triangles.
+fn triangle_sphere(n: usize, crack: f64, skip: usize) -> (Vec<DVec3>, Vec<MeshPolygon>) {
+    let mut points = Vec::new();
+    let mut row = |polar: f64, lift: f64, count: usize| -> Vec<usize> {
+        (0..count)
+            .map(|j| {
+                let a = TAU * j as f64 / n as f64;
+                points.push(DVec3::new(
+                    polar.sin() * a.cos(),
+                    polar.sin() * a.sin(),
+                    polar.cos() + lift,
+                ));
+                points.len() - 1
+            })
+            .collect()
+    };
+    let polar = |i: usize| std::f64::consts::PI * i as f64 / n as f64;
+    // Each band's upper and lower row.
+    let mut bands: Vec<(Vec<usize>, Vec<usize>)> = Vec::new();
+    let mut above = row(0.0, 0.0, 1);
+    for i in 1..=n {
+        let count = if i == n { 1 } else { n };
+        if i == n / 2 && crack > 0.0 {
+            bands.push((above, row(polar(i), crack, count)));
+            above = row(polar(i), 0.0, count);
+        } else {
+            let below = row(polar(i), 0.0, count);
+            bands.push((above, below.clone()));
+            above = below;
+        }
+    }
+    let tri = |a: usize, b: usize, c: usize| MeshPolygon {
+        corners: vec![a, b, c],
+        material: None,
+    };
+    let mut polygons = Vec::new();
+    for (top, bottom) in bands {
+        for j in 0..n {
+            let at = |r: &Vec<usize>, j: usize| r[j % r.len()];
+            let (a, b) = (at(&top, j), at(&top, j + 1));
+            let (c, d) = (at(&bottom, j), at(&bottom, j + 1));
+            if a != b {
+                polygons.push(tri(a, c, b));
+            }
+            if c != d {
+                polygons.push(tri(b, c, d));
+            }
+        }
+    }
+    polygons.drain(..skip);
+    (points, polygons)
+}
+
+#[test]
+#[ignore]
+fn health_check_and_repair_of_twenty_thousand_triangles() {
+    use kernel::health::{check, repair};
+    for (what, crack, skip) in [("one missing", 0.0, 1), ("cracked", 5e-6, 0)] {
+        let (points, polygons) = triangle_sphere(100, crack, skip);
+        let mut scene = Scene::new();
+        let (instance, report, _) = scene
+            .import_mesh(
+                MeshId::Root,
+                &points,
+                &polygons,
+                false,
+                DefinitionKind::Group,
+                "sphere",
+            )
+            .unwrap();
+        assert!(report.faces > 19_000, "{report:?}");
+        let def = scene.root().instance(instance).unwrap().definition;
+        let m = &scene.definition(def).unwrap().mesh;
+        let (h, took_check) = timed(&format!("check {} triangles, {what}", report.faces), || {
+            check(m)
+        });
+        assert!(!h.is_solid(), "{what}");
+        let (r, took_repair) = timed(&format!("repair, {what}"), || repair(m));
+        let fixed = r.model.expect(what);
+        assert!(check(&fixed).is_solid());
+        eprintln!("{:?}", r.repair);
+        assert!(took_check < Duration::from_secs(2) && took_repair < Duration::from_secs(5));
+    }
+}

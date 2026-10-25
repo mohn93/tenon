@@ -48,8 +48,8 @@ pub use clip::ClipOutline;
 pub use command::{
     AmbientOcclusionPatch, AnchorInput, BatchError, Command, CommandError, EdgesPatch, ErrorKind,
     ExistingMaterial, ExpectedStep, FlipAxis, FlipFrame, IntersectReport, IntersectScope,
-    OrientOutcome, Origin, Outcome, PrimitiveAs, SceneJoints, ScenePositions, SelectMode,
-    StylePatch, TextureSource, Transform,
+    MakeSolidEntry, MakeSolidReport, OrientOutcome, Origin, Outcome, PrimitiveAs, SceneJoints,
+    ScenePositions, SelectMode, StylePatch, TextureSource, Transform,
 };
 pub use document::{
     DEFAULT_EYE_HEIGHT, Document, ExportedBytes, ImportOptions, MAX_COORDINATE, MAX_COPIES,
@@ -67,10 +67,11 @@ pub use polygon::{DEFAULT_POLYGON_SIDES, polygon_points};
 pub use query::{
     AnchorInfo, Bounds, ChangeEvent, ClearancePair, CurveInfo, CutListGrouping, CutRowInfo,
     DefinitionInfo, DimensionInfo, DimensionKind, EdgeInfo, EntityKind, FaceInfo, FailedPair,
-    GuideInfo, GuideKind, InstanceInfo, InterferencePair, JointInfo, MAX_CLEARANCE_IDS,
-    MAX_SWEEP_STEPS, MaterialInfo, NoteInfo, NoteKind, OutlinerNode, OutlinerRow, OutlinerTable,
-    Query, QueryResult, SceneInfo, SceneTransitionInfo, SceneView, SectionPlaneInfo, SkippedPart,
-    SweepPair, SweepStop, TagInfo, TextureInfo, TouchingPair, VertexInfo,
+    GuideInfo, GuideKind, HealthPart, HealthProblem, InstanceInfo, InterferencePair, JointInfo,
+    MAX_CLEARANCE_IDS, MAX_SWEEP_STEPS, MaterialInfo, NoteInfo, NoteKind, OutlinerNode,
+    OutlinerRow, OutlinerTable, ProblemKind, Query, QueryResult, SceneInfo, SceneTransitionInfo,
+    SceneView, SectionPlaneInfo, SkippedPart, SweepPair, SweepStop, TagInfo, TextureInfo,
+    TouchingPair, VertexInfo,
 };
 pub use rectangle::{rectangle_axes, rectangle_axes_in, rectangle_corners};
 pub use rotate::rotation;

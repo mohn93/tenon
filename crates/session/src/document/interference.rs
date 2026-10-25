@@ -27,7 +27,7 @@ fn skipped(list: Vec<(InstanceId, String)>) -> Vec<SkippedPart> {
 impl Document {
     /// `ids` as instances of the open context, each once in the order first named: an id
     /// that is not an instance is `invalid_input`, an unknown one `not_found`.
-    fn part_ids(&self, ids: &[EntityId]) -> Result<Vec<InstanceId>, CommandError> {
+    pub(super) fn part_ids(&self, ids: &[EntityId]) -> Result<Vec<InstanceId>, CommandError> {
         let m = self.model();
         let mut out = Vec::new();
         for id in ids {

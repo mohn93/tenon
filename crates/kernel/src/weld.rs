@@ -29,6 +29,15 @@ impl Model {
         if target.is_empty() {
             return;
         }
+        self.weld_vertices(&target);
+        self.merge_seams(target.values().copied().collect());
+    }
+
+    /// Merges each vertex in `target`'s keys into the vertex it maps to (which must not be a
+    /// key itself). Edges that collapse are removed and the others re-joined, splitting at
+    /// vertices left on them; faces drop the merged vertex and are removed when nothing of
+    /// them is left. Face normals are kept as they were.
+    pub(crate) fn weld_vertices(&mut self, target: &BTreeMap<VertexId, VertexId>) {
         let to = |v: &VertexId| *target.get(v).unwrap_or(v);
 
         let users: BTreeSet<FaceId> = target.keys().flat_map(|v| self.faces_at(*v)).collect();
@@ -107,7 +116,6 @@ impl Model {
         for &m in target.keys() {
             self.remove_vertex(m);
         }
-        self.merge_seams(target.values().copied().collect());
     }
 
     /// Removes every edge at a vertex of `met` between exactly two faces in one plane facing

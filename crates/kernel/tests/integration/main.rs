@@ -17,6 +17,7 @@ mod faces;
 mod finish;
 mod groups;
 mod guides;
+mod health;
 mod hide;
 mod import_tree;
 mod index;

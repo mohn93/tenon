@@ -18,6 +18,7 @@ pub mod fillet;
 pub mod geom;
 mod group;
 mod guides;
+pub mod health;
 mod hide;
 mod ids;
 mod import;

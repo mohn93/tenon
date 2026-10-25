@@ -40,6 +40,7 @@ mod fillet;
 mod flip;
 mod follow_me;
 mod groups;
+mod health;
 mod hide;
 mod import;
 mod instances;
@@ -195,6 +196,8 @@ pub struct Document {
     changed_entities: Option<Vec<EntityId>>,
     /// What the last orient edit did, until its outcome takes it.
     orient_report: Option<OrientOutcome>,
+    /// What the running `make_solid` did, for its Outcome.
+    make_solid_report: Option<crate::command::MakeSolidReport>,
     /// The entities the most recent `hide` hid, for `unhide_last`; not saved, forgotten with
     /// the model. A failed atomic batch does not restore it: its ids are filtered to what is
     /// still hidden when used, so a rolled-back hide leaves nothing for `unhide_last` to show.
@@ -256,6 +259,7 @@ impl Document {
             intersect_report: None,
             changed_entities: None,
             orient_report: None,
+            make_solid_report: None,
             last_hidden: Vec::new(),
             positioned: None,
             purged: None,
@@ -525,6 +529,7 @@ impl Document {
             outcome.intersect = self.intersect_report.take();
             outcome.changed = self.changed_entities.take();
             outcome.orient = self.orient_report.take();
+            outcome.make_solid = self.make_solid_report.take();
             outcome.positioned = self.positioned.take();
             outcome.purged = self.purged.take();
             outcome.definitions = self.made_definitions.take();
@@ -889,6 +894,7 @@ impl Document {
             | Command::SolidTrim { .. }
             | Command::SolidSplit { .. }
             | Command::OuterShell { .. }
+            | Command::MakeSolid { .. }
             | Command::ChamferEdges { .. }
             | Command::FilletEdges { .. }
             | Command::PositionTexture { .. }
@@ -1404,6 +1410,7 @@ impl Document {
             Command::SolidTrim { target, tools } => self.solid_trim_changes(*target, tools),
             Command::SolidSplit { a, b } => self.solid_split_changes(*a, *b),
             Command::OuterShell { ids } => self.outer_shell_changes(ids),
+            Command::MakeSolid { ids } => self.make_solid_changes(ids),
             Command::ChamferEdges {
                 instance,
                 edges,
@@ -1585,6 +1592,7 @@ impl Document {
                             intersect: self.intersect_report.take(),
                             changed: self.changed_entities.take(),
                             orient: self.orient_report.take(),
+                            make_solid: self.make_solid_report.take(),
                             positioned: self.positioned.take(),
                             purged: self.purged.take(),
                             definitions: self.made_definitions.take(),
@@ -2921,6 +2929,7 @@ impl Document {
                 rows: self.cut_list(ids, *group_by)?,
             },
             Query::Interference { ids, touching } => self.interference_query(ids, *touching)?,
+            Query::ModelHealth { ids } => self.model_health_query(ids)?,
             Query::Clearance { a, b, ids } => self.clearance_query(*a, *b, ids)?,
             Query::SweepCheck {
                 joint,
