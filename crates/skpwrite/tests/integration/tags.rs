@@ -250,3 +250,64 @@ fn bad_tags_are_errors() {
         })
     ));
 }
+
+/// A string as the archive writes it: the marker, a length byte and UTF-16.
+fn archive_string(s: &str) -> Vec<u8> {
+    let units: Vec<u16> = s.encode_utf16().collect();
+    let mut out = vec![0xff, 0xfe, 0xff, units.len() as u8];
+    out.extend(units.iter().flat_map(|u| u.to_le_bytes()));
+    out
+}
+
+/// The last `u32` of a definition's 43-byte behaviour block, found after its name, its two
+/// empty strings and its timestamp.
+fn definition_group_word(bytes: &[u8], name: &str) -> u32 {
+    let pat = archive_string(name);
+    let empty = archive_string("");
+    let mut tail = pat.clone();
+    tail.extend(&empty);
+    tail.extend(&empty);
+    let at = bytes
+        .windows(tail.len())
+        .position(|w| w == tail)
+        .unwrap_or_else(|| panic!("no definition named {name}"));
+    let block = at + tail.len() + 4;
+    u32::from_le_bytes(bytes[block + 39..block + 43].try_into().unwrap())
+}
+
+#[test]
+fn group_definitions_carry_the_group_word_and_components_do_not() {
+    let def = |name: &str, is_group| Definition {
+        name: name.into(),
+        is_group,
+        geometry: square(),
+    };
+    let place = |definition| Instance {
+        definition,
+        rotation: IDENTITY,
+        translation: [0.0; 3],
+        material: None,
+        tag: None,
+        hidden: false,
+    };
+    let doc = Doc {
+        definitions: vec![
+            def("Red box", true),
+            def("Blue box", false),
+            def("Hidden box", true),
+        ],
+        root: Geometry {
+            instances: vec![place(0), place(1), place(2)],
+            ..Geometry::default()
+        },
+        ..Doc::default()
+    };
+    let bytes = write(&doc).unwrap();
+    assert_eq!(definition_group_word(&bytes, "Red box"), 1);
+    assert_eq!(definition_group_word(&bytes, "Hidden box"), 1);
+    assert_eq!(definition_group_word(&bytes, "Blue box"), 0);
+    // The reader still tells them apart by the instances' class.
+    let (_, index, _) = read(&bytes);
+    assert_eq!(index.layers[0].name, "Layer0");
+    assert_eq!(index.layers[0].color, [255, 255, 255, 255]);
+}
