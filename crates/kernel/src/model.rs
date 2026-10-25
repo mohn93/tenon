@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Range;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
@@ -542,6 +543,28 @@ pub struct Model {
     /// The vertices in each cell of a `VERTEX_CELL` grid, kept in step by `apply_op`, so
     /// lookups by position visit only the vertices nearby.
     vertex_cells: HashMap<[i64; 3], Vec<VertexId>>,
+    /// See `Model::geometry_stamp`.
+    stamp: GeometryStamp,
+}
+
+/// The next stamp `GeometryStamp` hands out.
+static NEXT_STAMP: AtomicU64 = AtomicU64::new(1);
+
+/// A number no other state of any model's vertices, edges and faces has had in this run (a
+/// clone shares its model's until either changes).
+#[derive(Clone, Debug)]
+struct GeometryStamp(u64);
+
+impl GeometryStamp {
+    fn new() -> Self {
+        GeometryStamp(NEXT_STAMP.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl Default for GeometryStamp {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Side of the cells of the vertex grid, in meters.
@@ -641,6 +664,15 @@ impl Model {
     /// The spatial index over the current geometry, built on first use after a change.
     pub fn index(&self) -> &Index {
         self.index.get_or_init(|| Index::build(self))
+    }
+
+    /// A number that changes whenever the vertices, edges or faces do (their positions, ends,
+    /// loops, paint, textures, tags, flags), and only then: two models with the same stamp hold
+    /// the same vertices, edges and faces. Instances, guides, annotations and section planes
+    /// leave it as it is. What is worked out from the geometry alone (the renderer's
+    /// triangles) can be kept by it.
+    pub fn geometry_stamp(&self) -> u64 {
+        self.stamp.0
     }
 
     pub fn vertex(&self, id: VertexId) -> Option<&Vertex> {
@@ -799,6 +831,29 @@ impl Model {
                 | Op::RemoveFace(..)
         ) {
             self.index.take();
+        }
+        let geometry = match &op {
+            Op::AddInstance(..)
+            | Op::RemoveInstance(..)
+            | Op::TransformInstance(..)
+            | Op::PaintInstance(..)
+            | Op::SetSectionCut(..)
+            | Op::AddGuide(..)
+            | Op::RemoveGuide(..)
+            | Op::AddDimension(..)
+            | Op::RemoveDimension(..)
+            | Op::AddNote(..)
+            | Op::RemoveNote(..)
+            | Op::AddSection(..)
+            | Op::RemoveSection(..)
+            | Op::SetActiveSection(..) => false,
+            Op::SetTag(id, ..) | Op::SetHidden(id, ..) => {
+                matches!(id, EntityId::Edge(_) | EntityId::Face(_))
+            }
+            _ => true,
+        };
+        if geometry {
+            self.stamp = GeometryStamp::new();
         }
         match op {
             Op::AddVertex(id, v) => {
@@ -1548,6 +1603,45 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_geometry_stamp_moves_with_vertices_edges_and_faces_only() {
+        let mut m = Model::new();
+        assert_ne!(m.geometry_stamp(), Model::new().geometry_stamp());
+        let square = [DVec3::ZERO, DVec3::X, DVec3::new(1.0, 1.0, 0.0), DVec3::Y];
+        let before = m.geometry_stamp();
+        m.add_polygon(&square).unwrap();
+        assert_ne!(m.geometry_stamp(), before);
+        let copy = m.clone();
+        assert_eq!(copy.geometry_stamp(), m.geometry_stamp());
+        // Instances, guides and section planes leave it.
+        let stamp = m.geometry_stamp();
+        let turn = DAffine3::from_rotation_z(1.0);
+        m.apply_op(Op::TransformInstance(InstanceId(9999), turn, turn));
+        m.add_guide(Guide::Point {
+            position: DVec3::ONE,
+            tag: None,
+            hidden: false,
+        })
+        .unwrap();
+        m.add_section(SectionPlane::new(DVec3::ZERO, DVec3::Z), true)
+            .unwrap();
+        assert_eq!(m.geometry_stamp(), stamp);
+        // Paint and hiding a face move it, and so does undoing a change.
+        let face = m.faces().next().unwrap().0;
+        m.apply_op(Op::PaintFace(face, [None; 2], [Some(MaterialId(1)), None]));
+        assert_ne!(m.geometry_stamp(), stamp);
+        let painted = m.geometry_stamp();
+        m.apply_op(Op::SetHidden(EntityId::Face(face), false, true));
+        assert_ne!(m.geometry_stamp(), painted);
+        let hidden = m.geometry_stamp();
+        m.apply_op(Op::SetHidden(EntityId::Face(face), true, false));
+        assert_ne!(m.geometry_stamp(), hidden);
+        // A change to the copy gives it a stamp of its own.
+        let mut copy = copy;
+        copy.apply_op(Op::PaintFace(face, [None; 2], [Some(MaterialId(1)), None]));
+        assert_ne!(copy.geometry_stamp(), m.geometry_stamp());
+    }
 
     #[test]
     fn recorded_changes_undo_and_redo_exactly() {

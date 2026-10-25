@@ -12,8 +12,8 @@ use crate::grid::{
 use crate::guides::{GuideShape, guide_lines};
 use crate::lights::{Light, MAX_LIGHTS, strongest};
 use crate::scene::{
-    BaseFaceVertex, CasterChunk, EdgeColors, EdgeExtra, GlassView, Ranges, Spans,
-    scene_base_styled, shown_annotations, shown_guides, shown_sections,
+    BaseFaceVertex, CasterChunk, EdgeColors, EdgeExtra, GlassView, PartsCache, Ranges, Spans,
+    scene_base_cached, shown_annotations, shown_guides, shown_sections,
 };
 use crate::sections::{SectionLook, section_lines};
 use crate::shadow_maps::{Casters, ShadowMaps};
@@ -808,6 +808,9 @@ pub struct Renderer {
     sections: Vec<SectionLook>,
     section_flags: Vec<bool>,
     targets: Option<Targets>,
+    /// The meshes' triangles and edges, and the cuts, from the last `set_model`, kept for the
+    /// next.
+    parts: PartsCache,
 }
 
 /// How a pipeline uses the depth buffer.
@@ -1508,6 +1511,7 @@ impl Renderer {
             sections: Vec::new(),
             section_flags: Vec::new(),
             targets: None,
+            parts: PartsCache::default(),
         }
     }
 
@@ -1535,13 +1539,14 @@ impl Renderer {
             .model_style
             .as_ref()
             .map_or_else(EdgeColors::default, |s| EdgeColors::new(&s.edges, axes));
-        let base = scene_base_styled(
+        let base = scene_base_cached(
             scene,
             context,
             self.color_by_tag,
             self.glass_view,
             self.section_display,
             &edge_colors,
+            &mut self.parts,
         );
         self.set_axes(axes);
         self.faces = flagged_mesh(&self.device, "faces", &base.faces);

@@ -10,14 +10,15 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ops::Range;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bytemuck::{Pod, Zeroable};
 use glam::{DAffine3, DVec2, DVec3};
 use kernel::{
-    DimensionId, EdgeColorMode, EdgeId, EdgeStyle, EntityId, FaceId, Guide, GuideId, InstanceId,
-    MaterialId, MeshId, Model, NoteId, Scene, SectionId, SectionPlane, TagId, TextureImage,
-    VertexId, back_texture_position,
+    DimensionId, EdgeColorMode, EdgeId, EdgeStyle, EntityId, FaceId, Guide, GuideId, Instance,
+    InstanceId, MaterialId, MeshId, Model, NoteId, Scene, SectionId, SectionPlane, TagId,
+    TextureImage, VertexId, back_texture_position,
 };
 use session::{AnnotationShape, SectionDisplay, SectionFillColor, SectionShape};
 
@@ -744,33 +745,90 @@ pub fn scene_base_styled(
     section: SectionDisplay,
     edge_colors: &EdgeColors,
 ) -> SceneBase {
+    scene_base_cached(
+        scene,
+        context,
+        color_by_tag,
+        glass,
+        section,
+        edge_colors,
+        &mut PartsCache::default(),
+    )
+}
+
+/// `scene_base_styled`, triangulating only the meshes whose geometry `cache` does not hold
+/// from an earlier call (see `kernel::Model::geometry_stamp`); the result is the same. The
+/// cache then holds the meshes this scene places.
+pub fn scene_base_cached(
+    scene: &Scene,
+    context: &[InstanceId],
+    color_by_tag: bool,
+    glass: GlassView,
+    section: SectionDisplay,
+    edge_colors: &EdgeColors,
+    cache: &mut PartsCache,
+) -> SceneBase {
+    base_walked(
+        scene,
+        context,
+        color_by_tag,
+        glass,
+        section,
+        edge_colors,
+        cache,
+        PARALLEL_CORNERS,
+    )
+}
+
+/// `scene_base_cached`, the root's instances placed on several threads when they draw at least
+/// `share_from` face corners.
+#[allow(clippy::too_many_arguments)]
+fn base_walked(
+    scene: &Scene,
+    context: &[InstanceId],
+    color_by_tag: bool,
+    glass: GlassView,
+    section: SectionDisplay,
+    edge_colors: &EdgeColors,
+    cache: &mut PartsCache,
+    share_from: usize,
+) -> SceneBase {
     let layers = layers(scene);
     let by_material = edge_colors.mode == EdgeColorMode::ByMaterial;
-    let parts = placed_parts(
+    placed_parts(
         scene,
         &layers,
         by_material || edge_colors.profiles,
         edge_colors.profiles,
+        cache,
     );
-    let (faces, edges) = drawn_count(scene, &parts, MeshId::Root, &mut HashMap::new());
+    let last_cuts = std::mem::take(&mut cache.cuts);
+    let parts = &cache.meshes;
+    let texture_averages = if by_material {
+        texture_averages(scene)
+    } else {
+        HashMap::new()
+    };
+    let (faces, edges) = drawn_count(scene, parts, MeshId::Root, &mut HashMap::new());
     let mut walk = Walk {
         scene,
         context,
         layers: &layers,
-        parts: &parts,
+        parts,
         glowing: scene.materials().any(|(_, m)| m.glows()),
         edge_colors: *edge_colors,
-        texture_averages: if by_material {
-            texture_averages(scene)
-        } else {
-            HashMap::new()
-        },
+        texture_averages: &texture_averages,
+        share_from,
         color_by_tag,
         glass,
         ghost: false,
         display: section,
         planes: Vec::new(),
         cuts: HashMap::new(),
+        cut_memo: CutMemo {
+            last: &last_cuts,
+            now: HashMap::new(),
+        },
         sides: HashMap::new(),
         glows: HashMap::new(),
         path: Vec::new(),
@@ -782,10 +840,15 @@ pub fn scene_base_styled(
             } else {
                 0
             }),
+            // Most faces cast shadows.
+            casters: Vec::with_capacity(faces),
+            sun_casters: Vec::with_capacity(faces),
             ..SceneBase::default()
         },
     };
     walk.mesh(MeshId::Root, DAffine3::IDENTITY, None, None);
+    // Only the cuts this build used are kept for the next.
+    cache.cuts = walk.cut_memo.now;
     let mut base = walk.base;
     if !context.is_empty()
         && let Some((mesh, t)) = scene.resolve(context)
@@ -895,6 +958,9 @@ fn texture_averages(scene: &Scene) -> HashMap<MaterialId, [f32; 3]> {
 
 /// What a mesh draws wherever it is placed, in its own coordinates.
 struct MeshParts {
+    /// What the parts were worked out from: the mesh's geometry stamp and the `edge_faces`
+    /// and `soft` asked for.
+    key: (u64, bool, bool),
     /// The triangles of every face, three corners each, wound counter-clockwise around the
     /// face's normal.
     corners: Vec<DVec3>,
@@ -943,6 +1009,19 @@ struct FacePart {
 }
 
 impl MeshParts {
+    /// Works out the faces' looks again from their materials, as `of` does. The faces are
+    /// the model's (the parts were made for its geometry), in the same order.
+    fn refresh_looks(&mut self, scene: &Scene, layers: &Layers, model: &Model) {
+        for (part, (_, face)) in self.faces.iter_mut().zip(model.faces()) {
+            part.front = face
+                .front
+                .map(|m| side_look(scene, layers, Some(m), DEFAULT_FRONT));
+            part.back = face
+                .back
+                .map(|m| side_look(scene, layers, Some(m), DEFAULT_BACK));
+        }
+    }
+
     fn of(scene: &Scene, layers: &Layers, model: &Model, edge_faces: bool, soft: bool) -> Self {
         // A face of n loop corners and h holes has n + 2h - 2 triangles.
         let (mut face_count, mut triangles) = (0, 0);
@@ -1017,6 +1096,7 @@ impl MeshParts {
             }
         }
         MeshParts {
+            key: (model.geometry_stamp(), edge_faces, soft),
             corners,
             normals,
             positions,
@@ -1032,18 +1112,119 @@ impl MeshParts {
 /// Below this many faces in the placed meshes, their parts are worked out on this thread alone.
 const PARALLEL_FACES: usize = 1000;
 
-/// Most threads that work out mesh parts.
+/// Most threads that work out mesh parts, or place the root's instances.
 const MAX_THREADS: usize = 8;
 
-/// The parts of every mesh placed from the root, the root included (with each edge's faces when
-/// `edge_faces`, and the soft edges when `soft`). With many faces, the meshes
-/// are shared out among a few threads; the parts are the same either way.
+/// Below this many face corners drawn by the root's instances, they are placed on this thread
+/// alone.
+const PARALLEL_CORNERS: usize = 30_000;
+
+/// The parts of the meshes a scene places, kept from one build to the next (see
+/// `scene_base_cached`).
+#[derive(Default)]
+pub struct PartsCache {
+    meshes: HashMap<MeshId, MeshParts>,
+    /// The cuts of the last build, by what was cut (see `CutMemo`).
+    cuts: HashMap<CutKey, Arc<Cut>>,
+}
+
+/// The surface, planes and fill `section_clip::cut_surface` was called with, bit for bit.
+/// Hashed by `hash`, a quick fingerprint of the rest (surfaces are large).
+struct CutKey {
+    hash: u64,
+    surface: Vec<[u64; 9]>,
+    planes: Vec<[u64; 6]>,
+    fill: bool,
+}
+
+impl CutKey {
+    fn new(surface: &[[DVec3; 3]], planes: &[SectionPlane], fill: bool) -> Self {
+        let surface: Vec<[u64; 9]> = surface
+            .iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|p| p.to_array().map(f64::to_bits));
+                [a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]]
+            })
+            .collect();
+        let planes: Vec<[u64; 6]> = planes
+            .iter()
+            .map(|p| {
+                [
+                    p.point.x, p.point.y, p.point.z, p.normal.x, p.normal.y, p.normal.z,
+                ]
+                .map(f64::to_bits)
+            })
+            .collect();
+        // FxHash's step.
+        let hash = surface
+            .iter()
+            .flatten()
+            .chain(planes.iter().flatten())
+            .chain([&u64::from(fill)])
+            .fold(0u64, |h, &w| {
+                (h.rotate_left(5) ^ w).wrapping_mul(0x517c_c1b7_2722_0a95)
+            });
+        CutKey {
+            hash,
+            surface,
+            planes,
+            fill,
+        }
+    }
+}
+
+impl PartialEq for CutKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash == other.hash
+            && self.fill == other.fill
+            && self.planes == other.planes
+            && self.surface == other.surface
+    }
+}
+
+impl Eq for CutKey {}
+
+impl std::hash::Hash for CutKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_u64(self.hash);
+    }
+}
+
+/// What `cut_surface` returned in the last build (`last`) and in this one so far (`now`), by
+/// its arguments: a placement that did not change is not cut again. Each thread walking part
+/// of a scene has its own `now`; they are joined when the walk ends.
+struct CutMemo<'a> {
+    last: &'a HashMap<CutKey, Arc<Cut>>,
+    now: HashMap<CutKey, Arc<Cut>>,
+}
+
+impl CutMemo<'_> {
+    /// `cut_surface(surface, planes, fill)`, kept from the last build or this one when it was
+    /// worked out there.
+    fn cut(&mut self, surface: &[[DVec3; 3]], planes: &[SectionPlane], fill: bool) -> &Cut {
+        let key = CutKey::new(surface, planes, fill);
+        let last = self.last;
+        self.now.entry(key).or_insert_with_key(|key| {
+            last.get(key)
+                .cloned()
+                .unwrap_or_else(|| Arc::new(cut_surface(surface, planes, fill)))
+        })
+    }
+}
+
+/// Puts the parts of every mesh placed from the root, the root included, in `cache` (with each
+/// edge's faces when `edge_faces`, and the soft edges when `soft`), and drops the others.
+/// Parts the cache holds for the mesh's current geometry are kept, with their faces' looks
+/// worked out again (materials may have changed); the rest are worked out. With many faces
+/// to work out, the meshes are shared out among a few threads; the parts are the same either
+/// way.
 fn placed_parts(
     scene: &Scene,
     layers: &Layers,
     edge_faces: bool,
     soft: bool,
-) -> HashMap<MeshId, MeshParts> {
+    cache: &mut PartsCache,
+) {
     let mut meshes = vec![MeshId::Root];
     let mut seen = HashSet::from([MeshId::Root]);
     let mut k = 0;
@@ -1058,20 +1239,32 @@ fn placed_parts(
         }
         k += 1;
     }
-    let models: Vec<(MeshId, &Model)> = meshes
+    let cached = &mut cache.meshes;
+    cached.retain(|id, _| seen.contains(id));
+    let mut models: Vec<(MeshId, &Model)> = Vec::new();
+    for (id, model) in meshes
         .into_iter()
         .filter_map(|id| Some((id, scene.mesh(id)?)))
-        .collect();
+    {
+        match cached.get_mut(&id) {
+            Some(p) if p.key == (model.geometry_stamp(), edge_faces, soft) => {
+                p.refresh_looks(scene, layers, model);
+            }
+            _ => models.push((id, model)),
+        }
+    }
     let faces: usize = models.iter().map(|(_, m)| m.faces().count()).sum();
     let threads = std::thread::available_parallelism()
         .map_or(1, |n| n.get())
         .min(MAX_THREADS)
         .min(models.len());
     if faces < PARALLEL_FACES || threads < 2 {
-        return models
-            .into_iter()
-            .map(|(id, m)| (id, MeshParts::of(scene, layers, m, edge_faces, soft)))
-            .collect();
+        cached.extend(
+            models
+                .into_iter()
+                .map(|(id, m)| (id, MeshParts::of(scene, layers, m, edge_faces, soft))),
+        );
+        return;
     }
     // Each thread takes the next mesh nobody has taken, so big meshes do not hold one up.
     let next = AtomicUsize::new(0);
@@ -1087,12 +1280,11 @@ fn placed_parts(
         let helpers: Vec<_> = (1..threads)
             .filter_map(|_| std::thread::Builder::new().spawn_scoped(s, work).ok())
             .collect();
-        let mut parts: HashMap<MeshId, MeshParts> = work().into_iter().collect();
+        cached.extend(work());
         for h in helpers {
-            parts.extend(h.join().expect("a mesh parts thread panicked"));
+            cached.extend(h.join().expect("a mesh parts thread panicked"));
         }
-        parts
-    })
+    });
 }
 
 /// How many face corners and edge ends one placement of mesh `id` draws, nested instances
@@ -1146,7 +1338,10 @@ struct Walk<'a> {
     edge_colors: EdgeColors,
     /// The average color of each textured material, worked out when edges are colored by
     /// material.
-    texture_averages: HashMap<MaterialId, [f32; 3]>,
+    texture_averages: &'a HashMap<MaterialId, [f32; 3]>,
+    /// The root's instances are placed on several threads when they draw at least this many
+    /// face corners.
+    share_from: usize,
     /// Faces are drawn in their tags' colors (see `scene_base_with`).
     color_by_tag: bool,
     /// X-ray and Hidden Geometry.
@@ -1163,6 +1358,8 @@ struct Walk<'a> {
     /// and the plane: a mesh placed many times, cut by no plane but its own, is cut once.
     /// (A ghost placement has its own, which stays empty: ghosts are not cut.)
     cuts: HashMap<(MeshId, [u64; 6], bool), Cut>,
+    /// The cuts of the last build and this one, by what was cut.
+    cut_memo: CutMemo<'a>,
     /// The side of the square each mesh's section planes are drawn with.
     sides: HashMap<MeshId, f64>,
     /// What each mesh's own faces glow with, by the material it inherits, once worked out: one
@@ -1174,7 +1371,7 @@ struct Walk<'a> {
     base: SceneBase,
 }
 
-impl Walk<'_> {
+impl<'a> Walk<'a> {
     /// Adds a mesh placed by `t`; `inherited` is the material of the nearest painted instance
     /// placing it and `inherited_tag` the tag of the nearest tagged one.
     fn mesh(
@@ -1519,8 +1716,12 @@ impl Walk<'_> {
         };
         if let (Some(key), Some(plane)) = (cache_key, own_plane) {
             if collect_local && !surface.is_empty() {
-                self.cuts
-                    .insert(key, cut_surface(&surface, &[plane], display.fill));
+                let cut = self.cut_memo.cut(&surface, &[plane], display.fill);
+                let cut = Cut {
+                    fill: cut.fill.clone(),
+                    edges: cut.edges.clone(),
+                };
+                self.cuts.insert(key, cut);
             }
             if let Some(cut) = self.cuts.get(&key) {
                 // A mirroring placement turns the fill's triangles inside out.
@@ -1537,8 +1738,8 @@ impl Walk<'_> {
                 push_cut(base, &Cut { fill, edges }, color, fill_color);
             }
         } else if cutting && !surface.is_empty() {
-            let cut = cut_surface(&surface, &planes, display.fill);
-            push_cut(base, &cut, color, fill_color);
+            let cut = self.cut_memo.cut(&surface, &planes, display.fill);
+            push_cut(base, cut, color, fill_color);
         }
         let color = if inside {
             GUIDE_COLOR
@@ -1632,55 +1833,285 @@ impl Walk<'_> {
                 });
             }
         }
-        for (iid, instance) in model.instances() {
-            // A hidden instance hides all it places, but for the one being edited (or holding
-            // it), which stays drawn.
-            let on_context = self.on_context_path(iid);
-            if !self
-                .scene
-                .instance_shown_with(id, iid, instance, hidden_geometry)
-                && !on_context
-            {
-                continue;
+        let inherited = (inherited, inherited_tag);
+        if self.path.is_empty() {
+            // The root's instances may be shared out among threads.
+            let instances: Vec<(InstanceId, &Instance)> = model.instances().collect();
+            match self.threads_for(&instances) {
+                1 => {
+                    for &(iid, instance) in &instances {
+                        self.place(id, t, inherited, iid, instance);
+                    }
+                }
+                threads => self.place_shared(id, t, inherited, &instances, threads),
             }
-            // With Hidden Geometry on, one hidden by its own flag is drawn ghosted.
-            let was_ghost = self.ghost;
-            self.ghost |= instance.hidden && !on_context;
-            let start = (
-                self.base.faces.len(),
-                self.base.edges.len(),
-                self.base.guides.len(),
-                self.base.annotations.len(),
-                self.base.sections.len(),
-            );
-            // An instance left whole is cut by none of the planes outside it.
-            let outside = (!instance.section_cut).then(|| std::mem::take(&mut self.planes));
-            self.path.push(iid);
-            self.mesh(
-                MeshId::Definition(instance.definition),
-                t * instance.transform,
-                instance.material.or(inherited),
-                instance.tag.or(inherited_tag),
-            );
-            self.path.pop();
-            if let Some(planes) = outside {
-                self.planes = planes;
-            }
-            self.ghost = was_ghost;
-            if open {
-                let placed = Ranges {
-                    faces: start.0..self.base.faces.len(),
-                    edges: start.1..self.base.edges.len(),
-                    guides: start.2..self.base.guides.len(),
-                    annotations: start.3..self.base.annotations.len(),
-                    sections: start.4..self.base.sections.len(),
-                };
-                self.base.spans.instances.push((iid, placed));
+        } else {
+            for (iid, instance) in model.instances() {
+                self.place(id, t, inherited, iid, instance);
             }
         }
         if pushed_plane {
             self.planes.pop();
         }
+    }
+
+    /// Adds instance `iid` of mesh `id` placed by `t` with what it places, unless it is
+    /// hidden; `inherited` is the material and the tag the placement of `id` hands down.
+    fn place(
+        &mut self,
+        id: MeshId,
+        t: DAffine3,
+        (inherited, inherited_tag): (Option<MaterialId>, Option<TagId>),
+        iid: InstanceId,
+        instance: &Instance,
+    ) {
+        // A hidden instance hides all it places, but for the one being edited (or holding
+        // it), which stays drawn.
+        let on_context = self.on_context_path(iid);
+        if !self
+            .scene
+            .instance_shown_with(id, iid, instance, self.glass.hidden_geometry)
+            && !on_context
+        {
+            return;
+        }
+        let open = self.path == self.context;
+        // With Hidden Geometry on, one hidden by its own flag is drawn ghosted.
+        let was_ghost = self.ghost;
+        self.ghost |= instance.hidden && !on_context;
+        let start = (
+            self.base.faces.len(),
+            self.base.edges.len(),
+            self.base.guides.len(),
+            self.base.annotations.len(),
+            self.base.sections.len(),
+        );
+        // An instance left whole is cut by none of the planes outside it.
+        let outside = (!instance.section_cut).then(|| std::mem::take(&mut self.planes));
+        self.path.push(iid);
+        self.mesh(
+            MeshId::Definition(instance.definition),
+            t * instance.transform,
+            instance.material.or(inherited),
+            instance.tag.or(inherited_tag),
+        );
+        self.path.pop();
+        if let Some(planes) = outside {
+            self.planes = planes;
+        }
+        self.ghost = was_ghost;
+        if open {
+            let placed = Ranges {
+                faces: start.0..self.base.faces.len(),
+                edges: start.1..self.base.edges.len(),
+                guides: start.2..self.base.guides.len(),
+                annotations: start.3..self.base.annotations.len(),
+                sections: start.4..self.base.sections.len(),
+            };
+            self.base.spans.instances.push((iid, placed));
+        }
+    }
+
+    /// How many threads to place `instances` (the root's) with: one unless they draw many
+    /// face corners.
+    fn threads_for(&self, instances: &[(InstanceId, &Instance)]) -> usize {
+        if instances.len() < 2 {
+            return 1;
+        }
+        let mut memo = HashMap::new();
+        let corners: usize = instances
+            .iter()
+            .map(|(_, i)| {
+                let def = MeshId::Definition(i.definition);
+                drawn_count(self.scene, self.parts, def, &mut memo).0
+            })
+            .fold(0, usize::saturating_add);
+        if corners < self.share_from {
+            return 1;
+        }
+        std::thread::available_parallelism()
+            .map_or(1, |n| n.get())
+            .min(MAX_THREADS)
+            .min(instances.len())
+    }
+
+    /// `place` for each of `instances` (the root's, in order), shared out among `threads`
+    /// threads in runs of about as many face corners, each walking into its own lists, which
+    /// are then added to this walk's in order: the lists come out as one thread makes them.
+    fn place_shared(
+        &mut self,
+        id: MeshId,
+        t: DAffine3,
+        inherited: (Option<MaterialId>, Option<TagId>),
+        instances: &[(InstanceId, &Instance)],
+        threads: usize,
+    ) {
+        let mut memo = HashMap::new();
+        let counts: Vec<(usize, usize)> = instances
+            .iter()
+            .map(|(_, i)| {
+                let def = MeshId::Definition(i.definition);
+                drawn_count(self.scene, self.parts, def, &mut memo)
+            })
+            .collect();
+        let total = counts.iter().map(|c| c.0).fold(0, usize::saturating_add);
+        // Runs of consecutive instances, a new one starting each time the corners so far pass
+        // the next share.
+        let mut runs: Vec<Range<usize>> = Vec::with_capacity(threads);
+        let (mut from, mut sum) = (0, 0usize);
+        for (k, c) in counts.iter().enumerate() {
+            sum = sum.saturating_add(c.0);
+            let share = total / threads * (runs.len() + 1);
+            if sum >= share && runs.len() + 1 < threads {
+                runs.push(from..k + 1);
+                from = k + 1;
+            }
+        }
+        if from < instances.len() {
+            runs.push(from..instances.len());
+        }
+        let (first, rest) = runs.split_first().expect("there are instances");
+        std::thread::scope(|s| {
+            let helpers: Vec<_> = rest
+                .iter()
+                .map(|run| {
+                    let mut walk = self.fork();
+                    let (faces, edges) = counts[run.clone()]
+                        .iter()
+                        .fold((0, 0), |(f, e), c| (f + c.0, e + c.1));
+                    walk.base.faces.reserve(faces);
+                    walk.base.casters.reserve(faces);
+                    walk.base.sun_casters.reserve(faces);
+                    walk.base.edges.reserve(edges);
+                    if walk.edge_colors.extras {
+                        walk.base.edge_extras.reserve(edges);
+                    }
+                    let list = &instances[run.clone()];
+                    let job = move || {
+                        for &(iid, instance) in list {
+                            walk.place(id, t, inherited, iid, instance);
+                        }
+                        walk
+                    };
+                    (run, std::thread::Builder::new().spawn_scoped(s, job).ok())
+                })
+                .collect();
+            for &(iid, instance) in &instances[first.clone()] {
+                self.place(id, t, inherited, iid, instance);
+            }
+            for (run, helper) in helpers {
+                match helper {
+                    Some(h) => self.join(h.join().expect("a placing thread panicked")),
+                    // A helper that could not be started leaves its run to this thread.
+                    None => {
+                        for &(iid, instance) in &instances[run.clone()] {
+                            self.place(id, t, inherited, iid, instance);
+                        }
+                    }
+                }
+            }
+        });
+        // Each thread kept its own first section outlines; the walk keeps the first overall.
+        let max = session::MAX_SECTION_OUTLINES;
+        if self.base.sections.len() > max {
+            self.base.sections.truncate(max);
+            self.base.spans.sections.retain(|&(_, k)| k < max);
+            for (_, r) in &mut self.base.spans.instances {
+                r.sections = r.sections.start.min(max)..r.sections.end.min(max);
+            }
+        }
+    }
+
+    /// A walk at the same place as this one with empty lists, to walk part of the scene on
+    /// another thread (see `join`).
+    fn fork(&self) -> Walk<'a> {
+        Walk {
+            scene: self.scene,
+            context: self.context,
+            layers: self.layers,
+            parts: self.parts,
+            glowing: self.glowing,
+            edge_colors: self.edge_colors,
+            texture_averages: self.texture_averages,
+            share_from: self.share_from,
+            color_by_tag: self.color_by_tag,
+            glass: self.glass,
+            ghost: self.ghost,
+            display: self.display,
+            planes: self.planes.clone(),
+            cuts: HashMap::new(),
+            cut_memo: CutMemo {
+                last: self.cut_memo.last,
+                now: HashMap::new(),
+            },
+            sides: HashMap::new(),
+            glows: HashMap::new(),
+            path: self.path.clone(),
+            base: SceneBase::default(),
+        }
+    }
+
+    /// Adds what a fork of this walk added after what this one has.
+    fn join(&mut self, other: Walk<'a>) {
+        let base = &mut self.base;
+        let o = other.base;
+        let (f, e, g, a, s) = (
+            base.faces.len(),
+            base.edges.len(),
+            base.guides.len(),
+            base.annotations.len(),
+            base.sections.len(),
+        );
+        let shift = |r: &Range<usize>, by: usize| r.start + by..r.end + by;
+        let spans = &mut base.spans;
+        spans
+            .faces
+            .extend(o.spans.faces.iter().map(|(id, r)| (*id, shift(r, f))));
+        spans
+            .edges
+            .extend(o.spans.edges.iter().map(|(id, r)| (*id, shift(r, e))));
+        spans
+            .guides
+            .extend(o.spans.guides.iter().map(|&(id, k)| (id, k + g)));
+        spans
+            .dimensions
+            .extend(o.spans.dimensions.iter().map(|&(id, k)| (id, k + a)));
+        spans
+            .notes
+            .extend(o.spans.notes.iter().map(|&(id, k)| (id, k + a)));
+        spans
+            .sections
+            .extend(o.spans.sections.iter().map(|&(id, k)| (id, k + s)));
+        spans
+            .instances
+            .extend(o.spans.instances.iter().map(|(id, r)| {
+                let placed = Ranges {
+                    faces: shift(&r.faces, f),
+                    edges: shift(&r.edges, e),
+                    guides: shift(&r.guides, g),
+                    annotations: shift(&r.annotations, a),
+                    sections: shift(&r.sections, s),
+                };
+                (*id, placed)
+            }));
+        let casters = base.casters.len() as u32;
+        base.caster_chunks
+            .extend(o.caster_chunks.into_iter().map(|c| CasterChunk {
+                vertices: c.vertices.start + casters..c.vertices.end + casters,
+                ..c
+            }));
+        base.faces.extend(o.faces);
+        base.edges.extend(o.edges);
+        base.edge_extras.extend(o.edge_extras);
+        base.guides.extend(o.guides);
+        base.annotations.extend(o.annotations);
+        base.sections.extend(o.sections);
+        base.cut_fill.extend(o.cut_fill);
+        base.cut_edges.extend(o.cut_edges);
+        base.lights.extend(o.lights);
+        base.casters.extend(o.casters);
+        base.sun_casters.extend(o.sun_casters);
+        self.cut_memo.now.extend(other.cut_memo.now);
     }
 
     /// Whether instance `iid`, placed in the mesh being walked, is on the open context's path.
@@ -3167,5 +3598,194 @@ mod tests {
         assert_eq!(none.edges.len(), base.edges.len());
         assert_eq!(none.guides.len(), base.guides.len());
         assert!(none.faces.iter().chain(&none.edges).all(|f| *f == 0.0));
+    }
+
+    /// `base_walked` with a fresh cache, the root's instances placed on threads or not.
+    fn walked(
+        s: &Scene,
+        context: &[InstanceId],
+        glass: GlassView,
+        section: SectionDisplay,
+        edges: &EdgeColors,
+        shared: bool,
+    ) -> SceneBase {
+        let share_from = if shared { 0 } else { usize::MAX };
+        let mut cache = PartsCache::default();
+        base_walked(
+            s, context, false, glass, section, edges, &mut cache, share_from,
+        )
+    }
+
+    #[test]
+    fn instances_placed_on_threads_give_what_one_thread_gives() {
+        let (mut s, contexts) = forest();
+        let effects = EdgeColors {
+            extras: true,
+            profiles: true,
+            ..EdgeColors::default()
+        };
+        let ghosts = GlassView {
+            x_ray: false,
+            hidden_geometry: true,
+        };
+        // A hidden tree (drawn ghosted with Hidden Geometry) and a plane cutting the root.
+        let tree = contexts[1][0];
+        s.edit(MeshId::Root, |m| {
+            Ok(m.hide_entities(&[EntityId::Instance(contexts[2][0])], true)
+                .0)
+        })
+        .unwrap();
+        let plane = SectionPlane::new(DVec3::new(0.0, 0.0, 0.6), DVec3::Z);
+        let no_cut = s.clone();
+        s.edit(MeshId::Root, |m| m.add_section(plane, true))
+            .unwrap();
+        for scene in [&no_cut, &s] {
+            for context in &contexts {
+                for glass in [GlassView::default(), ghosts] {
+                    for edges in [EdgeColors::default(), effects] {
+                        let one = walked(
+                            scene,
+                            context,
+                            glass,
+                            SectionDisplay::default(),
+                            &edges,
+                            false,
+                        );
+                        let many = walked(
+                            scene,
+                            context,
+                            glass,
+                            SectionDisplay::default(),
+                            &edges,
+                            true,
+                        );
+                        assert_eq!(many, one, "context {context:?}");
+                        let all = BTreeSet::from([EntityId::Instance(tree)]);
+                        assert_eq!(many.spans.flags(&all), one.spans.flags(&all));
+                    }
+                }
+            }
+        }
+        assert!(
+            !walked(
+                &s,
+                &[],
+                GlassView::default(),
+                SectionDisplay::default(),
+                &effects,
+                true
+            )
+            .cut_edges
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn plane_outlines_placed_on_threads_stop_at_the_same_limit() {
+        // A component holding 400 planes, placed three times: 1200 outlines, 1000 drawn.
+        let (mut s, first, _) = two_squares();
+        let def = MeshId::Definition(s.root().instance(first).unwrap().definition);
+        s.edit(def, |m| {
+            let mut change = kernel::ChangeSet::default();
+            for k in 0..400 {
+                let plane = SectionPlane::new(DVec3::new(k as f64 * 1e-3, 0.0, 0.0), DVec3::X);
+                change.ops.extend(m.add_section(plane, false)?.ops);
+            }
+            Ok(change)
+        })
+        .unwrap();
+        s.copy_instances(MeshId::Root, &[first], DVec3::new(0.0, 3.0, 0.0), 1)
+            .unwrap();
+        let show = SectionDisplay::default();
+        let one = walked(
+            &s,
+            &[],
+            GlassView::default(),
+            show,
+            &EdgeColors::default(),
+            false,
+        );
+        let many = walked(
+            &s,
+            &[],
+            GlassView::default(),
+            show,
+            &EdgeColors::default(),
+            true,
+        );
+        assert_eq!(one.sections.len(), session::MAX_SECTION_OUTLINES);
+        assert_eq!(many, one);
+    }
+
+    #[test]
+    fn a_kept_cache_gives_what_a_fresh_build_gives() {
+        let (mut s, contexts) = forest();
+        let plane = SectionPlane::new(DVec3::new(0.0, 0.0, 0.6), DVec3::Z);
+        s.edit(MeshId::Root, |m| m.add_section(plane, true))
+            .unwrap();
+        let effects = EdgeColors {
+            extras: true,
+            profiles: true,
+            ..EdgeColors::default()
+        };
+        let mut cache = PartsCache::default();
+        let mut check = |s: &Scene, step: &str| {
+            for edges in [EdgeColors::default(), effects, EdgeColors::default()] {
+                let show = SectionDisplay::default();
+                let kept = scene_base_cached(
+                    s,
+                    &[],
+                    false,
+                    GlassView::default(),
+                    show,
+                    &edges,
+                    &mut cache,
+                );
+                let fresh = scene_base_styled(s, &[], false, GlassView::default(), show, &edges);
+                assert_eq!(kept, fresh, "{step}");
+            }
+        };
+        check(&s, "first build");
+        // Moving a tree changes no mesh; the trees it does not move keep their cuts.
+        let tree = contexts[1][0];
+        let lift = DAffine3::from_translation(DVec3::new(0.5, 0.0, 0.3));
+        s.edit(MeshId::Root, |m| Ok(m.transform_instances(&[tree], lift)))
+            .unwrap();
+        check(&s, "moved");
+        let tree_def = MeshId::Definition(s.root().instance(tree).unwrap().definition);
+        let faces: Vec<FaceId> = s
+            .mesh(tree_def)
+            .unwrap()
+            .faces()
+            .map(|(id, _)| id)
+            .collect();
+        let face = faces[0];
+        let (gold, _) = s.add_material("Gold", [220, 180, 40]).unwrap();
+        s.paint(tree_def, &faces, &[], kernel::Side::Front, Some(gold))
+            .unwrap();
+        check(&s, "painted");
+        let shown = |s: &Scene, color: [u8; 3]| {
+            let c = color.map(|c| f32::from(c) / 255.0);
+            scene_base(s, &[]).faces.iter().any(|v| v.front == c)
+        };
+        assert!(shown(&s, [220, 180, 40]));
+        s.change_material(gold, None, Some([10, 20, 30]), Some(0.5))
+            .unwrap();
+        check(&s, "recolored");
+        assert!(shown(&s, [10, 20, 30]));
+        s.edit(tree_def, |m| {
+            Ok(m.hide_entities(&[EntityId::Face(face)], true).0)
+        })
+        .unwrap();
+        check(&s, "hidden");
+        let top = s
+            .mesh(tree_def)
+            .unwrap()
+            .faces()
+            .find(|(id, f)| *id != face && f.normal.z > 0.5)
+            .unwrap()
+            .0;
+        s.edit(tree_def, |m| m.push_pull(top, 0.25)).unwrap();
+        check(&s, "pulled");
     }
 }
