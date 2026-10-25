@@ -1299,3 +1299,102 @@ fn a_library_item_seen_as_a_speck_is_framed_on_open_but_a_plain_file_is_not() {
     ok(&mut opened, json!({"type": "open", "path": p(&plain)}));
     assert!(!frames(&opened, lo, hi), "a saved view is kept");
 }
+
+#[test]
+fn a_textured_component_with_many_faces_is_matched_quickly() {
+    let dir = folder("textured-many");
+    let png = red_blue_png(&dir);
+    let mut d = doc();
+    let out = ok(
+        &mut d,
+        json!({"type": "add_material", "name": "Tiles",
+               "texture": {"path": p(&png), "width": 0.5}}),
+    );
+    let tiles = out["changes"]["materials"][0].as_str().unwrap().to_string();
+    let mut all = Vec::new();
+    for i in 0..300 {
+        let x = f64::from(i) * 2.0;
+        all.extend(rectangle(&mut d, [x, 0.0, 0.0], [x + 1.0, 1.0, 0.0]));
+    }
+    let faces: Vec<EntityId> = all
+        .iter()
+        .copied()
+        .filter(|i| matches!(i, EntityId::Face(_)))
+        .collect();
+    ok(
+        &mut d,
+        json!({"type": "paint", "ids": faces, "material": tiles}),
+    );
+    let part = instance_of(&ok(
+        &mut d,
+        json!({"type": "make_component", "ids": all, "name": "Wall"}),
+    ));
+    let file = dir.join("wall.skr");
+    ok(
+        &mut d,
+        json!({"type": "save_to_library", "path": p(&file), "kind": "component", "item": part}),
+    );
+    let before = d.scene().definitions().count();
+    let start = std::time::Instant::now();
+    ok(
+        &mut d,
+        json!({"type": "insert_library_item", "path": p(&file)}),
+    );
+    assert!(start.elapsed().as_secs() < 10, "{:?}", start.elapsed());
+    assert_eq!(d.scene().definitions().count(), before);
+}
+
+#[test]
+fn inserting_inside_the_same_component_adds_it_under_a_free_name() {
+    let dir = folder("inside");
+    let file = dir.join("chair.skr");
+    let mut d = saved_part("Chair", [0.0; 3], [1.0, 1.0, 0.0], &file);
+    let chair = instances(&d)[0]["id"].as_str().unwrap().to_string();
+    ok(&mut d, json!({"type": "open_instance", "id": chair}));
+    ok(
+        &mut d,
+        json!({"type": "insert_library_item", "path": p(&file)}),
+    );
+    let mut names = definition_names(&d);
+    names.sort();
+    assert_eq!(
+        names,
+        [("Chair".to_string(), true), ("Chair#2".to_string(), true)]
+    );
+}
+
+#[test]
+fn nested_components_are_reused_and_a_numbered_twin_is_matched() {
+    let dir = folder("nested");
+    let mut d = doc();
+    let ids = rectangle(&mut d, [0.0; 3], [1.0, 1.0, 0.0]);
+    let inner = ok(
+        &mut d,
+        json!({"type": "make_component", "ids": ids, "name": "Inner"}),
+    );
+    let outer = instance_of(&ok(
+        &mut d,
+        json!({"type": "make_component", "ids": [instance_of(&inner)], "name": "Outer"}),
+    ));
+    let file = dir.join("outer.skr");
+    ok(
+        &mut d,
+        json!({"type": "save_to_library", "path": p(&file), "kind": "component", "item": outer}),
+    );
+    assert_eq!(d.scene().definitions().count(), 2);
+    ok(
+        &mut d,
+        json!({"type": "insert_library_item", "path": p(&file), "at": [5, 0, 0]}),
+    );
+    assert_eq!(d.scene().definitions().count(), 2);
+
+    // A model whose identical component is already named "Part#2".
+    let item = dir.join("part.skr");
+    let _ = saved_part("Part", [0.0; 3], [1.0, 1.0, 0.0], &item);
+    let mut twin = saved_part("Part#2", [0.0; 3], [1.0, 1.0, 0.0], &dir.join("t.skr"));
+    ok(
+        &mut twin,
+        json!({"type": "insert_library_item", "path": p(&item)}),
+    );
+    assert_eq!(definition_names(&twin), [("Part#2".to_string(), true)]);
+}

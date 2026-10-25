@@ -1,13 +1,13 @@
 //! Library items: saving the selection's component, a material or the model to a `.skr` file
 //! with a `library.json` entry, and inserting an item.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use glam::{DAffine3, DVec3};
 use kernel::{
-    DefinitionId, DefinitionKind, EntityId, Fingerprints, Material, MaterialId, Scene, SceneChange,
-    base_name,
+    DefinitionId, DefinitionKind, EntityId, Fingerprints, Material, MaterialId, MeshId, Scene,
+    SceneChange, base_name,
 };
 
 use super::{Document, check_coordinates};
@@ -195,22 +195,24 @@ impl Document {
         let mut theirs = Fingerprints::new(item);
         let mut ours = Fingerprints::new(&self.scene);
         let mut renames = Vec::new();
-        for (id, name) in &components {
-            let same_name: Vec<DefinitionId> = self
-                .scene
-                .definitions()
-                .filter(|(_, d)| {
-                    d.kind == DefinitionKind::Component && base_name(&d.name) == base_name(name)
-                })
-                .map(|(id, _)| id)
-                .collect();
-            if same_name.is_empty() {
-                continue;
+        let mut by_base: HashMap<&str, Vec<DefinitionId>> = HashMap::new();
+        for (id, d) in self.scene.definitions() {
+            if d.kind == DefinitionKind::Component {
+                by_base.entry(base_name(&d.name)).or_default().push(id);
             }
+        }
+        let active = self.active();
+        for (id, name) in &components {
+            let Some(same_name) = by_base.get(base_name(name)) else {
+                continue;
+            };
             let print = theirs.of(*id);
+            // One that holds the open context cannot be placed in it: not a match.
+            let holds_context = |o: DefinitionId| matches!(active, MeshId::Definition(a) if self.scene.reaches(o, a));
             match same_name
-                .into_iter()
-                .find(|o| print.is_some() && ours.of(*o) == print)
+                .iter()
+                .copied()
+                .find(|o| print.is_some() && !holds_context(*o) && ours.of(*o) == print)
             {
                 Some(found) => {
                     known.insert(*id, found);

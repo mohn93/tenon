@@ -1,6 +1,7 @@
 //! Telling whether two component definitions, possibly of different scenes, are the same
 //! component: same name (but for a trailing `#<digits>`), kind, geometry, materials and nested definitions, whatever the ids.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -14,6 +15,7 @@ use crate::{DefinitionId, MaterialId, TagId};
 pub struct Fingerprints<'a> {
     scene: &'a Scene,
     memo: HashMap<DefinitionId, Option<u64>>,
+    materials: RefCell<HashMap<MaterialId, Option<u64>>>,
 }
 
 impl<'a> Fingerprints<'a> {
@@ -21,6 +23,7 @@ impl<'a> Fingerprints<'a> {
         Self {
             scene,
             memo: HashMap::new(),
+            materials: RefCell::new(HashMap::new()),
         }
     }
 
@@ -137,16 +140,27 @@ impl<'a> Fingerprints<'a> {
             .collect()
     }
 
-    fn material(&self, id: Option<MaterialId>) -> Option<String> {
-        let m = self.scene.material(id?)?;
-        Some(format!(
-            "{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
-            m.name, m.color, m.opacity, m.emission, m.metalness, m.roughness, m.density
-        ))
-        .map(|s| match &m.texture {
-            Some(t) => format!("{s}|{}x{}|{:?}", t.width, t.height, t.image.encoded),
-            None => s,
-        })
+    /// The material's fingerprint, worked out once per material (a texture's bytes are hashed
+    /// directly, not formatted).
+    fn material(&self, id: Option<MaterialId>) -> Option<u64> {
+        let id = id?;
+        if let Some(known) = self.materials.borrow().get(&id) {
+            return *known;
+        }
+        let value = self.scene.material(id).map(|m| {
+            let mut h = DefaultHasher::new();
+            m.name.hash(&mut h);
+            (m.color, m.opacity.to_bits(), m.emission.to_bits()).hash(&mut h);
+            (m.metalness.to_bits(), m.roughness.to_bits()).hash(&mut h);
+            m.density.map(f64::to_bits).hash(&mut h);
+            if let Some(t) = &m.texture {
+                (t.width.to_bits(), t.height.to_bits()).hash(&mut h);
+                t.image.encoded.hash(&mut h);
+            }
+            h.finish()
+        });
+        self.materials.borrow_mut().insert(id, value);
+        value
     }
 
     fn tag(&self, id: Option<TagId>) -> Option<String> {

@@ -2120,7 +2120,25 @@ impl Editor {
         });
         // A part being placed is a ghost in its own colors, not a tool's drawing line.
         hud.lines = if self.pasting() {
-            ghost_lines(&preview, dark_canvas, camera)
+            let mut lines = ghost_lines(&preview, dark_canvas, camera);
+            // The axis, parallel and lock feedback stays, drawn over the ghost.
+            let feedback = self.lock.is_some()
+                || hit.as_ref().is_some_and(|h| {
+                    matches!(
+                        h.kind,
+                        SnapKind::Axis(_) | SnapKind::Parallel | SnapKind::Perpendicular
+                    )
+                });
+            if feedback {
+                lines.extend(preview_lines(
+                    &preview,
+                    hit.as_ref(),
+                    self.lock.is_some(),
+                    dark_canvas,
+                    camera,
+                ));
+            }
+            lines
         } else {
             preview_lines(
                 &preview,
