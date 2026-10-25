@@ -123,6 +123,35 @@ fn a_scaled_instance_is_its_own_row() {
 }
 
 #[test]
+fn boards_that_differ_by_float_noise_on_a_rounding_boundary_are_one_row() {
+    // 23/32 inch plywood is 182562.5 steps of 0.1 micrometer: noise either side of it must
+    // not split identical boards into two rows.
+    let mut d = doc();
+    let b = run(
+        &mut d,
+        json!({"type": "add_box", "corner": [0, 0, 0], "size": [1.0, 0.1, 0.01825625],
+               "as": "component", "name": "Ply"}),
+    )["placed"][0]
+        .clone();
+    let copies = run(
+        &mut d,
+        json!({"type": "copy", "ids": [b], "offset": [0, 0.5, 0], "count": 2}),
+    )["placed"]
+        .as_array()
+        .unwrap()
+        .clone();
+    for (copy, z) in copies.iter().zip([1.0 + 1e-12, 1.0 - 1e-12]) {
+        run(
+            &mut d,
+            json!({"type": "scale", "ids": [copy], "origin": [0, 0, 0], "factors": [1, 1, z]}),
+        );
+    }
+    let r = rows(&d, json!({"type": "cut_list"}));
+    assert_eq!(r.len(), 1, "{r:?}");
+    assert_eq!(r[0]["quantity"], 3);
+}
+
+#[test]
 fn a_cabinet_lists_its_parts_not_itself() {
     let mut d = doc();
     let side = board(&mut d);

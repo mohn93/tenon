@@ -225,44 +225,39 @@ pub fn cut_list(
     grouping: Grouping,
 ) -> Result<Vec<CutRow>, String> {
     let parts = cut_parts(scene, mesh, ids, inherited)?;
-    let key = |p: &CutPart| {
-        (
-            p.definition,
-            p.material,
-            p.solid,
-            p.size.map(|s| (s / SIZE_STEP).round() as i64),
-        )
+    // Sizes are compared within `SIZE_STEP` rather than rounded to it, so float noise either
+    // side of a rounding boundary does not split identical parts.
+    let same = |r: &CutRow, p: &CutPart| {
+        r.definition == p.definition
+            && r.material == p.material
+            && r.solid == p.solid
+            && (0..3).all(|i| (r.size[i] - p.size[i]).abs() <= SIZE_STEP)
     };
-    let mut rows: Vec<(CutRow, _)> = Vec::new();
+    let mut rows: Vec<CutRow> = Vec::new();
     for p in parts {
-        let k = key(&p);
         let at = (grouping == Grouping::Definition)
-            .then(|| rows.iter().position(|(_, rk)| *rk == k))
+            .then(|| rows.iter().position(|r| same(r, &p)))
             .flatten();
         match at {
             Some(i) => {
-                let row = &mut rows[i].0;
+                let row = &mut rows[i];
                 row.quantity += 1;
                 if let Err(at) = row.ids.binary_search(&p.root) {
                     row.ids.insert(at, p.root);
                 }
             }
-            None => rows.push((
-                CutRow {
-                    name: p.name,
-                    definition: p.definition,
-                    material: p.material,
-                    size: p.size,
-                    quantity: 1,
-                    solid: p.solid,
-                    note: p.note,
-                    ids: vec![p.root],
-                },
-                k,
-            )),
+            None => rows.push(CutRow {
+                name: p.name,
+                definition: p.definition,
+                material: p.material,
+                size: p.size,
+                quantity: 1,
+                solid: p.solid,
+                note: p.note,
+                ids: vec![p.root],
+            }),
         }
     }
-    let mut rows: Vec<CutRow> = rows.into_iter().map(|(r, _)| r).collect();
     let material_name = |m: Option<MaterialId>| {
         m.and_then(|m| scene.material(m))
             .map(|m| m.name.to_lowercase())
