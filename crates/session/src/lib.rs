@@ -33,6 +33,7 @@ pub mod sun;
 mod svg;
 pub mod text3d;
 pub mod texture;
+mod threemf;
 pub mod units;
 #[cfg(windows)]
 pub mod windows;
@@ -54,7 +55,7 @@ pub use document::{
     MAX_EYE_HEIGHT, MIN_EYE_HEIGHT, SectionDisplay, SectionFillColor, check_coordinates,
     dimension_label, dimension_value, note_label, unit_vector, world_drawing_axes,
 };
-pub use export::{ExportFormat, ExportReport};
+pub use export::{ExportFormat, ExportObject, ExportReport};
 pub use import::{
     ImportAs, ImportFormat, ImportReport, ImportUnits, MAX_CONTEXT_IMPORT_FACES, MAX_IMPORT_BYTES,
     MAX_IMPORT_MATERIALS, MAX_IMPORT_POINTS, MAX_IMPORT_POLYGONS, UpAxis,

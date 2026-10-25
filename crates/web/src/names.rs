@@ -44,6 +44,7 @@ pub fn mime_for(name: &str) -> &'static str {
     match ext.as_str() {
         "obj" => "model/obj",
         "stl" => "model/stl",
+        "3mf" => "model/3mf",
         "gltf" => "model/gltf+json",
         "glb" => "model/gltf-binary",
         "svg" => "image/svg+xml",

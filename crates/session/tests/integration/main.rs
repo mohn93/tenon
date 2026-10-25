@@ -69,6 +69,7 @@ mod tags;
 mod text3d;
 mod texture_position;
 mod textures;
+mod threemf;
 mod transform;
 mod unique_flip;
 mod view_flags;

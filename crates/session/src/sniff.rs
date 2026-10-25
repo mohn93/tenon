@@ -27,6 +27,8 @@ pub(crate) enum Kind {
     Svg,
     /// A PDF document.
     Pdf,
+    /// A 3MF package.
+    ThreeMf,
 }
 
 impl Kind {
@@ -41,6 +43,7 @@ impl Kind {
             Kind::Image => "PNG or JPEG",
             Kind::Skp => "SketchUp model",
             Kind::Svg => "SVG",
+            Kind::ThreeMf => "3MF",
             Kind::Pdf => "PDF",
         }
     }
@@ -124,6 +127,9 @@ pub(crate) fn replaceable(path: &Path, kind: Kind) -> bool {
     if kind == Kind::Skr {
         return zip::ZipArchive::new(file).is_ok_and(|mut z| z.by_name("document.json").is_ok());
     }
+    if kind == Kind::ThreeMf {
+        return zip::ZipArchive::new(file).is_ok_and(|mut z| z.by_name("3D/3dmodel.model").is_ok());
+    }
     if kind == Kind::Gltf {
         // The `asset` may come after a long `accessors` list: read on, as far as it.
         return gltf_json(std::io::BufReader::new(file.take(GLTF_HEAD)));
@@ -138,7 +144,7 @@ pub(crate) fn replaceable(path: &Path, kind: Kind) -> bool {
 /// Whether a file of `len` bytes starting with `head` is of `kind` (not `Skr`).
 fn is_kind(head: &[u8], len: u64, kind: Kind) -> bool {
     match kind {
-        Kind::Skr => false,
+        Kind::Skr | Kind::ThreeMf => false,
         Kind::Glb => head.starts_with(b"glTF"),
         Kind::Skp => head.starts_with(&skp_magic()),
         Kind::Image => {

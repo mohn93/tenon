@@ -1278,7 +1278,7 @@ pub enum Command {
     },
     /// Write every face of the model (all instances placed, in root coordinates) as triangles
     /// to `path`. `format` defaults to the one the file name's extension names (`.obj`,
-    /// `.stl`, `.glb`, `.gltf`, `.skp`, `.svg`). Not an undo step. The outcome's `export` counts the
+    /// `.stl`, `.glb`, `.gltf`, `.skp`, `.svg`, `.3mf`). Not an undo step. The outcome's `export` counts the
     /// triangles written and the faces left out because they could not be triangulated. A
     /// SketchUp 2017 file (`skp`) holds the whole scene instead: every definition the root
     /// places written once, faces with holes, soft edges, guides and materials with their
@@ -1289,6 +1289,9 @@ pub enum Command {
     /// camera and viewport): visible edges only (soft edges, hidden tags and what section cuts
     /// remove are left out), section cuts with their fill and outlines, and the labels and
     /// lines of dimensions and notes; its `export` counts the polylines drawn in `lines`.
+    /// A 3MF package (`.3mf`) holds one object per root group or component (and one for loose
+    /// faces) in millimeters with their colors; its `export` lists each object and whether
+    /// its mesh is closed.
     /// An existing file that is not of the format written, or the SketchUp file the model
     /// was opened from, is refused unless `overwrite` is true.
     Export {
@@ -1309,6 +1312,10 @@ pub enum Command {
         /// export at scale"). Absent: pixels.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scale: Option<f64>,
+        /// 3MF only: write just the selected parts (root groups and components) and loose
+        /// faces. Needs the root as the open context.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        selection: bool,
     },
     /// Read an OBJ, STL or SketchUp file and add its faces to the open context, as one undo
     /// step: as a new group (default) or component named after the file, placed at the

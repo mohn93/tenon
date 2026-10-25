@@ -3233,6 +3233,7 @@ dependencies = [
  "kernel",
  "miniz_oxide 0.8.9",
  "qrcode",
+ "quick-xml",
  "schemars",
  "serde",
  "serde_json",

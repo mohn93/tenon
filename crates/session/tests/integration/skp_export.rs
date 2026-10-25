@@ -838,6 +838,7 @@ fn under_api_root_a_link_is_refused() {
         overwrite: false,
         refuse_links,
         scale: None,
+        selection: false,
     };
     let e = d.execute(export(true)).unwrap_err();
     assert_eq!(e.kind, ErrorKind::InvalidInput, "{}", e.message);

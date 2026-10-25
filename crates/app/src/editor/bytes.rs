@@ -134,6 +134,7 @@ fn export_format(extension: &str) -> Option<session::ExportFormat> {
         "gltf" => F::Gltf,
         "skp" => F::Skp,
         "svg" => F::Svg,
+        "3mf" => F::ThreeMf,
         _ => return None,
     })
 }
@@ -147,5 +148,6 @@ fn format_extension(format: session::ExportFormat) -> &'static str {
         F::Gltf => "gltf",
         F::Skp => "skp",
         F::Svg => "svg",
+        F::ThreeMf => "3mf",
     }
 }

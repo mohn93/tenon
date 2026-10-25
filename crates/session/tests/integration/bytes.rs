@@ -257,6 +257,7 @@ fn export_bytes_equals_the_exported_file() {
         (ExportFormat::Gltf, "gltf"),
         (ExportFormat::Skp, "skp"),
         (ExportFormat::Svg, "svg"),
+        (ExportFormat::ThreeMf, "3mf"),
     ] {
         let path = scratch(&format!("exp.{ext}"));
         let expected = run(&mut d, json!({"type": "export", "path": path_str(&path)})).unwrap();

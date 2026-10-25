@@ -32,6 +32,10 @@ pub enum ExportFormat {
     Skp,
     /// A line drawing of the current view (hidden lines removed), as SVG (see `drawing`).
     Svg,
+    /// A 3MF package for 3D printers: one object per root part, in millimeters (see
+    /// `threemf`).
+    #[serde(rename = "3mf")]
+    ThreeMf,
 }
 
 impl ExportFormat {
@@ -46,6 +50,7 @@ impl ExportFormat {
             "gltf" => ExportFormat::Gltf,
             "skp" => ExportFormat::Skp,
             "svg" => ExportFormat::Svg,
+            "3mf" => ExportFormat::ThreeMf,
             _ => return None,
         })
     }
@@ -113,10 +118,29 @@ pub struct ExportReport {
     /// SVG: polylines drawn (visible edges and cut edges). Absent when 0.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub lines: usize,
+    /// 3MF: one entry per object written, in file order. Absent when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub objects: Vec<ExportObject>,
     /// What the file could not hold (glowing materials, curves, empty groups; for every
     /// format, dimensions and notes). Absent when there is nothing to say.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+}
+
+/// One object of a 3MF export.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ExportObject {
+    /// The part's name: its definition's, or "Loose geometry" for the root's own faces.
+    pub name: String,
+    /// Welded vertices.
+    pub vertices: usize,
+    pub triangles: usize,
+    /// True when every edge is used by exactly two triangles, consistently oriented, and the
+    /// faces point outward: a mesh a slicer can print.
+    pub closed: bool,
+    /// Why the mesh is not closed. Absent when it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -158,6 +182,9 @@ pub(crate) fn encode(
         }
         ExportFormat::Svg => {
             return Err("an SVG file is drawn from the view, not triangles".to_string());
+        }
+        ExportFormat::ThreeMf => {
+            return Err("a 3MF file is written from the model's parts, not triangles".to_string());
         }
     })
 }

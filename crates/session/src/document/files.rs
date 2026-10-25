@@ -344,14 +344,21 @@ impl Document {
         overwrite: bool,
         refuse_links: bool,
         scale: Option<f64>,
+        selection: bool,
     ) -> Result<ExportReport, CommandError> {
         let Some(format) = format.or_else(|| ExportFormat::from_path(Path::new(path))) else {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "give a format, or a path ending in .obj, .stl, .glb, .gltf, .skp or .svg",
+                "give a format, or a path ending in .obj, .stl, .glb, .gltf, .skp, .svg or .3mf",
             ));
         };
         self.check_export_scale(format, scale)?;
+        if selection && format != ExportFormat::ThreeMf {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "selection applies to 3MF exports only",
+            ));
+        }
         let target = Path::new(path);
         check_nul(target)?;
         if target
@@ -397,7 +404,7 @@ impl Document {
         let mtl_name = mtl_path
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-        let (encoded, report) = self.encode_triangles(format, &mtl_name)?;
+        let (encoded, report) = self.encode_triangles(format, &mtl_name, selection)?;
         if encoded.mtl.is_some() {
             // On a case-blind file system "x.MTL" is the library's own path.
             let same = |a: &Path, b: &Path| {
@@ -437,6 +444,7 @@ impl Document {
                 ExportFormat::Gltf => Kind::Gltf,
                 ExportFormat::Skp => Kind::Skp,
                 ExportFormat::Svg => Kind::Svg,
+                ExportFormat::ThreeMf => Kind::ThreeMf,
             };
             let checks = std::iter::once((target.to_path_buf(), kind)).chain(side);
             if let Some((p, k)) = checks.into_iter().find(|(p, k)| !sniff::replaceable(p, *k)) {
@@ -495,7 +503,11 @@ impl Document {
         &self,
         format: ExportFormat,
         mtl_name: &str,
+        selection: bool,
     ) -> Result<(export::Encoded, ExportReport), CommandError> {
+        if format == ExportFormat::ThreeMf {
+            return self.encode_3mf(selection);
+        }
         let (triangles, skipped_faces) = self.scene.triangles_and_skipped();
         if triangles.is_empty() {
             let message = if skipped_faces > 0 {
@@ -517,6 +529,69 @@ impl Document {
             ..ExportReport::default()
         };
         Ok((encoded, report))
+    }
+
+    /// The model's parts (or the selected ones) as a 3MF package, with the report. A part
+    /// that is not a closed mesh is named in `warnings`. `invalid_input` when there is nothing
+    /// to write.
+    fn encode_3mf(&self, selection: bool) -> Result<(export::Encoded, ExportReport), CommandError> {
+        if selection && self.active() != kernel::MeshId::Root {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "close the open group or component to export the selection",
+            ));
+        }
+        let (parts, skipped_faces) = self
+            .scene
+            .triangles_by_part(selection.then_some(&self.selection));
+        if parts.is_empty() {
+            let message = if selection {
+                "nothing to export: the selection holds no shown face or part".to_string()
+            } else if skipped_faces > 0 {
+                format!("nothing to export: {skipped_faces} faces could not be triangulated")
+            } else if self.scene.hides_faces() {
+                "nothing to export: no face is shown (hidden tags and hidden entities hide the rest)"
+                    .to_string()
+            } else {
+                "nothing to export: the model has no faces".to_string()
+            };
+            return Err(CommandError::new(ErrorKind::InvalidInput, message));
+        }
+        let named: Vec<(String, Vec<kernel::Triangle>)> = parts
+            .into_iter()
+            .map(|(instance, triangles)| {
+                let name = instance
+                    .and_then(|i| self.scene.root().instance(i))
+                    .and_then(|i| self.scene.definition(i.definition))
+                    .map_or_else(|| "Loose geometry".to_string(), |d| d.name.clone());
+                (name, triangles)
+            })
+            .collect();
+        let (bytes, objects) = crate::threemf::encode(&self.scene, &named)
+            .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e))?;
+        let mut warnings = export::annotation_warnings(&self.scene);
+        for o in objects.iter().filter(|o| !o.closed) {
+            warnings.push(format!(
+                "{} is not a closed mesh: {}",
+                o.name,
+                o.why.as_deref().unwrap_or("open")
+            ));
+        }
+        let report = ExportReport {
+            triangles: objects.iter().map(|o| o.triangles).sum(),
+            skipped_faces,
+            objects,
+            warnings,
+            ..ExportReport::default()
+        };
+        Ok((
+            export::Encoded {
+                bytes,
+                mtl: None,
+                images: Vec::new(),
+            },
+            report,
+        ))
     }
 
     /// Exports the model in `format` as bytes, as `export` writes a file (this is the web's
@@ -556,7 +631,8 @@ impl Document {
                 })
             }
             _ => {
-                let (encoded, report) = self.encode_triangles(format, &format!("{stem}.mtl"))?;
+                let (encoded, report) =
+                    self.encode_triangles(format, &format!("{stem}.mtl"), false)?;
                 let side_files = encoded
                     .mtl
                     .map(|mtl| (format!("{stem}.mtl"), mtl))

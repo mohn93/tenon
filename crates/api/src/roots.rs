@@ -509,6 +509,7 @@ mod tests {
                 overwrite: false,
                 refuse_links: false,
                 scale: None,
+                selection: false,
             },
             Command::Import {
                 path: "a.obj".into(),

@@ -1,8 +1,11 @@
 //! Every face of a scene as triangles in root coordinates, for export.
 
+use std::collections::BTreeSet;
+
 use glam::{DAffine3, DVec2, DVec3};
 
-use crate::ids::MaterialId;
+use crate::ids::{EntityId, FaceId, InstanceId, MaterialId};
+use crate::model::Model;
 use crate::scene::{MeshId, Scene};
 
 /// One triangle of a face, wound counter-clockwise around `normal` (the face's front).
@@ -22,6 +25,10 @@ pub struct Triangle {
     pub front: Option<MaterialId>,
     pub back: Option<MaterialId>,
 }
+
+/// A root part's triangles: the root instance (None for the root's loose faces) and what it
+/// shows.
+pub type Part = (Option<InstanceId>, Vec<Triangle>);
 
 impl Scene {
     /// Every face the scene shows, as triangles in root coordinates: the root's faces and,
@@ -58,12 +65,40 @@ impl Scene {
         skipped: &mut usize,
     ) {
         let Some(model) = self.mesh(id) else { return };
+        self.collect_faces(model, place, inherited, &|_| true, out, skipped);
+        for (_, instance) in model
+            .instances()
+            .filter(|(_, i)| self.placed_instance_shown(i))
+        {
+            self.collect_triangles(
+                MeshId::Definition(instance.definition),
+                place * instance.transform,
+                instance.material.or(inherited),
+                out,
+                skipped,
+            );
+        }
+    }
+
+    /// The shown faces of `model` that `keep` accepts, as triangles placed by `place`.
+    fn collect_faces(
+        &self,
+        model: &Model,
+        place: DAffine3,
+        inherited: Option<MaterialId>,
+        keep: &dyn Fn(FaceId) -> bool,
+        out: &mut Vec<Triangle>,
+        skipped: &mut usize,
+    ) {
         // A mirroring placement turns triangles inside out; swapping two corners restores the
         // winding. Normals follow the inverse transpose, which is right for any linear map.
         let mirrored = place.matrix3.determinant() < 0.0;
         let normal_map = place.matrix3.inverse().transpose();
         let smooth = model.smooth_normals();
-        for (fid, face) in model.faces().filter(|(_, f)| self.face_shown(f)) {
+        for (fid, face) in model
+            .faces()
+            .filter(|(fid, f)| self.face_shown(f) && keep(*fid))
+        {
             let normal = (normal_map * face.normal).normalize();
             let (front, back) = (face.front.or(inherited), face.back.or(inherited));
             let tris = model.shaded_triangles(fid, &smooth).unwrap_or_default();
@@ -84,17 +119,47 @@ impl Scene {
                 });
             }
         }
-        for (_, instance) in model
-            .instances()
-            .filter(|(_, i)| self.placed_instance_shown(i))
-        {
+    }
+
+    /// The shown triangles grouped by root part, for formats that keep parts apart (3MF): the
+    /// root's loose faces first (None), then each shown root instance with everything it
+    /// places, all in root coordinates. Parts without triangles are left out. With `only`,
+    /// just the instances and faces it holds. Also how many faces gave no triangles.
+    pub fn triangles_by_part(&self, only: Option<&BTreeSet<EntityId>>) -> (Vec<Part>, usize) {
+        let mut parts = Vec::new();
+        let mut skipped = 0;
+        let root = self.root();
+        let mut loose = Vec::new();
+        let keep = |f: FaceId| only.is_none_or(|s| s.contains(&EntityId::Face(f)));
+        self.collect_faces(
+            root,
+            DAffine3::IDENTITY,
+            None,
+            &keep,
+            &mut loose,
+            &mut skipped,
+        );
+        if !loose.is_empty() {
+            parts.push((None, loose));
+        }
+        for (iid, instance) in root.instances() {
+            if !self.placed_instance_shown(instance)
+                || only.is_some_and(|s| !s.contains(&EntityId::Instance(iid)))
+            {
+                continue;
+            }
+            let mut tris = Vec::new();
             self.collect_triangles(
                 MeshId::Definition(instance.definition),
-                place * instance.transform,
-                instance.material.or(inherited),
-                out,
-                skipped,
+                instance.transform,
+                instance.material,
+                &mut tris,
+                &mut skipped,
             );
+            if !tris.is_empty() {
+                parts.push((Some(iid), tris));
+            }
         }
+        (parts, skipped)
     }
 }

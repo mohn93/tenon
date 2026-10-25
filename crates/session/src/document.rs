@@ -718,8 +718,10 @@ impl Document {
                 overwrite,
                 refuse_links,
                 scale,
+                selection,
             } => {
-                let report = self.export_file(&path, format, overwrite, refuse_links, scale)?;
+                let report =
+                    self.export_file(&path, format, overwrite, refuse_links, scale, selection)?;
                 Ok(Outcome {
                     export: Some(report),
                     ..Outcome::default()
