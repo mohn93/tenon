@@ -249,6 +249,23 @@ fn textured_face(h: &mut HeadlessHost) {
     assert!(r["result"].is_object(), "{r}");
 }
 
+#[test]
+fn an_image_import_reads_only_inside_the_roots() {
+    let (root, outside) = folders("import-image");
+    let mut h = host(&root);
+    png_file(&root.join("in.png"));
+    png_file(&outside.join("out.png"));
+    let place = |path: String| json!({"type": "import_image", "path": path, "origin": [0, 0, 0], "width": 1});
+    let r = call(&mut h, "execute", place("in.png".into()));
+    assert!(r["result"].is_object(), "{r}");
+    let r = call(
+        &mut h,
+        "execute",
+        place(outside.join("out.png").display().to_string()),
+    );
+    assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
+}
+
 #[cfg(unix)]
 #[test]
 fn obj_side_files_that_are_links_are_refused_and_their_targets_not_read() {

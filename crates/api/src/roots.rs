@@ -247,6 +247,7 @@ impl ApiRoots {
             }
             Command::SaveToLibrary { path, .. } => *path = text(self.write(path)?)?,
             Command::InsertLibraryItem { path, .. } => *path = text(self.read(path)?)?,
+            Command::ImportImage { path: Some(p), .. } => *p = text(self.read(p)?)?,
             Command::AddMaterial {
                 texture: Some(TextureSource { path: Some(p), .. }),
                 ..
