@@ -209,7 +209,23 @@ fn reload_on_new_share() {
     on_change.forget();
 }
 
+/// Names keys with Cmd (`⌘S`) in menus and tooltips when the browser runs on an Apple
+/// computer, phone or tablet, as the native app does on macOS.
+fn name_keys_for_the_platform() {
+    let navigator = window().navigator();
+    let ua_platform = js_sys::Reflect::get(&navigator, &"userAgentData".into())
+        .ok()
+        .filter(|data| data.is_object())
+        .and_then(|data| js_sys::Reflect::get(&data, &"platform".into()).ok())
+        .and_then(|platform| platform.as_string())
+        .unwrap_or_default();
+    let platform = navigator.platform().unwrap_or_default();
+    let user_agent = navigator.user_agent().unwrap_or_default();
+    app::shortcuts::set_mac_labels(names::is_apple(&ua_platform, &platform, &user_agent));
+}
+
 async fn run() -> Result<(), String> {
+    name_keys_for_the_platform();
     reload_on_new_share();
     let canvas = canvas()?;
     // The GPU is asked for while the model downloads and opens (the browser answers both
