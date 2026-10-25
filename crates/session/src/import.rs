@@ -39,27 +39,42 @@ pub enum ImportFormat {
     Stl,
     /// SketchUp, from SketchUp 2017 or newer.
     Skp,
+    /// glTF 2.0: `.gltf` JSON or `.glb` binary, told apart by their contents.
+    #[serde(alias = "glb")]
+    Gltf,
+    /// COLLADA (`.dae`).
+    Dae,
 }
 
 impl ImportFormat {
-    /// The format a file name's extension asks for (`.obj`, `.stl`, `.skp`, any case).
+    /// The format a file name's extension asks for (`.obj`, `.stl`, `.skp`, `.gltf`, `.glb`,
+    /// `.dae`, any case).
     pub fn from_path(path: &Path) -> Option<Self> {
         let ext = path.extension()?.to_str()?.to_ascii_lowercase();
         Some(match ext.as_str() {
             "obj" => ImportFormat::Obj,
             "stl" => ImportFormat::Stl,
             "skp" => ImportFormat::Skp,
+            "gltf" | "glb" => ImportFormat::Gltf,
+            "dae" => ImportFormat::Dae,
             _ => return None,
         })
     }
 
-    /// The axis that points up in files of this format unless told otherwise: Y for OBJ, Z
-    /// for STL (as `export` writes them) and SketchUp (which is Z-up; `up` is ignored).
+    /// The axis that points up in files of this format unless told otherwise: Y for OBJ and
+    /// glTF, Z for STL (as `export` writes them) and SketchUp (which is Z-up; `up` is
+    /// ignored). A COLLADA file names its own (Y when it does not).
     pub fn default_up(self) -> UpAxis {
         match self {
-            ImportFormat::Obj => UpAxis::Y,
+            ImportFormat::Obj | ImportFormat::Gltf | ImportFormat::Dae => UpAxis::Y,
             ImportFormat::Stl | ImportFormat::Skp => UpAxis::Z,
         }
+    }
+
+    /// True for the formats that hold a scene of nodes, materials and textures (glTF and
+    /// COLLADA), read into groups and components as SketchUp files are.
+    pub fn is_scene(self) -> bool {
+        matches!(self, ImportFormat::Gltf | ImportFormat::Dae)
     }
 }
 

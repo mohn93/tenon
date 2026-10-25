@@ -14,8 +14,8 @@ use tools::{NoteRequest, TextSpec};
 
 use super::{LibrarySave, UiAction, theme, widgets};
 use crate::editor::{
-    ImportAs, ImportOptions, ImportUnits, PaperChoice, PrintOptions, PrintPurpose, RenameTarget,
-    UpAxis, is_sketchup_path,
+    ImportApplies, ImportAs, ImportOptions, ImportUnits, PaperChoice, PrintOptions, PrintPurpose,
+    RenameTarget, UpAxis,
 };
 use crate::platform::{UnsavedChoice, UnsavedPrompt};
 
@@ -307,7 +307,7 @@ pub(super) fn forget(ui: &Ui) {
 
 /// The Import Options sheet: units, up axis, what the import makes and whether coplanar faces
 /// merge, for the file at `path`. A SketchUp file has its own units, axes and faces: only
-/// what the import makes is asked.
+/// what the import makes is asked; a COLLADA file has its own units and axes.
 fn import_sheet(
     ui: &mut Ui,
     path: &Path,
@@ -322,12 +322,12 @@ fn import_sheet(
     );
     ui.label(RichText::new(name).color(t.text_secondary));
     ui.add_space(theme::GRID);
-    let sketchup = is_sketchup_path(path);
+    let applies = ImportApplies::to(path);
     egui::Grid::new("import-options")
         .num_columns(2)
         .spacing([theme::GRID * 2.0, theme::GRID])
         .show(ui, |ui| {
-            if !sketchup {
+            if applies.units {
                 mesh_options(ui, options, t.text_secondary);
             }
             ui.label("Import as");
@@ -338,7 +338,7 @@ fn import_sheet(
             });
             ui.end_row();
         });
-    if !sketchup {
+    if applies.merge {
         ui.checkbox(&mut options.merge_coplanar, "Merge coplanar faces");
     }
     if buttons(ui, "Import", true, actions) {
@@ -346,7 +346,7 @@ fn import_sheet(
     }
 }
 
-/// The import sheet's rows for OBJ and STL: units and up axis.
+/// The import sheet's rows for OBJ, STL and glTF: units and up axis.
 fn mesh_options(ui: &mut Ui, options: &mut ImportOptions, secondary: egui::Color32) {
     let label = ui.label("Units");
     egui::ComboBox::from_id_salt("import-units")
@@ -368,7 +368,7 @@ fn mesh_options(ui: &mut Ui, options: &mut ImportOptions, secondary: egui::Color
             ui.radio_value(&mut options.up, Some(UpAxis::Z), "Z up");
         });
         ui.label(
-            RichText::new("Automatic: Y for OBJ, Z for STL")
+            RichText::new("Automatic: Y for OBJ and glTF, Z for STL")
                 .small()
                 .color(secondary),
         );

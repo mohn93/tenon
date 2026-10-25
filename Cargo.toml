@@ -38,6 +38,7 @@ image = { version = "=0.25.10", default-features = false, features = ["png", "jp
 miniz_oxide = { version = "=0.8.9", default-features = false, features = ["with-alloc"] }
 zip = { version = "=9.0.2", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 skrifa = "=0.44.0"
+roxmltree = "=0.21.1"
 
 # egui-winit 0.36.2 does not build for wasm32 (its dropped-file type lacks the web method); the
 # copy in vendor/ is the same crate with that one method added under cfg(wasm32).

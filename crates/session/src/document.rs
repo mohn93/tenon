@@ -41,6 +41,7 @@ mod follow_me;
 mod groups;
 mod hide;
 mod import;
+pub(crate) use import::read_limited;
 mod instances;
 mod interference;
 mod intersect;

@@ -17,7 +17,7 @@ use session::{
     BatchCommand, BatchError, Camera, Command, CommandError, Document, ErrorKind, ImportReport,
     Lighting, Origin, Outcome, Projection, SelectMode, StandardView, TextureSource,
 };
-pub use session::{ImportAs, ImportUnits, UpAxis};
+pub use session::{ImportAs, ImportFormat, ImportUnits, UpAxis};
 use tools::overlay::{ghost_lines, marker, preview_lines, snap_label};
 use tools::{
     Axis, Guides, Inference, Layout, Lock, NoteRequest, Owner, Phase, Remembered, Scenery, Slab,
@@ -1823,39 +1823,39 @@ impl Editor {
         self.import.units = units;
     }
 
-    /// Imports an OBJ, STL or SketchUp file (the format its extension names) into the open
-    /// context as `import_options` say (by default a group, which becomes the selection), as
-    /// one undo step. A SketchUp file keeps its own units, axes and faces: only `place`
-    /// applies. False if it cannot be imported; the status then says why.
+    /// Imports an OBJ, STL, SketchUp, glTF or COLLADA file (the format its extension names)
+    /// into the open context as `import_options` say (by default a group, which becomes the
+    /// selection), as one undo step. A SketchUp file keeps its own units, axes and faces: only
+    /// `place` applies; a COLLADA file keeps its own units and axes (see `ImportApplies`). False if it cannot be imported; the status then says why.
     pub fn import_file(&mut self, path: &Path) -> bool {
         self.reset_tool();
         self.typed.clear();
         self.message = None;
-        let sketchup = is_sketchup_path(path);
+        let applies = ImportApplies::to(path);
         let options = self.import;
+        let (scale, up, merge_coplanar) = applies.given(options);
         let outcome = self.run(Command::Import {
             library_roots: None,
             path: path.display().to_string(),
             format: None,
             place: options.place,
-            scale: (!sketchup && options.units != ImportUnits::Meters)
-                .then(|| options.units.meters()),
-            up: if sketchup { None } else { options.up },
-            merge_coplanar: (!sketchup).then_some(options.merge_coplanar),
+            scale,
+            up,
+            merge_coplanar,
         });
         self.invalidate_hover();
         let Some(report) = outcome.and_then(|o| o.import) else {
             return false;
         };
-        self.say_imported(&display_name(path), sketchup, &report);
+        self.say_imported(&display_name(path), applies, &report);
         true
     }
 
-    /// The status after an import of the file `name` (`sketchup`: a SketchUp file) that made
-    /// `report`.
-    fn say_imported(&mut self, name: &str, sketchup: bool, report: &ImportReport) {
+    /// The status after an import of the file `name` (with `applies` for its format) that
+    /// made `report`.
+    fn say_imported(&mut self, name: &str, applies: ImportApplies, report: &ImportReport) {
         let options = self.import;
-        if sketchup {
+        if applies.tree {
             self.message = Some(Message::info(format!(
                 "Imported {name}{}",
                 sketchup_summary(report)
@@ -2685,6 +2685,39 @@ fn export_message(path: &Path, skipped: usize) -> String {
 pub fn is_sketchup_path(path: &Path) -> bool {
     path.extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("skp"))
+}
+
+/// Which of the window's import options apply to the file at `path`, by its extension.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ImportApplies {
+    /// Units and up axis: not for SketchUp and COLLADA files, which name their own.
+    pub units: bool,
+    /// Merging coplanar faces: not for SketchUp files, whose faces are kept as they are.
+    pub merge: bool,
+    /// True for files with groups and components (SketchUp, glTF, COLLADA), whose status says
+    /// how many definitions and instances they made.
+    pub tree: bool,
+}
+
+impl ImportApplies {
+    pub fn to(path: &Path) -> ImportApplies {
+        let format = ImportFormat::from_path(path);
+        let sketchup = is_sketchup_path(path);
+        ImportApplies {
+            units: !sketchup && format != Some(ImportFormat::Dae),
+            merge: !sketchup,
+            tree: sketchup || format.is_some_and(ImportFormat::is_scene),
+        }
+    }
+
+    /// The `import` command's `scale`, `up` and `merge_coplanar` for `options`.
+    fn given(self, options: ImportOptions) -> (Option<f64>, Option<UpAxis>, Option<bool>) {
+        (
+            (self.units && options.units != ImportUnits::Meters).then(|| options.units.meters()),
+            options.up.filter(|_| self.units),
+            self.merge.then_some(options.merge_coplanar),
+        )
+    }
 }
 
 /// The file name of `path`, for the status.
@@ -5699,6 +5732,73 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../skp/tests/fixtures")
             .join(name)
+    }
+
+    fn scene_fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../session/tests/fixtures")
+            .join(name)
+    }
+
+    #[test]
+    fn gltf_and_collada_imports_say_what_they_made_and_take_their_options() {
+        let applies = |name: &str| ImportApplies::to(Path::new(name));
+        assert_eq!(
+            applies("a.GLB"),
+            ImportApplies {
+                units: true,
+                merge: true,
+                tree: true
+            }
+        );
+        assert_eq!(
+            applies("a.dae"),
+            ImportApplies {
+                units: false,
+                merge: true,
+                tree: true
+            }
+        );
+        assert!(!applies("a.skp").merge && !applies("a.obj").tree);
+
+        let mut e = editor();
+        e.set_import_options(ImportOptions {
+            units: ImportUnits::Centimeters,
+            ..Default::default()
+        });
+        assert!(
+            e.import_file(&scene_fixture("gltf/table.gltf")),
+            "{}",
+            e.status()
+        );
+        let message = e.status_parts().message.unwrap();
+        assert_eq!(
+            message,
+            "Imported table.gltf: 12 faces, 2 definitions, 3 instances"
+        );
+        // glTF takes the window's units: the 1 m top is 1 cm.
+        let [lo, hi] = e.doc().scene().bounds(kernel::MeshId::Root).unwrap();
+        assert!(((hi - lo).max_element() - 0.01).abs() < 1e-9, "{lo} {hi}");
+
+        // COLLADA keeps its own (centimeters): the 2 m ground stays 2 m.
+        let mut e = editor();
+        e.set_import_options(ImportOptions {
+            units: ImportUnits::Millimeters,
+            up: Some(UpAxis::Z),
+            ..Default::default()
+        });
+        assert!(
+            e.import_file(&scene_fixture("dae/chairs.dae")),
+            "{}",
+            e.status()
+        );
+        let message = e.status_parts().message.unwrap();
+        assert!(
+            message.starts_with("Imported chairs.dae: 8 faces, 3 definitions, 4 instances"),
+            "{message}"
+        );
+        let [lo, hi] = e.doc().scene().bounds(kernel::MeshId::Root).unwrap();
+        assert!((hi.y - lo.y - 2.0).abs() < 1e-9 && hi.z > 1.0, "{lo} {hi}");
     }
 
     #[test]

@@ -1649,7 +1649,7 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
   put, then the grip clicked; Offset, where the face (or chain) was pressed; Follow Me is always `idle`; Tape Measure, where the measurement starts; Axes, the origin, then the red point; Dimension, the ends clicked (or the clicked edge's ends), or a circle's center; Text, the point the note points at, then where its text goes (none for a note fixed to the view). The Select tool is `active` with no points while its button is held (a
   click or a box, both on screen); Erase, Paint and Follow Me are always `idle`.
 - `paint_material` is the material the Paint tool paints with (`null`: the default material);
-  `import_units` is what one unit of an imported OBJ or STL file is in the window's import options
+  `import_units` is what one unit of an imported OBJ, STL or glTF file is in the window's import options
   sheet (`meters`, `centimeters`, `millimeters`, `inches` or `feet`; the `import` command takes its own
   `scale`).
 - `flying` and `fly_speed` (meters a second) are fly mode's (see Camera). Headless nothing moves
@@ -2126,18 +2126,19 @@ export at scale"), and so is one for another format or one that is not a positiv
 
 ### Import
 
-`{"type": "import", "path": "/abs/chair.obj"}` reads an OBJ, STL or SketchUp file and adds its
-faces to the open context as one undo step. `format` (`obj`, `stl`, `skp`) defaults to the one
-the path's extension names, in any case; a file with another extension whose header is
+`{"type": "import", "path": "/abs/chair.obj"}` reads an OBJ, STL, SketchUp, glTF or COLLADA
+file and adds its faces to the open context as one undo step. `format` (`obj`, `stl`, `skp`,
+`gltf` (also written `glb`; JSON and binary files alike), `dae`) defaults to the one the path's
+extension names (`.obj`, `.stl`, `.skp`, `.gltf`, `.glb`, `.dae`), in any case; a file with another extension whose header is
 SketchUp's is read as `skp`; any other file without `format` is `invalid_input`, and so is a
 `.skr` path (use `open`).
 
 | Field | Meaning |
 |---|---|
 | `as` | `group` (default): a new group named after the file (`chair`), placed at the open context's origin and selected. `component`: the same as a component. `context`: loose geometry in the open context that merges with what it touches (splitting edges and faces as drawing does), as if the group were made and exploded; what comes out is selected. Drawing with sticky geometry takes seconds for big files, so a file making more than 10,000 faces is `invalid_input` here (import it as a group). |
-| `scale` | Meters per file unit, default 1 (a millimeter file: `0.001`). Positive and finite, else `invalid_input`. A SketchUp file has real units: `scale` multiplies them (2 doubles the model). A legacy (2017 to 2020) SketchUp file also names the model's unit: importing it into an empty model in the default units sets the display `length` to it (inches: `feet_inches`, as the reader does not give SketchUp's length format; feet: `feet`; millimeters, centimeters, meters), as part of the import's undo step; a model that has geometry or other units keeps its own. `open` of a legacy `.skp` sets it the same way (the opened model starts from the file's unit). |
-| `up` | The file's up axis: `y` or `z`. Defaults to `y` for OBJ and `z` for STL, as `export` writes them, so exporting and importing again gives back the same geometry (a Y-up file's (x, y, z) becomes (x, -z, y)). Ignored for SketchUp (Z-up, as the model). |
-| `merge_coplanar` | Default true: neighbouring faces that share an edge no third face uses, lie in one plane, face the same way and have the same material become one face (an STL's triangles come back as the model's faces, holes included). False keeps one face per polygon. Ignored for SketchUp: faces are kept as the file has them. |
+| `scale` | Meters per file unit, default 1 (a millimeter file: `0.001`). Positive and finite, else `invalid_input`. A glTF file is in meters by its specification (`scale` as for OBJ); a COLLADA file names its own unit (`<unit meter>`), which `scale` multiplies. A SketchUp file has real units: `scale` multiplies them (2 doubles the model). A legacy (2017 to 2020) SketchUp file also names the model's unit: importing it into an empty model in the default units sets the display `length` to it (inches: `feet_inches`, as the reader does not give SketchUp's length format; feet: `feet`; millimeters, centimeters, meters), as part of the import's undo step; a model that has geometry or other units keeps its own. `open` of a legacy `.skp` sets it the same way (the opened model starts from the file's unit). |
+| `up` | The file's up axis: `y` or `z`. Defaults to `y` for OBJ and glTF and `z` for STL, as `export` writes them, so exporting and importing again gives back the same geometry (a Y-up file's (x, y, z) becomes (x, -z, y)). A COLLADA file names its own (`<up_axis>`: `Y_UP`, the default, `Z_UP` or `X_UP`, whose (x, y, z) becomes (-y, -z, x)); `up` given overrides it. Ignored for SketchUp (Z-up, as the model). |
+| `merge_coplanar` | Default true: neighbouring faces that share an edge no third face uses, lie in one plane, face the same way and have the same material (and, for glTF and COLLADA, the same texture placement) become one face (an STL's triangles come back as the model's faces, holes included). False keeps one face per polygon. Ignored for SketchUp: faces are kept as the file has them. |
 
 Reading: OBJ `v` positions, `f` polygons (`v`, `v/vt`, `v/vt/vn`, `v//vn` corners; negative
 indices count back from the last position), `usemtl` and `mtllib`, comments and lines continued
@@ -2226,6 +2227,65 @@ read, and, in a 2017-2020 file, entities that could not be read after a damaged 
 Section planes, dimensions, text, texture positions and the file's camera and
 styles are not read.
 
+glTF 2.0 files (`.gltf` JSON or `.glb` binary) and COLLADA files (`.dae`, 1.4 and 1.5) are
+read as a tree of nodes. What is carried:
+
+- Nodes: the scene's root nodes go into the new group or component (`"as": "context"`: into
+  the open context). A node holding a mesh or placing other nodes becomes a group named after
+  the node (`Group` when unnamed), placed with the node's transform (mirrors and uneven scales
+  included); a node holding nothing (a camera, a light) is left out. A glTF mesh several nodes
+  place, or a COLLADA geometry several nodes place with the same material binding, becomes one
+  component named after the mesh (`Component`), and a node holding only that mesh is placed
+  as the component itself. A COLLADA library node placed by `instance_node` becomes one
+  component (named after the node) shared by its placements, and a node that only places one
+  (as SketchUp writes component instances) is that placement. A file whose scene is one node
+  holding meshes no other node holds, and placing nothing, has its faces straight in the new
+  group. glTF reads the scene `scene` names (else the first; with no scenes, every node no node
+  places); COLLADA the visual scene `<scene>` names (else the first). Nesting deeper than 32,
+  more than 100,000 nodes, more than 10,000 meshes, materials, images or buffers, or a node
+  that places itself is a `file` error.
+- Faces: glTF triangles, strips and fans; COLLADA `triangles`, `polylist`, `polygons`
+  (a `<ph>` keeps its `<h>` holes when the face with them is flat and its loops do not cross;
+  else it is made from its outer loop), `trifans` and `tristrips`. Triangles become faces as
+  OBJ polygons do (welded, coplanar neighbours merged with `merge_coplanar`). An edge between
+  two faces that stay apart and do not lie in one plane is soft when the file's normals at both
+  its ends agree on both faces (a smooth surface); without normals (glTF: flat shading) edges
+  stay hard. A polygon with an index past its data is skipped.
+- Materials: one per material of the file that a made face uses, named as the file names it
+  (`Material` when unnamed; a name the model has gets a number, `Brick 2`; existing materials
+  never change), at most 1,024 (faces with the others are left unpainted, with a warning).
+  glTF: `baseColorFactor` (linear, as sRGB), its alpha the opacity when `alphaMode` is
+  `BLEND`, and the `baseColorTexture` image. COLLADA: the effect's `diffuse` color (as sRGB,
+  as COLLADA writers give it) or `diffuse` texture (through its sampler and surface), and the
+  opacity of `transparent` and `transparency` (`A_ONE` or `RGB_ZERO`). A textured material's
+  color is its image's average color; the image is used under `add_material`'s limits (PNG or
+  JPEG, at most 16 MiB and 4096 pixels a side, the pixel budget and 256 textures), else the
+  material keeps its color with a warning ("1 texture was not imported (the image file could
+  not be read); its material keeps its colour").
+- Texture coordinates: a material's texture size (meters per repeat of the image along its
+  width and height, 0.001 to 1000 m) is the one most of its polygons' coordinates give, and
+  each face gets the texture placement (offset, rotation, scale) its coordinates ask for on top
+  of that, so the image lands as in the file; a sheared mapping takes the nearest rotation and
+  scale, a mirrored one the mirror's size, and a placement beyond the placement limits is left
+  off.
+- Side files: buffers and images are `data:` URIs, the `.glb`'s binary chunk, buffer views,
+  or relative paths (percent-escapes decoded, `/` or `\` between folders) read from the file's
+  folder or below it. A path that is absolute, climbs out with `..`, or is a URL (`http:`,
+  `file:` or any scheme) is refused; under `--api-root` the resolved file must also lie within
+  the roots. A file imported from bytes (the web build) reads no side files. A buffer that
+  cannot be read is a `file` error; an image that cannot be read is a warning. The buffers hold
+  at most 128 MiB together.
+
+Not carried, each counted in `warnings`: animations, skins, cameras, lights, morph targets,
+COLLADA controllers, lines and points ("2 animations were not imported", "1 set of lines was
+not imported"), and parts that could not be read. A glTF file that requires an extension
+other than `KHR_materials_emissive_strength`, `KHR_materials_unlit`, `KHR_materials_specular`,
+`KHR_texture_transform` and `KHR_mesh_quantization` (Draco or meshopt compression, for
+example) is a `file` error naming it, and so are sparse accessors, accessors or buffer views
+that run past their data, and broken XML or a DTD in a COLLADA file. Texture transforms,
+other texture coordinate sets than the material's, vertex colors, and the materials' other
+maps are not read.
+
 The outcome's `import` reports what was made:
 
 ```
@@ -2244,7 +2304,9 @@ made), `textures` (materials added with a texture) and `warnings`
 imported" (2017-2020 files only),
 "1 image was skipped", "5 face holes could not be read and were dropped", "1 guide could not be
 read and was skipped"); each is absent when 0 or empty, and always absent for
-OBJ and STL:
+OBJ and STL. A glTF or COLLADA import reports `definitions`, `instances`, `textures` and
+`warnings` the same way; its `polygons` counts the triangles and polygons of the meshes the
+tree holds (each once), and `skipped` those that made no face:
 
 ```
 {"import": {"instance": "i6341", "definition": "d15", "polygons": 609, "faces": 616,
@@ -2268,13 +2330,17 @@ beyond +/-1e6 m, is `invalid_input`.
 A number or index that cannot be read is reported by its line or facet, without quoting it.
 `import` is allowed in an atomic batch.
 
-In the window, File > Import... (Cmd+I) picks an OBJ, STL or SketchUp file and opens an
+In the window, File > Import... (Cmd+I) picks an OBJ, STL, SketchUp, glTF (`.gltf`, `.glb`)
+or COLLADA (`.dae`) file and opens an
 options sheet (units: meters, centimeters, millimeters, inches or feet per file unit, which
 becomes `scale`; up axis; import as; merge coplanar faces), whose values are the parameters
 above and are kept in the preferences. For a `.skp` the sheet asks only "Import as": the file
-keeps its own units, axes and faces (`scale`, `up` and `merge_coplanar` are not sent).
+keeps its own units, axes and faces (`scale`, `up` and `merge_coplanar` are not sent). For a
+`.dae` it asks "Import as" and merging: the file keeps its own units and axes (`scale` and
+`up` are not sent).
 Importing from the sheet runs `import` with them; the status line reports the faces made (and
-the units when not meters) and polygons skipped, or the error. For a SketchUp file it reads
+the units when not meters) and polygons skipped, or the error. For a SketchUp, glTF or
+COLLADA file it reads
 `Imported desk.skp: 147 faces, 1 definition, 1 instance` (and faces skipped), followed by
 `with N warnings (see the import report)` when the report has warnings, which also go to
 stderr. File > Open... lists `.skr` and SketchUp (`.skp`) files; a `.skp` runs `open` as above,
@@ -2385,7 +2451,7 @@ under a pixel and where a click would snap.
 | File > Open Recent (the last 10 files) and Clear Menu | `open` (`path`); the list is chrome |
 | File > Recover Models... and the window that opens at start after a crash: Open, Discard, Discard All | none: window chrome over the recovery folder (see the autosave paragraph above); agents' `save`, `new` and `open` remove the window's autosave |
 | The empty-model card's New, Open... and recent files | `new`, `open` (`path`) |
-| File > Import... (Cmd+I) and its options sheet (units, up axis, import as, merge coplanar faces; only import as for a `.skp`) | `import` (`scale`, `up`, `as`, `merge_coplanar`); `set_import_units`, `editor.import_units` |
+| File > Import... (Cmd+I) and its options sheet (units, up axis, import as, merge coplanar faces; only import as for a `.skp`; no units or up axis for a `.dae`) | `import` (`scale`, `up`, `as`, `merge_coplanar`); `set_import_units`, `editor.import_units` |
 | File > Export... (Shift+Cmd+E); the dialog also lists SVG drawing (pixels) | `export` (`format`; `svg` with `scale`) |
 | File > Export PDF... and File > Print... (a Print sheet: paper, orientation, Fit or 1:N, resolution; remembered in the prefs; Print writes `sketchup-alt-print-<pid>-<n>.pdf` in the temp folder and opens it with the system's viewer) | `export_pdf` (`path`, `paper`, `landscape`, `scale`, `dpi`, `overwrite`) |
 | Quit (app menu on macOS, File menu elsewhere; Cmd+Q), closing the window | `quit` (`discard`) |
