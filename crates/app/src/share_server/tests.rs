@@ -173,9 +173,9 @@ fn a_gzip_copy_is_sent_to_browsers_that_take_gzip() {
 
 #[test]
 fn a_gzip_copy_that_is_a_link_is_not_sent() {
-    let d = viewer();
     #[cfg(unix)]
     {
+        let d = viewer();
         std::os::unix::fs::symlink(d.0.join("data.bin"), d.0.join("web.js.gz")).unwrap();
         let s = start(&d);
         let r = get_with(s.port(), "/web.js", "Accept-Encoding: gzip\r\n");
