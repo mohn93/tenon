@@ -80,6 +80,8 @@ pub struct PrintSpec {
     /// 1:N when given (parallel camera only); absent fits the current view on one sheet.
     pub scale: Option<f64>,
     pub dpi: u32,
+    /// Add the model's cut list after the view's sheets (see `cutlist::draw_pages`).
+    pub cut_list: bool,
 }
 
 /// A bar of `length_mm` on paper standing for `length_m`, drawn in the bottom margin: top

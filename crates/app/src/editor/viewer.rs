@@ -150,7 +150,7 @@ impl Editor {
         Some(match chosen.as_slice() {
             [one] => PartCard {
                 title: one.name.clone(),
-                size: one.size.map(|s| parts::size_text(s, &self.doc.units())),
+                size: one.own_size.map(|s| parts::size_text(s, &self.doc.units())),
                 ordinal: one.ordinal(),
                 isolated,
             },

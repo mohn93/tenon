@@ -266,7 +266,7 @@ impl Acc {
 
 /// The material most faces of `m` show on `side` (0 front, 1 back; more than half of them),
 /// if any.
-fn dominant_material(m: &Model, side: usize) -> Option<MaterialId> {
+pub(crate) fn dominant_material(m: &Model, side: usize) -> Option<MaterialId> {
     let mut counts: BTreeMap<MaterialId, usize> = BTreeMap::new();
     let mut faces = 0usize;
     for (_, f) in m.faces() {

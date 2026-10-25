@@ -236,6 +236,7 @@ fn groups_are_rows_of_their_own() {
             kind: DefinitionKind::Group,
             name: "A".into(),
             size: None,
+            own_size: None,
             number: 1,
             count: 1,
         },
@@ -245,6 +246,7 @@ fn groups_are_rows_of_their_own() {
             kind: DefinitionKind::Group,
             name: "A".into(),
             size: None,
+            own_size: None,
             number: 2,
             count: 2,
         },
@@ -292,6 +294,7 @@ fn a_hidden_part_is_not_listed_and_hidden_geometry_does_not_count_in_the_size() 
     })
     .unwrap();
     close(list(&s)[0].size.unwrap(), [1.0, 1.0, 1.0]);
+    close(list(&s)[0].own_size.unwrap(), [1.0, 1.0, 1.0]);
     s.edit(MeshId::Root, |m| {
         Ok(m.hide_entities(&[kernel::EntityId::Instance(id)], true).0)
     })
@@ -330,4 +333,42 @@ fn sizes_are_written_in_the_documents_units() {
         ..Units::default()
     };
     assert_eq!(size_text([0.3048, 0.0254, 0.6096], &ft), "1' x 1\" x 2'");
+}
+
+#[test]
+fn the_list_gives_each_part_as_length_width_thickness_whichever_way_it_lies() {
+    use std::f64::consts::{FRAC_PI_2, FRAC_PI_6};
+    // The 2 x 1 x 3 shed: 3 long, 2 wide, 1 thick, however it is turned.
+    let own = |t: DAffine3| {
+        let (mut s, id) = one(&rect(2.0, 1.0), 3.0, DefinitionKind::Group, "Shed");
+        place(&mut s, id, t);
+        let parts = list(&s);
+        close(parts[0].own_size.unwrap(), [3.0, 2.0, 1.0]);
+        rows(&parts)[0].size.unwrap()
+    };
+    close(own(DAffine3::IDENTITY), [3.0, 2.0, 1.0]);
+    close(
+        own(DAffine3::from_quat(DQuat::from_rotation_x(FRAC_PI_2))),
+        [3.0, 2.0, 1.0],
+    );
+    close(
+        own(DAffine3::from_quat(DQuat::from_rotation_z(FRAC_PI_6))),
+        [3.0, 2.0, 1.0],
+    );
+    // The world box of the turned shed is larger than its own.
+    let (mut s, id) = one(&rect(2.0, 1.0), 3.0, DefinitionKind::Group, "Shed");
+    place(
+        &mut s,
+        id,
+        DAffine3::from_quat(DQuat::from_rotation_z(FRAC_PI_6)),
+    );
+    let world = list(&s)[0].size.unwrap();
+    assert!(world[0] > 2.2 && world[1] > 1.5, "{world:?}");
+}
+
+#[test]
+fn a_scaled_part_lists_its_scaled_own_box() {
+    let (mut s, id) = one(&rect(2.0, 1.0), 3.0, DefinitionKind::Group, "Shed");
+    place(&mut s, id, DAffine3::from_scale(p(1.0, 1.0, 0.5)));
+    close(rows(&list(&s))[0].size.unwrap(), [2.0, 1.5, 1.0]);
 }

@@ -960,6 +960,10 @@ fn print_sheet(
             )
             .labelled_by(label.id);
             ui.end_row();
+
+            ui.label("Cut list");
+            ui.checkbox(&mut spec.cut_list, "Add cut list pages");
+            ui.end_row();
         });
     if buttons(ui, button, spec.valid(), actions) {
         actions.push(UiAction::ConfirmPrint(*spec));

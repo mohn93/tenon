@@ -267,6 +267,7 @@ fn print_spec(
     landscape: Option<bool>,
     scale: Option<f64>,
     dpi: Option<u32>,
+    cut_list: Option<bool>,
 ) -> Result<PrintSpec, CommandError> {
     let paper = match paper {
         None => Paper::A4,
@@ -282,6 +283,7 @@ fn print_spec(
         landscape: landscape.unwrap_or(true),
         scale,
         dpi: dpi.unwrap_or(DEFAULT_DPI),
+        cut_list: cut_list.unwrap_or(false),
     })
 }
 
@@ -379,9 +381,10 @@ pub fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, R
                     landscape,
                     scale,
                     dpi,
+                    cut_list,
                     overwrite,
                 } => {
-                    let spec = print_spec(paper.as_deref(), landscape, scale, dpi);
+                    let spec = print_spec(paper.as_deref(), landscape, scale, dpi, cut_list);
                     Some(
                         spec.and_then(|spec| export_pdf(host, &path, spec, overwrite))
                             .map_err(command_failed)?,

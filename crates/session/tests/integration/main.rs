@@ -15,6 +15,7 @@ mod commands;
 mod contract;
 mod couplings;
 mod curves;
+mod cut_list;
 mod drawing;
 mod explode_view;
 mod export;

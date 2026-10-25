@@ -39,6 +39,7 @@ enum Waiting {
     PickTexture(MaterialId),
     PickFolder,
     ExportPath,
+    CutListPath,
     ExportFiles,
     PdfPath(PrintOptions),
 }
@@ -509,6 +510,54 @@ impl Flows {
         }
     }
 
+    /// The Cut List window's Export CSV: asks where to write the cut list the window shows (the
+    /// open context's), or where files have no path has the platform save it.
+    pub fn export_cut_list(&mut self, env: &mut Env) -> Vec<Effect> {
+        if self.waiting.is_some() {
+            return Vec::new();
+        }
+        let stem = self.export_stem(env);
+        let request = SaveRequest {
+            filters: vec![Filter::new("Cut list (CSV)", &["csv"])],
+            name: format!("{stem}-cut-list.csv"),
+            ask: true,
+            write_back: false,
+        };
+        if !env.platform.features().file_paths {
+            let Some(bytes) = env.editor.cut_list_bytes(&request.name) else {
+                return Vec::new();
+            };
+            let files = vec![Download {
+                name: request.name.clone(),
+                bytes,
+            }];
+            match env
+                .platform
+                .save_files(&request, files, self.reply(PlatformReply::Saved))
+            {
+                Answer::Ready(Err(why)) => env.editor.show_error(&format!("Cannot export: {why}")),
+                Answer::Ready(Ok(_)) => {}
+                Answer::Pending => self.waiting = Some(Waiting::ExportFiles),
+            }
+            return Vec::new();
+        }
+        match env
+            .platform
+            .pick_save_path(&request, self.reply(PlatformReply::Path))
+        {
+            Answer::Ready(path) => {
+                if let Some(path) = path {
+                    env.editor.write_cut_list(&path);
+                }
+                Vec::new()
+            }
+            Answer::Pending => {
+                self.waiting = Some(Waiting::CutListPath);
+                Vec::new()
+            }
+        }
+    }
+
     /// The export format `ext` was chosen (where files have no path): exports the model as
     /// bytes and has the platform save them, offering only that format.
     pub fn export_as(&mut self, env: &mut Env, ext: &str) -> Vec<Effect> {
@@ -653,6 +702,12 @@ impl Flows {
             (Waiting::ExportPath, PlatformReply::Path(path)) => {
                 if let Some(path) = path {
                     env.editor.export_file(&path);
+                }
+                Vec::new()
+            }
+            (Waiting::CutListPath, PlatformReply::Path(path)) => {
+                if let Some(path) = path {
+                    env.editor.write_cut_list(&path);
                 }
                 Vec::new()
             }
@@ -1200,6 +1255,91 @@ mod tests {
         });
         assert!(fx.is_empty());
         assert_eq!(platform.saved.borrow().len(), 1);
+    }
+
+    /// A board at the root and a cabinet holding a top, the cabinet open.
+    fn in_cabinet() -> Editor {
+        let mut editor = editor();
+        let add = |editor: &mut Editor, name: &str, y: f64| {
+            editor
+                .execute(Command::AddBox {
+                    corner: [0.0, y, 0.0],
+                    size: [1.0, 0.1, 0.02],
+                    placement: session::PrimitiveAs::Group,
+                    name: Some(name.into()),
+                    material: None,
+                })
+                .unwrap()
+                .placed
+                .unwrap()[0]
+        };
+        let top = add(&mut editor, "Top", 0.0);
+        let cabinet = editor
+            .execute(Command::MakeGroup {
+                ids: vec![top],
+                name: Some("Cabinet".into()),
+            })
+            .unwrap()
+            .placed
+            .unwrap()[0];
+        add(&mut editor, "Board", 1.0);
+        editor
+            .execute(Command::OpenInstance { id: cabinet })
+            .unwrap();
+        editor
+    }
+
+    #[test]
+    fn the_cut_list_exports_as_csv_where_files_have_no_path() {
+        let platform = web();
+        let mut editor = in_cabinet();
+        let mut f = flows();
+        platform
+            .saves
+            .borrow_mut()
+            .push_back(Answer::Ready(Ok(Some("Untitled-cut-list.csv".into()))));
+        run(&mut f, &mut editor, &platform, |f, env| {
+            f.export_cut_list(env)
+        });
+        let saved = platform.saved.borrow();
+        let (request, files) = &saved[0];
+        assert_eq!(request.filters[0].extensions, ["csv"]);
+        assert_eq!(files[0].name, "Untitled-cut-list.csv");
+        let text = String::from_utf8(files[0].bytes.clone()).unwrap();
+        assert!(text.starts_with("Name,Material,Length (m),"), "{text}");
+        // What the window shows: the open cabinet's parts, not the whole model's.
+        assert!(
+            text.contains("\r\nTop,") && !text.contains("Board"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_cut_list_export_writes_what_the_window_shows() {
+        let platform = desktop();
+        let mut editor = in_cabinet();
+        let mut f = flows();
+        let dir =
+            std::env::temp_dir().join(format!("sketchup-alt-flows-cut-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cabinet.csv");
+        platform
+            .paths
+            .borrow_mut()
+            .push_back(Answer::Ready(Some(path.clone())));
+        run(&mut f, &mut editor, &platform, |f, env| {
+            f.export_cut_list(env)
+        });
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("\r\nTop,") && !text.contains("Board"),
+            "{text}"
+        );
+        assert_eq!(
+            platform.path_requests.borrow()[0].name,
+            "Untitled-cut-list.csv"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn opened_skr(name: &str) -> Answer<Option<Picked>> {

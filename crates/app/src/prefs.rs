@@ -412,7 +412,7 @@ mod tests {
         assert_eq!(load(&path).trackpad, TrackpadScroll::Zoom);
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            "{\n  \"theme\": \"light\",\n  \"ui_scale\": 110,\n  \"trackpad\": \"zoom\",\n  \"dock\": {\n    \"width\": 280.0,\n    \"split\": 0.55,\n    \"tab\": \"entity_info\"\n  },\n  \"import\": {\n    \"units\": \"meters\",\n    \"as\": \"group\",\n    \"merge_coplanar\": true\n  },\n  \"print\": {\n    \"paper\": \"a4\",\n    \"landscape\": true,\n    \"scale\": null,\n    \"dpi\": 150\n  },\n  \"autosave_minutes\": 5\n}"
+            "{\n  \"theme\": \"light\",\n  \"ui_scale\": 110,\n  \"trackpad\": \"zoom\",\n  \"dock\": {\n    \"width\": 280.0,\n    \"split\": 0.55,\n    \"tab\": \"entity_info\"\n  },\n  \"import\": {\n    \"units\": \"meters\",\n    \"as\": \"group\",\n    \"merge_coplanar\": true\n  },\n  \"print\": {\n    \"paper\": \"a4\",\n    \"landscape\": true,\n    \"scale\": null,\n    \"dpi\": 150,\n    \"cut_list\": false\n  },\n  \"autosave_minutes\": 5\n}"
         );
         #[cfg(unix)]
         {
@@ -754,6 +754,7 @@ mod tests {
             landscape: false,
             scale: Some(200.0),
             dpi: 300,
+            cut_list: true,
         };
         save(
             &path,

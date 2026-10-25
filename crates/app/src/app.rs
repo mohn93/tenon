@@ -2566,6 +2566,18 @@ impl State {
             UiAction::CloseInterference => {
                 self.editor.close_interference();
             }
+            UiAction::ShowCutList => {
+                self.editor.open_cut_list();
+            }
+            UiAction::CutListRow(index) => {
+                self.editor.select_cut_list_row(index);
+            }
+            UiAction::ExportCutList => {
+                self.flow(|flows, env| flows.export_cut_list(env));
+            }
+            UiAction::CloseCutList => {
+                self.editor.close_cut_list();
+            }
             UiAction::Harden => {
                 self.editor.harden_selection();
             }
@@ -2891,6 +2903,7 @@ impl State {
                 Some(EntityId::Instance(id)) => Some(*id),
                 _ => None,
             });
+        self.editor.refresh_cut_list();
         let viewing = self.features.read_only;
         let part_rows = if viewing && self.viewer_panel == Some(ViewerPanel::Parts) {
             self.editor.part_rows()
@@ -2982,6 +2995,7 @@ impl State {
             selection: self.editor.doc().selection(),
             soften: self.editor.soften_window(),
             interference: self.editor.interference_window(),
+            cut_list: self.editor.cut_list_window(),
             edges_soft: self.editor.selection_soft(),
             selection_hidden: self.editor.selection_hidden(),
             selection_section_cut: self.editor.selection_section_cut(),

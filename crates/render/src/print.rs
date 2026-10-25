@@ -1,5 +1,6 @@
 //! Printing: renders a document's sheets (see `session::print`) with the GPU into a PDF.
 
+use session::cutlist;
 use session::pdf::Pdf;
 use session::print::{PrintSpec, decorate, layout};
 use session::{CommandError, Document, ErrorKind};
@@ -67,9 +68,18 @@ fn render_sheets(
         }
         decorate(&mut page, sheet, &layout.labels[index]);
     }
+    let mut sheets = layout.sheets.len();
+    if spec.cut_list {
+        let [mut pw, mut ph] = spec.paper.size_mm();
+        if spec.landscape {
+            std::mem::swap(&mut pw, &mut ph);
+        }
+        let rows = doc.cut_list_root()?;
+        sheets += cutlist::draw_pages(&mut pdf, &rows, &doc.units(), [pw, ph]);
+    }
     Ok(Printed {
         pdf: pdf.finish(),
-        sheets: layout.sheets.len(),
+        sheets,
         warnings: layout.warnings,
     })
 }

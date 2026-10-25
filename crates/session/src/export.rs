@@ -36,11 +36,13 @@ pub enum ExportFormat {
     /// `threemf`).
     #[serde(rename = "3mf")]
     ThreeMf,
+    /// The model's cut list as CSV (see `cutlist`).
+    Csv,
 }
 
 impl ExportFormat {
     /// The format a file name's extension asks for (`.obj`, `.stl`, `.glb`, `.gltf`, `.skp`,
-    /// any case).
+    /// `.svg`, `.csv`, any case).
     pub fn from_path(path: &Path) -> Option<Self> {
         let ext = path.extension()?.to_str()?.to_ascii_lowercase();
         Some(match ext.as_str() {
@@ -51,6 +53,7 @@ impl ExportFormat {
             "skp" => ExportFormat::Skp,
             "svg" => ExportFormat::Svg,
             "3mf" => ExportFormat::ThreeMf,
+            "csv" => ExportFormat::Csv,
             _ => return None,
         })
     }
@@ -187,6 +190,9 @@ pub(crate) fn encode(
         }
         ExportFormat::ThreeMf => {
             return Err("a 3MF file is written from the model's parts, not triangles".to_string());
+        }
+        ExportFormat::Csv => {
+            return Err("a CSV file is the cut list, not triangles".to_string());
         }
     })
 }

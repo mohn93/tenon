@@ -252,6 +252,18 @@ class ModelTests(unittest.TestCase):
         self.assertTrue(close(mp["total"]["centroid"], (0.5, 0.5, 0.5), 1e-6))
         self.assertAlmostEqual(self.m.mass_properties()["total"]["volume"], 3.0, places=6)
 
+    def test_cut_list(self):
+        wood = self.m.material("Oak", (200, 160, 100))
+        a = self.m.box((0, 0, 0), (1, 0.1, 0.02), material=wood)
+        self.m.box((0, 1, 0), (0.5, 0.3, 0.02))
+        rows = self.m.cut_list()
+        self.assertEqual([r["name"] for r in rows], ["Group", "Group"])
+        self.assertEqual(rows[0]["material"], "Oak")
+        self.assertTrue(close((rows[0]["length"], rows[0]["width"], rows[0]["thickness"]), (1, 0.1, 0.02), 1e-9))
+        self.assertEqual(rows[0]["ids"], [a.id])
+        self.assertNotIn("material", rows[1])
+        self.assertEqual(len(self.m.cut_list([a], group_by="none")), 1)
+
     def test_sweep_check_and_measure(self):
         base = self.m.box((-1, -1, -1), (2, 2, 0.5))
         arm = self.m.box((0, -0.1, 0), (1.5, 0.2, 0.2))

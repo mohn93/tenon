@@ -29,6 +29,8 @@ pub(crate) enum Kind {
     Pdf,
     /// A 3MF package.
     ThreeMf,
+    /// A cut list as CSV.
+    Csv,
 }
 
 impl Kind {
@@ -45,6 +47,7 @@ impl Kind {
             Kind::Svg => "SVG",
             Kind::ThreeMf => "3MF",
             Kind::Pdf => "PDF",
+            Kind::Csv => "cut list CSV",
         }
     }
 }
@@ -167,6 +170,7 @@ fn is_kind(head: &[u8], len: u64, kind: Kind) -> bool {
             (text.starts_with("<?xml") || text.starts_with("<svg")) && text.contains("<svg")
         }
         Kind::Pdf => head.starts_with(b"%PDF-"),
+        Kind::Csv => head.starts_with(b"Name,Material,Length ("),
         Kind::Obj => keyword_text(head, len, OBJ_KEYWORDS, None),
         Kind::Mtl => keyword_text(head, len, MTL_KEYWORDS, Some("newmtl")),
     }
