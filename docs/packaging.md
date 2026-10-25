@@ -35,7 +35,9 @@ scripts/package-linux.sh                                  # the tarball
 APPIMAGETOOL=/path/to/appimagetool-x86_64.AppImage scripts/package-linux.sh   # and the AppImage
 ```
 
-CI uses appimagetool 1.9.0 and checks its SHA-256 (set in `package.yml`) before running it. The
+CI uses appimagetool 1.9.0 and the AppImage runtime of type2-runtime 20251108, checks both
+SHA-256 digests (set in `package.yml`) before use, and passes the runtime as
+`APPIMAGE_RUNTIME` (appimagetool would otherwise download the unpinned latest one). The
 AppImage holds only the program, as the tarball does: the graphics driver and window libraries
 come from the system (see [linux.md](linux.md)).
 

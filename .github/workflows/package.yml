@@ -23,6 +23,11 @@ env:
   APPIMAGETOOL_VERSION: 1.9.0
   APPIMAGETOOL_SHA256_X86_64: 46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1
   APPIMAGETOOL_SHA256_AARCH64: 04f45ea45b5aa07bb2b071aed9dbf7a5185d3953b11b47358c1311f11ea94a96
+  # The AppImage runtime (type2-runtime 20251108), checked the same way and handed to
+  # appimagetool, which would otherwise fetch the unpinned "continuous" one.
+  APPIMAGE_RUNTIME_VERSION: "20251108"
+  APPIMAGE_RUNTIME_SHA256_X86_64: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+  APPIMAGE_RUNTIME_SHA256_AARCH64: 00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444
   WIX_VERSION: 4.0.5
 
 jobs:
@@ -165,8 +170,18 @@ jobs:
           echo "$want  $file" | sha256sum -c -
           chmod +x "$file"
 
+      - name: Fetch AppImage runtime
+        run: |
+          file="runtime-${{ matrix.arch }}"
+          curl -fsSL -o "$file" \
+            "https://github.com/AppImage/type2-runtime/releases/download/$APPIMAGE_RUNTIME_VERSION/$file"
+          if [ "${{ matrix.arch }}" = x86_64 ]; then want="$APPIMAGE_RUNTIME_SHA256_X86_64"; else want="$APPIMAGE_RUNTIME_SHA256_AARCH64"; fi
+          echo "$want  $file" | sha256sum -c -
+
       - name: Package
-        run: APPIMAGETOOL="$PWD/appimagetool-${{ matrix.arch }}.AppImage" scripts/package-linux.sh
+        run: |
+          APPIMAGETOOL="$PWD/appimagetool-${{ matrix.arch }}.AppImage" \
+            APPIMAGE_RUNTIME="$PWD/runtime-${{ matrix.arch }}" scripts/package-linux.sh
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

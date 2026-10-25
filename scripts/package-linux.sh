@@ -5,6 +5,9 @@
 #
 #   scripts/package-linux.sh
 #   APPIMAGETOOL=/path/to/appimagetool-x86_64.AppImage scripts/package-linux.sh
+#
+# APPIMAGE_RUNTIME names the AppImage runtime to use (CI pins and checks one); without it
+# appimagetool downloads the latest.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -41,7 +44,11 @@ if [ -n "${APPIMAGETOOL:-}" ]; then
     cp packaging/linux/sketchup-alt.desktop "$appdir/"
     cp packaging/icons/app-256.png "$appdir/sketchup-alt.png"
     # No FUSE is needed to run the tool itself (CI has none).
-    APPIMAGE_EXTRACT_AND_RUN=1 ARCH="$arch" "$APPIMAGETOOL" "$appdir" "$out/$name.AppImage"
+    runtime=()
+    if [ -n "${APPIMAGE_RUNTIME:-}" ]; then
+        runtime=(--runtime-file "$APPIMAGE_RUNTIME")
+    fi
+    APPIMAGE_EXTRACT_AND_RUN=1 ARCH="$arch" "$APPIMAGETOOL" ${runtime[@]+"${runtime[@]}"} "$appdir" "$out/$name.AppImage"
     rm -rf "$appdir"
 fi
 
