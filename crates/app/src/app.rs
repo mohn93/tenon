@@ -160,6 +160,8 @@ pub enum AppEvent {
     Paste(String),
     /// Something a late platform request could not do, for the status line.
     Error(String),
+    /// A check for updates finished.
+    Update(crate::update::Outcome),
     /// The viewer was asked to open another shared model (a kept one from the Recent list).
     Shared(SharedModel),
 }
@@ -916,6 +918,9 @@ struct State {
     platform: Box<dyn Platform>,
     /// What it offers (`Platform::features`); what is off is hidden and never started.
     features: Features,
+    /// The event loop's, for the answer of a check for updates made on another thread.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    proxy: EventLoopProxy<AppEvent>,
     /// Whether the renderer draws light shadows (off where the adapter cannot).
     shadows: bool,
     /// The file flows (open, save, import, export) and the request waiting for the platform.
@@ -1180,8 +1185,9 @@ impl State {
         context: Option<GpuContext>,
         proxy: EventLoopProxy<AppEvent>,
     ) -> Self {
+        let flows_proxy = proxy.clone();
         let flows = Flows::new(Arc::new(move |reply| {
-            let _ = proxy.send_event(AppEvent::Platform(reply));
+            let _ = flows_proxy.send_event(AppEvent::Platform(reply));
         }));
         let features = platform.features();
         let prefs = platform
@@ -1248,6 +1254,7 @@ impl State {
             device_lost: lost,
             platform,
             features,
+            proxy,
             shadows,
             flows,
             skip_logged: None,
@@ -1934,6 +1941,7 @@ impl State {
                     | Sheet::DeleteLibraryItem { .. }
                     | Sheet::Unsaved { .. }
                     | Sheet::About { .. }
+                    | Sheet::Update { .. }
                     | Sheet::Phone { .. }
             )
         }) && self.editor.documents() != self.sheet_origin.document
@@ -2451,6 +2459,22 @@ impl State {
             UiAction::ShowAbout => self.open_sheet(Sheet::About {
                 shadows_off: !self.shadows,
             }),
+            UiAction::CheckForUpdates => {
+                // The browser build hides the item and has no thread to spawn.
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.features.update_check {
+                    self.open_sheet(Sheet::Update { outcome: None });
+                    let proxy = self.proxy.clone();
+                    std::thread::spawn(move || {
+                        let _ = proxy.send_event(AppEvent::Update(crate::update::check()));
+                    });
+                }
+            }
+            UiAction::OpenReleasePage(url) => {
+                if let Err(e) = self.platform.open_url(&url) {
+                    self.editor.show_error(&e);
+                }
+            }
             #[cfg(not(target_arch = "wasm32"))]
             UiAction::OpenOnPhone => {
                 if self.features.share {
@@ -3356,6 +3380,7 @@ fn sheet_applies(sheet: &Sheet, origin: &SheetOrigin, editor: &Editor) -> Result
             | Sheet::DeleteLibraryItem { .. }
             | Sheet::Unsaved { .. }
             | Sheet::About { .. }
+            | Sheet::Update { .. }
             | Sheet::Phone { .. }
     ) {
         return Ok(());
@@ -3386,6 +3411,7 @@ fn sheet_applies(sheet: &Sheet, origin: &SheetOrigin, editor: &Editor) -> Result
         | Sheet::DiscardRecovered { .. }
         | Sheet::Unsaved { .. }
         | Sheet::About { .. }
+        | Sheet::Update { .. }
         | Sheet::Phone { .. }
         | Sheet::DeleteLibraryItem { .. } => Ok(()),
         Sheet::SaveToLibrary { save, .. } | Sheet::OverwriteLibrary { save, .. } => {
@@ -4009,6 +4035,15 @@ impl ApplicationHandler<AppEvent> for App {
                     s.window.request_redraw();
                 }
             }
+            AppEvent::Update(outcome) => {
+                if let Some(s) = self.state.as_mut() {
+                    // The sheet may have been closed while the check ran.
+                    if let Some(Sheet::Update { outcome: slot }) = s.sheet.as_mut() {
+                        *slot = Some(outcome);
+                    }
+                    s.window.request_redraw();
+                }
+            }
             AppEvent::Shared(model) => {
                 if let Some(s) = self.state.as_mut().filter(|s| s.features.read_only) {
                     s.open_shared(model);
@@ -4476,6 +4511,7 @@ mod tests {
         ));
         const { assert!(!Features::ALL.read_only && !Features::WEB.read_only) };
         assert!(!v.library && !v.autosave && !v.print && !v.recent && !v.quit && !v.share);
+        assert!(!v.update_check && Features::ALL.update_check);
         assert!(!v.file_paths && v.in_app_dialogs && v.paste_by_event);
     }
 

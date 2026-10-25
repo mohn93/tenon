@@ -80,6 +80,11 @@ pub enum Sheet {
     Unsaved { prompt: UnsavedPrompt },
     /// Help > About; `shadows_off` adds that light shadows are off in this browser.
     About { shadows_off: bool },
+    /// Help > Check for Updates: what the check found, none while it runs.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    Update {
+        outcome: Option<crate::update::Outcome>,
+    },
     /// Print: paper, orientation, Fit or 1:N and resolution, before the view is rendered to a
     /// PDF (`purpose`: a file chosen after it, or the system's viewer).
     Print {
@@ -165,9 +170,10 @@ impl Values {
             Sheet::Rename { target } => Values::Name(target.name.clone()),
             Sheet::FieldOfView { degrees } => Values::Degrees(degrees.round()),
             Sheet::DeleteTag { .. } => Values::Destination(None),
-            Sheet::DiscardRecovered { .. } | Sheet::Unsaved { .. } | Sheet::About { .. } => {
-                Values::Nothing
-            }
+            Sheet::DiscardRecovered { .. }
+            | Sheet::Unsaved { .. }
+            | Sheet::About { .. }
+            | Sheet::Update { .. } => Values::Nothing,
             Sheet::NoteText { text, .. } => Values::Note(text.clone()),
             Sheet::Text3d { spec } => Values::Text3d(spec.clone()),
             Sheet::SaveToLibrary { suggested, .. } => Values::Name(suggested.clone()),
@@ -269,6 +275,9 @@ pub(super) fn sheet(ui: &mut Ui, sheet: &Sheet, units: Units, actions: &mut Vec<
                 }
                 (Sheet::About { shadows_off }, Values::Nothing) => {
                     about_sheet(ui, *shadows_off, actions);
+                }
+                (Sheet::Update { outcome }, Values::Nothing) => {
+                    update_sheet(ui, outcome.as_ref(), actions);
                 }
                 (Sheet::OverwriteLibrary { name, file, .. }, Values::Nothing) => {
                     overwrite_library_sheet(ui, name, file, actions);
@@ -604,7 +613,7 @@ fn unsaved_sheet(ui: &mut Ui, prompt: &UnsavedPrompt, actions: &mut Vec<UiAction
 fn about_sheet(ui: &mut Ui, shadows_off: bool, actions: &mut Vec<UiAction>) {
     widgets::section_header(ui, "About sketchup-alt");
     ui.add_space(theme::GRID);
-    ui.label(format!("sketchup-alt {}", env!("CARGO_PKG_VERSION")));
+    ui.label(format!("sketchup-alt {}", crate::update::version_label()));
     if shadows_off {
         ui.label(SHADOWS_OFF);
     }
@@ -613,6 +622,52 @@ fn about_sheet(ui: &mut Ui, shadows_off: bool, actions: &mut Vec<UiAction>) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button("Close").clicked() {
                 actions.push(UiAction::CloseSheet);
+            }
+        });
+    });
+}
+
+/// Help > Check for Updates: the result, with a button to the release page when there is a
+/// newer version. Nothing is downloaded.
+fn update_sheet(
+    ui: &mut Ui,
+    outcome: Option<&crate::update::Outcome>,
+    actions: &mut Vec<UiAction>,
+) {
+    use crate::update::Outcome;
+
+    widgets::section_header(ui, "Check for Updates");
+    ui.add_space(theme::GRID);
+    ui.label(format!("You have version {}.", crate::update::VERSION));
+    let mut open = None;
+    match outcome {
+        None => {
+            ui.label("Checking...");
+        }
+        Some(Outcome::Available { version, url }) => {
+            ui.label(format!("Version {version} is available."));
+            open = Some(url.clone());
+        }
+        Some(Outcome::UpToDate) => {
+            ui.label("You're up to date.");
+        }
+        Some(Outcome::NoReleases) => {
+            ui.label("No releases published yet.");
+        }
+        Some(Outcome::Failed(why)) => {
+            ui.label(why);
+        }
+    }
+    ui.add_space(theme::GRID * 2.0);
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("Close").clicked() {
+                actions.push(UiAction::CloseSheet);
+            }
+            if let Some(url) = open
+                && ui.button("Open Release Page").clicked()
+            {
+                actions.push(UiAction::OpenReleasePage(url));
             }
         });
     });

@@ -58,6 +58,8 @@ pub struct Features {
     pub paste_by_event: bool,
     /// File > Open on Phone: a local-network server for the phone viewer (desktops only).
     pub share: bool,
+    /// Help > Check for Updates: asks GitHub for the latest release when chosen (desktops only).
+    pub update_check: bool,
     /// The phone viewer: the model is looked at, never edited. Every command that changes it is
     /// refused (`Document::set_read_only`), no tool but Select can be chosen, and the window is
     /// a small top bar over the view (no menus, tools, dock, status line or start card).
@@ -76,6 +78,7 @@ impl Features {
         quit: true,
         paste_by_event: false,
         share: true,
+        update_check: true,
         read_only: false,
     };
 
@@ -90,6 +93,7 @@ impl Features {
         quit: false,
         paste_by_event: true,
         share: false,
+        update_check: false,
         read_only: false,
     };
 

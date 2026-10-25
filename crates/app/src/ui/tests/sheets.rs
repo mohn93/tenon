@@ -580,3 +580,71 @@ fn the_clock_reads_minutes_and_seconds() {
     assert_eq!(clock(61), "1:01");
     assert_eq!(clock(0), "0:00");
 }
+
+fn update_fixture(outcome: Option<crate::update::Outcome>) -> Fixture {
+    Fixture {
+        sheet: Some(Sheet::Update { outcome }),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn the_update_sheet_says_what_the_check_found() {
+    use crate::update::Outcome;
+    for (outcome, want) in [
+        (None, "Checking..."),
+        (Some(Outcome::UpToDate), "You're up to date."),
+        (Some(Outcome::NoReleases), "No releases published yet."),
+        (Some(Outcome::Failed("No network".into())), "No network"),
+    ] {
+        let h = harness(update_fixture(outcome));
+        assert!(drawn_texts(&h).iter().any(|t| t == want), "{want}");
+        assert!(h.query_by_label("Open Release Page").is_none());
+    }
+}
+
+#[test]
+fn the_update_sheet_links_to_a_newer_release_without_fetching_it() {
+    let url = "https://github.com/mohn93/sketchup/releases/tag/v9.0.0";
+    let mut h = harness(update_fixture(Some(crate::update::Outcome::Available {
+        version: "9.0.0".into(),
+        url: url.into(),
+    })));
+    assert!(
+        drawn_texts(&h)
+            .iter()
+            .any(|t| t == "Version 9.0.0 is available.")
+    );
+    assert_eq!(
+        click(&mut h, "Open Release Page"),
+        [UiAction::OpenReleasePage(url.into())]
+    );
+}
+
+#[test]
+fn check_for_updates_is_a_desktop_help_item() {
+    let help = |features| {
+        let f = Fixture {
+            features,
+            ..Fixture::default()
+        };
+        let bar = crate::menus::menu_bar(&f.view(), false);
+        let help = &bar.iter().find(|m| m.title == "Help").unwrap().entries;
+        help.iter()
+            .filter_map(|entry| match entry {
+                crate::menus::Entry::Item(i) => Some(i.label.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        help(crate::platform::Features::ALL)
+            .iter()
+            .any(|l| l == "Check for Updates...")
+    );
+    assert!(
+        !help(crate::platform::Features::WEB)
+            .iter()
+            .any(|l| l.contains("Update"))
+    );
+}

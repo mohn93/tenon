@@ -309,6 +309,10 @@ pub enum UiAction {
     ShowShortcuts(bool),
     /// Open the About sheet.
     ShowAbout,
+    /// Help > Check for Updates: ask GitHub for the latest release and open the sheet.
+    CheckForUpdates,
+    /// Open a release page in the browser.
+    OpenReleasePage(String),
     /// File > Open on Phone: share a copy of the model on the local network and open the sheet
     /// with its QR code.
     OpenOnPhone,

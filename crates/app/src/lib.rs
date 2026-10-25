@@ -43,6 +43,7 @@ pub mod shortcuts;
 mod system_quit;
 mod touch;
 mod ui;
+pub mod update;
 pub mod viewer;
 #[cfg(windows)]
 pub mod windows;
