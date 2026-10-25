@@ -21,6 +21,8 @@ const NAME_MIN: f32 = 64.0;
 const SLIDER_MIN: f32 = 40.0;
 /// The least width of a value box: "-179.5°" and "-0.025 m" fit.
 const VALUE_BOX: f32 = 80.0;
+/// The most of a slider's row (past its value box) a long name takes before it is cut short.
+const LABEL_SHARE: f32 = 0.4;
 
 /// The kind as the panel names it.
 pub(super) fn kind_name(kind: JointKind) -> &'static str {
@@ -230,7 +232,8 @@ fn drive(
     let (track, shown_box) = ui
         .horizontal(|ui| {
             // The box is as wide as its value (VALUE_BOX at least) and the label as its name,
-            // cut short to leave the slider SLIDER_MIN; the slider takes the rest.
+            // cut short past LABEL_SHARE of the rest, or to leave the slider SLIDER_MIN; the
+            // slider takes the rest.
             let gap = ui.spacing().item_spacing.x;
             let font = ui.style().drag_value_text_style.clone();
             let text = RichText::new(value_text(angular, value, &units)).text_style(font.clone());
@@ -238,6 +241,7 @@ fn drive(
                 (text_width(ui, text, font) + 2.0 * ui.spacing().button_padding.x).max(VALUE_BOX);
             let width = (ui.available_width() - box_width - 2.0 * gap).max(0.0);
             let label_width = text_width(ui, RichText::new(name), egui::TextStyle::Body)
+                .min(width * LABEL_SHARE)
                 .min((width - SLIDER_MIN).max(0.0));
             let label = fixed_width(ui, label_width, |ui| {
                 ui.add(egui::Label::new(name).truncate())
