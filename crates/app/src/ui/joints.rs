@@ -6,7 +6,7 @@ use std::ops::RangeInclusive;
 
 use egui::{Id, RichText, Ui, Vec2};
 use kernel::{JointId, JointKind};
-use session::{Units, format_length, parse_length};
+use session::{Units, format_length, parse_angle, parse_length};
 
 use super::widgets;
 use super::{JointRow, UiAction, View, icons};
@@ -15,6 +15,12 @@ use super::{JointRow, UiAction, View, icons};
 const TURN: f64 = 360.0;
 /// The slider's range for an unlimited distance, in meters (each way).
 const REACH: f64 = 2.0;
+/// The least width of a joint's name before its kind and value are cut short too.
+const NAME_MIN: f32 = 64.0;
+/// The least width of a slider.
+const SLIDER_MIN: f32 = 40.0;
+/// The least width of a value box: "-179.5°" and "-0.025 m" fit.
+const VALUE_BOX: f32 = 80.0;
 
 /// The kind as the panel names it.
 pub(super) fn kind_name(kind: JointKind) -> &'static str {
@@ -38,7 +44,7 @@ pub(super) fn joints(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     }
 }
 
-/// What a value reads as: degrees, or a length in the model's units.
+/// What a value reads as: degrees to a tenth, or a length in the model's units.
 fn value_text(kind_angular: bool, value: f64, units: &Units) -> String {
     if kind_angular {
         format!("{value:.1}\u{b0}")
@@ -47,23 +53,34 @@ fn value_text(kind_angular: bool, value: f64, units: &Units) -> String {
     }
 }
 
+/// The width of `text` laid out on one line in `style` (unless the text sets its own).
+fn text_width(ui: &Ui, text: RichText, style: egui::TextStyle) -> f32 {
+    egui::WidgetText::from(text)
+        .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, style)
+        .size()
+        .x
+}
+
+/// `add` in a part of the row exactly `width` wide, so a widget that truncates stops there.
+fn fixed_width<R>(ui: &mut Ui, width: f32, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let size = Vec2::new(width, ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(
+        size,
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.set_min_width(width);
+            ui.set_max_width(width);
+            add(ui)
+        },
+    )
+    .inner
+}
+
 fn joint_row(ui: &mut Ui, row: &JointRow, units: Units, actions: &mut Vec<UiAction>) {
     let info = &row.info;
     let angular = info.kind.is_angular();
     ui.horizontal(|ui| {
         let play = info.kind.has_value() && !row.follows;
-        let delete = ui.available_width() - 28.0 - if play { 28.0 } else { 0.0 };
-        let name = ui.add(
-            egui::Button::selectable(row.selected, &info.name)
-                .truncate()
-                .min_size(Vec2::new((delete - 130.0).max(40.0), 0.0)),
-        );
-        name.widget_info(|| {
-            egui::WidgetInfo::selected(egui::WidgetType::Button, true, row.selected, &info.name)
-        });
-        if name.clicked() {
-            actions.push(UiAction::SelectJoint(info.id));
-        }
         let shown = if info.kind.has_value() {
             format!(
                 "{} {}",
@@ -73,7 +90,32 @@ fn joint_row(ui: &mut Ui, row: &JointRow, units: Units, actions: &mut Vec<UiActi
         } else {
             kind_name(info.kind).to_string()
         };
-        ui.label(RichText::new(shown).weak());
+        // The buttons keep their size and the kind its text; the name takes what is left, cut
+        // short, and only past NAME_MIN does the kind give way too.
+        let gap = ui.spacing().item_spacing.x;
+        let mut buttons = widgets::icon_button_width(ui, icons::MINUS) + gap;
+        if play {
+            buttons += widgets::icon_button_width(ui, icons::PLAY) + gap;
+        }
+        let kind = text_width(ui, RichText::new(&shown).weak(), egui::TextStyle::Body);
+        let width = (ui.available_width() - buttons - gap).max(0.0);
+        let name_width = (width - kind).max(NAME_MIN.min(width));
+        let name = fixed_width(ui, name_width, |ui| {
+            ui.add(
+                egui::Button::selectable(row.selected, &info.name)
+                    .truncate()
+                    .min_size(Vec2::new(name_width, 0.0)),
+            )
+        });
+        name.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::Button, true, row.selected, &info.name)
+        });
+        if name.clicked() {
+            actions.push(UiAction::SelectJoint(info.id));
+        }
+        fixed_width(ui, (width - name_width).max(0.0), |ui| {
+            ui.add(egui::Label::new(RichText::new(shown).weak()).truncate())
+        });
         if play
             && widgets::icon_button(
                 ui,
@@ -184,16 +226,31 @@ fn drive(
     let step = if angular { 0.5 } else { 0.005 };
     let (track, shown_box) = ui
         .horizontal(|ui| {
-            let label = ui.label(name);
-            ui.spacing_mut().slider_width = (ui.available_width() - 90.0).max(40.0);
+            // The box is as wide as its value (VALUE_BOX at least) and the label as its name,
+            // cut short to leave the slider SLIDER_MIN; the slider takes the rest.
+            let gap = ui.spacing().item_spacing.x;
+            let font = ui.style().drag_value_text_style.clone();
+            let text = RichText::new(value_text(angular, value, &units)).text_style(font.clone());
+            let box_width =
+                (text_width(ui, text, font) + 2.0 * ui.spacing().button_padding.x).max(VALUE_BOX);
+            let width = (ui.available_width() - box_width - 2.0 * gap).max(0.0);
+            let label_width = text_width(ui, RichText::new(name), egui::TextStyle::Body)
+                .min((width - SLIDER_MIN).max(0.0));
+            let label = fixed_width(ui, label_width, |ui| {
+                ui.add(egui::Label::new(name).truncate())
+            });
+            ui.spacing_mut().slider_width = (width - label_width).max(SLIDER_MIN);
+            ui.spacing_mut().interact_size.x = box_width;
             widgets::slider_and_box(ui, label.id, name, &mut value, range, step, |b| {
-                let b = b.update_while_editing(false);
-                if angular {
-                    b.suffix("\u{b0}")
-                } else {
-                    b.custom_formatter(move |v, _| format_length(v, &units))
-                        .custom_parser(move |text| parse_length(text, &units).ok())
-                }
+                b.update_while_editing(false)
+                    .custom_formatter(move |v, _| value_text(angular, v, &units))
+                    .custom_parser(move |text| {
+                        if angular {
+                            parse_angle(text).ok()
+                        } else {
+                            parse_length(text, &units).ok()
+                        }
+                    })
             })
         })
         .inner;

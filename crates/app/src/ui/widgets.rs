@@ -40,6 +40,22 @@ pub fn icon_button(
         .on_disabled_hover_ui(|ui| hint(ui, tooltip, bound))
 }
 
+/// The width `icon_button` takes for `icon`: its glyph and padding, CONTROL_HEIGHT at least.
+pub fn icon_button_width(ui: &Ui, icon: &str) -> f32 {
+    let glyph = egui::WidgetText::from(
+        RichText::new(icon)
+            .family(fonts::icons())
+            .size(theme::ICON_SIZE),
+    )
+    .into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Button,
+    );
+    (glyph.size().x + 2.0 * ui.spacing().button_padding.x).max(theme::CONTROL_HEIGHT)
+}
+
 /// A tool's button on the rail: its glyph in a square `side` points wide (`RAIL_BUTTON`, less
 /// in a short window), on an accent fill while it is the active tool (otherwise framed only
 /// under the pointer, as a selectable label is). Named for the tool; the tooltip names the
