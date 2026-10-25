@@ -172,3 +172,33 @@ fn a_drag_drives_live_and_reports_its_end_once() {
         "{end:?}"
     );
 }
+
+#[test]
+fn a_value_off_the_slider_step_is_not_driven_without_input() {
+    // A solved joint sits a hair off zero or between steps: the slider's rounding to its step
+    // is not an edit, so nothing is driven while nobody touches it.
+    let mut f = joints_tab();
+    f.joints[0].info.value = 3.0e-12;
+    f.joints[1].info.value = 0.0123;
+    let mut h = tall(f);
+    for _ in 0..3 {
+        h.run_ok();
+    }
+    let actions = h.state_mut().take();
+    assert!(actions.is_empty(), "{actions:?}");
+}
+
+#[test]
+fn a_typed_value_drives_the_joint_once() {
+    let mut h = tall(joints_tab());
+    let actions = type_into(&mut h, "Hinge angle value", 0, "45", egui::Key::Enter);
+    assert_eq!(
+        actions,
+        [UiAction::DriveJoint {
+            joint: HINGE,
+            value: 45.0,
+            slide: None,
+            done: true
+        }]
+    );
+}

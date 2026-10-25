@@ -182,11 +182,11 @@ fn drive(
     let held = ui.data(|d| d.get_temp::<Held>(key));
     let mut value = held.map_or(shown, |h| h.0);
     let step = if angular { 0.5 } else { 0.005 };
-    let response = ui
+    let (track, shown_box) = ui
         .horizontal(|ui| {
             let label = ui.label(name);
             ui.spacing_mut().slider_width = (ui.available_width() - 90.0).max(40.0);
-            widgets::slider_row(ui, label.id, name, &mut value, range, step, |b| {
+            widgets::slider_and_box(ui, label.id, name, &mut value, range, step, |b| {
                 let b = b.update_while_editing(false);
                 if angular {
                     b.suffix("\u{b0}")
@@ -197,13 +197,19 @@ fn drive(
             })
         })
         .inner;
+    // The slider rounds a value off its step (a solved joint a hair off zero) without any
+    // input: only a change the user made (a click, keys or a typed value) is an edit.
+    let touched = [&track, &shown_box]
+        .iter()
+        .any(|r| r.clicked() || r.has_focus() || r.lost_focus());
+    let response = track.union(shown_box);
     if response.dragged() {
         let reported = held.map_or(shown, |h| h.1);
         ui.data_mut(|d| d.insert_temp::<Held>(key, (value, value)));
         (value != reported).then_some((value, false))
     } else {
         ui.data_mut(|d| d.remove::<Held>(key));
-        let ended = response.drag_stopped() || (response.changed() && value != shown);
+        let ended = response.drag_stopped() || (response.changed() && touched && value != shown);
         ended.then_some((value, true))
     }
 }

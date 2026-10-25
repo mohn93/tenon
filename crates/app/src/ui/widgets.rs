@@ -347,6 +347,21 @@ pub fn slider_row<T: egui::emath::Numeric>(
     step: f64,
     value_box: impl for<'v> FnOnce(egui::DragValue<'v>) -> egui::DragValue<'v>,
 ) -> Response {
+    let (track, shown) = slider_and_box(ui, label, name, value, range, step, value_box);
+    track.union(shown)
+}
+
+/// `slider_row`, returning the slider's and the box's responses apart (a joined response
+/// reports focus for the slider only).
+pub fn slider_and_box<T: egui::emath::Numeric>(
+    ui: &mut Ui,
+    label: egui::Id,
+    name: &str,
+    value: &mut T,
+    range: RangeInclusive<T>,
+    step: f64,
+    value_box: impl for<'v> FnOnce(egui::DragValue<'v>) -> egui::DragValue<'v>,
+) -> (Response, Response) {
     let track = ui
         .add(
             egui::Slider::new(value, range.clone())
@@ -364,5 +379,5 @@ pub fn slider_row<T: egui::emath::Numeric>(
     ));
     ui.ctx()
         .accesskit_node_builder(shown.id, |node| node.set_label(format!("{name} value")));
-    track.union(shown)
+    (track, shown)
 }
