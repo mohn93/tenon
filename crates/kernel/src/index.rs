@@ -160,7 +160,14 @@ impl Index {
         let mut order: Vec<usize> = (0..shapes.len()).collect();
         let mut nodes = Vec::new();
         if !shapes.is_empty() {
-            split(&mut nodes, &mut order, &boxes, 0, shapes.len());
+            let mut build = Build {
+                nodes: &mut nodes,
+                order: &mut order,
+                centres: boxes.iter().map(|(a, b)| (*a + *b) * 0.5).collect(),
+                boxes: &boxes,
+                keyed: Vec::with_capacity(shapes.len()),
+            };
+            build.split(0, shapes.len());
         }
         Index {
             nodes,
@@ -424,47 +431,62 @@ pub fn ray_hits_triangle(from: DVec3, dir: DVec3, [a, b, c]: [DVec3; 3]) -> Opti
     (u >= -eps && v >= -eps && u + v <= 1.0 + eps).then(|| e2.dot(q) / det)
 }
 
-/// Adds the node over the shapes at `order[start..end]` (each with its box in `boxes`) and its
-/// subtree to `nodes`, reordering that part of `order`; returns the node's position.
-fn split(
-    nodes: &mut Vec<Node>,
-    order: &mut [usize],
-    boxes: &[(DVec3, DVec3)],
-    start: usize,
-    end: usize,
-) -> usize {
-    let mut min = DVec3::splat(f64::INFINITY);
-    let mut max = DVec3::splat(f64::NEG_INFINITY);
-    let mut cmin = min;
-    let mut cmax = max;
-    for k in &order[start..end] {
-        let (a, b) = boxes[*k];
-        min = min.min(a);
-        max = max.max(b);
-        cmin = cmin.min((a + b) * 0.5);
-        cmax = cmax.max((a + b) * 0.5);
+/// What building a tree works with: the nodes so far, the shapes' positions in their order so
+/// far, each shape's box and centre, and room for the keys of one split.
+struct Build<'a> {
+    nodes: &'a mut Vec<Node>,
+    order: &'a mut [usize],
+    boxes: &'a [(DVec3, DVec3)],
+    centres: Vec<DVec3>,
+    keyed: Vec<(f64, usize)>,
+}
+
+impl Build<'_> {
+    /// Adds the node over the shapes at `order[start..end]` and its subtree, reordering that
+    /// part of `order`; returns the node's position.
+    fn split(&mut self, start: usize, end: usize) -> usize {
+        let mut min = DVec3::splat(f64::INFINITY);
+        let mut max = DVec3::splat(f64::NEG_INFINITY);
+        let mut cmin = min;
+        let mut cmax = max;
+        for k in &self.order[start..end] {
+            let (a, b) = self.boxes[*k];
+            let c = self.centres[*k];
+            min = min.min(a);
+            max = max.max(b);
+            cmin = cmin.min(c);
+            cmax = cmax.max(c);
+        }
+        let at = self.nodes.len();
+        self.nodes.push(Node {
+            min,
+            max,
+            kids: Kids::Leaf(start, end),
+        });
+        if end - start <= LEAF {
+            return at;
+        }
+        // Halve at the median centre along the axis where the centres spread most. The
+        // centres are compared beside their positions, so the selection moves both together
+        // and makes the same moves as one moving the positions alone.
+        let axis = (cmax - cmin).max_position();
+        let centres = &self.centres;
+        self.keyed.clear();
+        (self.keyed).extend(
+            self.order[start..end]
+                .iter()
+                .map(|k| (centres[*k][axis], *k)),
+        );
+        let mid = (start + end) / 2;
+        (self.keyed).select_nth_unstable_by(mid - start, |a, b| a.0.total_cmp(&b.0));
+        for (slot, (_, k)) in self.order[start..end].iter_mut().zip(&self.keyed) {
+            *slot = *k;
+        }
+        let left = self.split(start, mid);
+        let right = self.split(mid, end);
+        self.nodes[at].kids = Kids::Inner(left, right);
+        at
     }
-    let at = nodes.len();
-    nodes.push(Node {
-        min,
-        max,
-        kids: Kids::Leaf(start, end),
-    });
-    if end - start <= LEAF {
-        return at;
-    }
-    // Halve at the median centre along the axis where the centres spread most.
-    let axis = (cmax - cmin).max_position();
-    let centre = |k: &usize| {
-        let (a, b) = boxes[*k];
-        (a[axis] + b[axis]) * 0.5
-    };
-    let mid = (start + end) / 2;
-    order[start..end].select_nth_unstable_by(mid - start, |a, b| centre(a).total_cmp(&centre(b)));
-    let left = split(nodes, order, boxes, start, mid);
-    let right = split(nodes, order, boxes, mid, end);
-    nodes[at].kids = Kids::Inner(left, right);
-    at
 }
 
 #[cfg(test)]
