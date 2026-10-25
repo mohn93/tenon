@@ -413,10 +413,10 @@ fn pierced(m: &Model, f: FaceId) -> bool {
                 return true;
             }
         }
-        if (da > LENGTH_TOL && db < -LENGTH_TOL) || (da < -LENGTH_TOL && db > LENGTH_TOL) {
-            if within(pa + (pb - pa) * (da / (da - db))) {
-                return true;
-            }
+        let crosses =
+            (da > LENGTH_TOL && db < -LENGTH_TOL) || (da < -LENGTH_TOL && db > LENGTH_TOL);
+        if crosses && within(pa + (pb - pa) * (da / (da - db))) {
+            return true;
         }
     }
     false
