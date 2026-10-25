@@ -19,7 +19,7 @@ use crate::load;
 use crate::names::{self, CANVAS_ID};
 use crate::platform::WebPlatform;
 use crate::recent::{self, Info, Recent, Record};
-use crate::viewer::{self, Start, both};
+use crate::viewer::{self, Start, try_both};
 
 #[wasm_bindgen(start)]
 pub fn start() {
@@ -230,10 +230,8 @@ async fn run() -> Result<(), String> {
     let canvas = canvas()?;
     // The GPU is asked for while the model downloads and opens (the browser answers both
     // asynchronously). The model goes first: it takes the key out of the address bar before
-    // anything else.
-    let (shared, context) = both(shared_model(), gpu(&canvas)).await;
-    let shared = shared?;
-    let context = context?;
+    // anything else, and a damaged or expired link is told as soon as it is known.
+    let (shared, context) = try_both(shared_model(), gpu(&canvas)).await?;
     // Only the viewer lists models; the one just opened is offered, kept only if the person asks.
     let (model, recent) = match shared {
         Some((model, record)) => {
