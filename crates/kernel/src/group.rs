@@ -346,14 +346,12 @@ impl Scene {
             original.kind,
         );
         // A copy of a mesh drawn before (and unchanged since) is the same drawing again, its
-        // ids moved on: the recorded ops are replayed rather than the stencil drawn.
+        // ids moved on: the recorded ops are replayed rather than the stencil drawn. The first
+        // copy only notes the mesh; the second records its drawing.
         let stamp = original.mesh.geometry_stamp();
-        let drawn = self
-            .drawn_copies
-            .0
-            .get(&id)
-            .filter(|d| d.stamp == stamp)
-            .cloned();
+        let seen = self.drawn_copies.0.get(&id).filter(|d| d.stamp == stamp);
+        let again = seen.is_some();
+        let drawn = seen.and_then(|d| d.drawing.clone());
         let stencil = drawn.is_none().then(|| whole(&original.mesh));
         let children: Vec<Instance> = original.mesh.instances().map(|(_, i)| i.clone()).collect();
         let guides: Vec<Guide> = original.mesh.guides().map(|(_, g)| *g).collect();
@@ -411,14 +409,13 @@ impl Scene {
                 } else if let Some(stencil) = &stencil {
                     m.draw_stencil(stencil, &[DAffine3::IDENTITY]);
                     let ops = m.pending();
-                    if ops.iter().all(|op| op.shifted(0).is_some()) {
-                        recorded = Some(DrawnCopy {
-                            stamp,
+                    let drawing =
+                        (again && ops.iter().all(|op| op.shifted(0).is_some())).then(|| Drawing {
                             base,
                             ops: Arc::new(ops.to_vec()),
                             next: m.next_id(),
                         });
-                    }
+                    recorded = Some(DrawnCopy { stamp, drawing });
                 }
                 for i in placed {
                     m.insert_instance(i);
@@ -433,11 +430,15 @@ impl Scene {
             })
             .expect("drawing a copy cannot fail");
         if let Some(d) = recorded {
-            let gone: Vec<DefinitionId> = (self.drawn_copies.0.keys())
-                .filter(|k| self.definition(**k).is_none())
-                .copied()
+            // Drop what no copy can use again: drawings of definitions removed or changed since.
+            let stale: Vec<DefinitionId> = (self.drawn_copies.0.iter())
+                .filter(|(k, d)| {
+                    self.definition(**k)
+                        .is_none_or(|x| x.mesh.geometry_stamp() != d.stamp)
+                })
+                .map(|(k, _)| *k)
                 .collect();
-            for k in gone {
+            for k in stale {
                 self.drawn_copies.0.remove(&k);
             }
             self.drawn_copies.0.insert(id, d);
@@ -563,11 +564,17 @@ impl Scene {
 #[derive(Clone, Default)]
 pub(crate) struct DrawnCopies(BTreeMap<DefinitionId, DrawnCopy>);
 
-/// The ops drawing a copy of a mesh made, the mesh's stamp, the first id of the copy and the
-/// next id after it.
+/// A copied mesh's geometry stamp, and the drawing a copy of it made: none after the first
+/// copy, so the ops are kept only for meshes copied more than once.
 #[derive(Clone)]
 struct DrawnCopy {
     stamp: u64,
+    drawing: Option<Drawing>,
+}
+
+/// The ops drawing a copy of a mesh made, the first id of the copy and the next id after it.
+#[derive(Clone)]
+struct Drawing {
     base: u64,
     ops: Arc<Vec<Op>>,
     next: u64,
@@ -622,5 +629,54 @@ impl Model {
                 self.remove_vertex(v);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Solid;
+
+    #[test]
+    fn copy_drawings_are_kept_only_for_meshes_copied_again_and_unchanged() {
+        let mut s = Scene::new();
+        let group = |s: &mut Scene, at: f64| {
+            let (i, _) = s
+                .add_solid(
+                    MeshId::Root,
+                    &Solid::sphere(0.4, 8).unwrap(),
+                    DefinitionKind::Group,
+                    "Ball",
+                    DAffine3::from_translation(DVec3::X * at),
+                    None,
+                )
+                .unwrap();
+            let d = s
+                .mesh(MeshId::Root)
+                .unwrap()
+                .instance(i)
+                .unwrap()
+                .definition;
+            (i, d)
+        };
+        let (a, da) = group(&mut s, 0.0);
+        let (b, db) = group(&mut s, 2.0);
+        let held =
+            |s: &Scene, d: DefinitionId| s.drawn_copies.0.get(&d).map(|x| x.drawing.is_some());
+        // A first copy notes the mesh without its drawing; the second records the drawing.
+        s.copy_instances(MeshId::Root, &[a], DVec3::Y, 1).unwrap();
+        assert_eq!(held(&s, da), Some(false));
+        s.copy_instances(MeshId::Root, &[a], DVec3::Y * 2.0, 2)
+            .unwrap();
+        assert_eq!(held(&s, da), Some(true));
+        // A changed mesh's drawing goes when the next copy is noted.
+        s.edit(MeshId::Definition(da), |m| {
+            m.add_polygon(&[DVec3::ZERO, DVec3::X, DVec3::Y])?;
+            Ok(m.take_changes())
+        })
+        .unwrap();
+        s.copy_instances(MeshId::Root, &[b], DVec3::Y, 1).unwrap();
+        assert_eq!(held(&s, da), None);
+        assert_eq!(held(&s, db), Some(false));
     }
 }
