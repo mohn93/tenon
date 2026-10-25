@@ -161,15 +161,15 @@ fn time_row(ui: &mut Ui, s: &Shadows, actions: &mut Vec<UiAction>) {
         let label = ui.label("Time");
         let mut minutes = s.minutes.min(LAST_TIME);
         ui.spacing_mut().slider_width = (ui.available_width() - 70.0).max(40.0);
-        let slider = ui
-            .add(
-                egui::Slider::new(&mut minutes, 0..=LAST_TIME)
-                    .step_by(f64::from(TIME_STEP))
-                    // A time between the steps stays as it is until the slider is moved.
-                    .clamping(egui::SliderClamping::Never)
-                    .show_value(false),
-            )
-            .labelled_by(label.id);
+        let slider = widgets::slider(
+            ui,
+            egui::Slider::new(&mut minutes, 0..=LAST_TIME)
+                .step_by(f64::from(TIME_STEP))
+                // A time between the steps stays as it is until the slider is moved.
+                .clamping(egui::SliderClamping::Never)
+                .show_value(false),
+        )
+        .labelled_by(label.id);
         if slider.changed() && minutes != s.minutes {
             actions.push(UiAction::SetShadows(ShadowChange {
                 time: Some(time_text(minutes)),
@@ -192,8 +192,7 @@ fn date_row(ui: &mut Ui, s: &Shadows, actions: &mut Vec<UiAction>) {
         let label = ui.label("Date");
         let mut n = day_of_year(s.year, s.month, s.day);
         ui.spacing_mut().slider_width = (ui.available_width() - 70.0).max(40.0);
-        let slider = ui
-            .add(egui::Slider::new(&mut n, 1..=days).show_value(false))
+        let slider = widgets::slider(ui, egui::Slider::new(&mut n, 1..=days).show_value(false))
             .labelled_by(label.id);
         if slider.changed() {
             let (month, day) = month_and_day(s.year, n);
