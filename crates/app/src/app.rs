@@ -162,6 +162,9 @@ pub enum AppEvent {
     Error(String),
     /// A check for updates finished.
     Update(crate::update::Outcome),
+    /// The system asked to open these files (macOS: a `.skr` double-clicked in Finder or
+    /// dropped on the Dock icon, see `open_files`).
+    OpenFiles(Vec<PathBuf>),
     /// The viewer was asked to open another shared model (a kept one from the Recent list).
     Shared(SharedModel),
 }
@@ -3963,6 +3966,22 @@ impl App {
     }
 }
 
+/// Where the files the system asked to open go (`AppEvent::OpenFiles`). The window holds one
+/// model, so only the first is opened. Before the window exists it becomes the model to open at
+/// start, in place of one given as an argument; once it exists, it is returned to open now.
+fn route_opened_files(
+    paths: Vec<PathBuf>,
+    window: bool,
+    at_start: &mut Option<PathBuf>,
+) -> Option<PathBuf> {
+    let path = paths.into_iter().next()?;
+    if window {
+        return Some(path);
+    }
+    *at_start = Some(path);
+    None
+}
+
 impl ApplicationHandler<AppEvent> for App {
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         // The last replies (a `quit`'s) reach their agents before the app ends.
@@ -4042,6 +4061,21 @@ impl ApplicationHandler<AppEvent> for App {
                         *slot = Some(outcome);
                     }
                     s.window.request_redraw();
+                }
+            }
+            AppEvent::OpenFiles(paths) => {
+                let window = self.state.is_some();
+                if let Some(path) = route_opened_files(paths, window, &mut self.file)
+                    && let Some(s) = self.state.as_mut().filter(|s| !s.features.read_only)
+                {
+                    // As File > Open does once the file is picked: unsaved changes are asked
+                    // about first.
+                    s.settle_and(Then::OpenFile(path));
+                    s.notify_api(&mut self.hub);
+                    s.window.request_redraw();
+                    if s.should_exit() {
+                        event_loop.exit();
+                    }
                 }
             }
             AppEvent::Shared(model) => {
@@ -5844,6 +5878,43 @@ mod tests {
             AtExit::Keep,
             "autosave off"
         );
+    }
+
+    #[test]
+    fn files_the_system_opens_before_the_window_wait_for_it() {
+        let mut at_start = Some(PathBuf::from("/m/argument.skr"));
+        let opened = route_opened_files(
+            vec![PathBuf::from("/m/a b.skr"), PathBuf::from("/m/second.skr")],
+            false,
+            &mut at_start,
+        );
+        assert_eq!(opened, None);
+        assert_eq!(
+            at_start,
+            Some(PathBuf::from("/m/a b.skr")),
+            "the first, kept"
+        );
+        assert_eq!(route_opened_files(Vec::new(), false, &mut at_start), None);
+        assert_eq!(
+            at_start,
+            Some(PathBuf::from("/m/a b.skr")),
+            "nothing replaces it"
+        );
+    }
+
+    #[test]
+    fn files_the_system_opens_with_the_window_open_now() {
+        let mut at_start = None;
+        assert_eq!(
+            route_opened_files(
+                vec![PathBuf::from("/m/a.skr"), PathBuf::from("/m/b.skr")],
+                true,
+                &mut at_start
+            ),
+            Some(PathBuf::from("/m/a.skr"))
+        );
+        assert_eq!(at_start, None);
+        assert_eq!(route_opened_files(Vec::new(), true, &mut at_start), None);
     }
 
     #[test]

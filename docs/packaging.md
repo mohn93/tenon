@@ -64,6 +64,18 @@ releases published yet" (no release exists), or the error. The app makes no requ
 in the background, and never downloads or installs anything. The new HTTP dependency is `ureq`
 (MIT or Apache-2.0) with rustls, used only for this.
 
+## Opening a .skr from the desktop
+
+Windows (the MSI's association) and Linux (`Exec=app %f`) pass the file as the program's
+argument. macOS never does: Finder (double-click, Open With) and the Dock icon (a file dropped
+on it) send it to the app delegate's `application:openURLs:`. `crates/app/src/open_files.rs`
+adds that method to winit's delegate class before the event loop runs (as `system_quit.rs`
+adds `applicationShouldTerminate:`) and sends the paths as `AppEvent::OpenFiles`. The first
+file is opened as File > Open opens one, asking about unsaved changes first; one that arrives
+while the app is still starting is opened once the window exists, in place of a file given as
+an argument. It also registers `NSTreatUnknownArgumentsAsOpen` as NO, so AppKit does not take
+the command line's own arguments (a model, the folder after `--api-root`) for files to open.
+
 ## What the user must provide later
 
 Nothing below is wired up; the workflow runs without any secret.
@@ -95,8 +107,5 @@ SmartScreen warns on the first start.
 
 - The Windows and Linux packages build only in CI; the macOS dmg has been built and verified
   locally for this Mac's architecture only (the universal build runs in CI).
-- Opening a `.skr` from Finder (double-click or Open With) starts the app but does not open the
-  file yet: the app takes the file as a command-line argument only. Windows and Linux pass it
-  that way.
 - The packages do not carry the licence notices of the compiled Rust crates (see
   [windows.md](windows.md)); that is still needed before a public release.
