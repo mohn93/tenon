@@ -802,10 +802,18 @@ fn fly_shortcut(
 }
 
 /// True if a key event goes to fly mode's movement: a moving key while flying, except a press
-/// with Cmd held, which stays a shortcut (Cmd+S saves). Releases always go, so a key let go
-/// after Cmd went down still stops.
-fn is_fly_move(flying: bool, key: PhysicalKey, pressed: bool, cmd: bool) -> Option<FlyKey> {
-    fly_move_key(key).filter(|_| flying && !(pressed && cmd))
+/// with Cmd held, which stays a shortcut (Cmd+S saves), and a press that does not reach the
+/// editor (`reaches`: a text field has focus or a sheet is open, see `keys_reach_editor`).
+/// Releases always go, so a key let go after Cmd went down, or after a text field took focus,
+/// still stops: the eye would otherwise keep flying with no key down.
+fn is_fly_move(
+    flying: bool,
+    key: PhysicalKey,
+    pressed: bool,
+    cmd: bool,
+    reaches: bool,
+) -> Option<FlyKey> {
+    fly_move_key(key).filter(|_| flying && !(pressed && (cmd || !reaches)))
 }
 
 /// A raw mouse motion in logical pixels. macOS reports it in points (logical pixels) already;
@@ -4246,6 +4254,17 @@ impl ApplicationHandler<AppEvent> for App {
                 false
             }
             WindowEvent::KeyboardInput { ref event, .. }
+                if let Some(key) = is_fly_move(
+                    s.editor.flying(),
+                    event.physical_key,
+                    event.state == ElementState::Pressed,
+                    s.fly_shortcut(event),
+                    keys_reach_editor(s.gui.wants_keyboard(), s.sheet.is_some()),
+                ) =>
+            {
+                s.editor.fly_key(key, event.state == ElementState::Pressed)
+            }
+            WindowEvent::KeyboardInput { ref event, .. }
                 if !keys_reach_editor(s.gui.wants_keyboard(), s.sheet.is_some())
                     && !(event.state == ElementState::Pressed
                         && !event.repeat
@@ -4257,16 +4276,6 @@ impl ApplicationHandler<AppEvent> for App {
                         )) =>
             {
                 false
-            }
-            WindowEvent::KeyboardInput { event, .. }
-                if let Some(key) = is_fly_move(
-                    s.editor.flying(),
-                    event.physical_key,
-                    event.state == ElementState::Pressed,
-                    s.fly_shortcut(&event),
-                ) =>
-            {
-                s.editor.fly_key(key, event.state == ElementState::Pressed)
             }
             WindowEvent::MouseWheel { delta, phase, .. } => {
                 let (scroll, started) = scroll_input(delta, phase);
@@ -5570,13 +5579,21 @@ mod tests {
         );
         assert_eq!(fly_move_key(code(KeyCode::KeyF)), None);
         let s = code(KeyCode::KeyS);
-        assert_eq!(is_fly_move(true, s, true, false), Some(FlyKey::S));
-        assert_eq!(is_fly_move(false, s, true, false), None, "not flying");
-        assert_eq!(is_fly_move(true, s, true, true), None, "Cmd+S saves");
+        assert_eq!(is_fly_move(true, s, true, false, true), Some(FlyKey::S));
+        assert_eq!(is_fly_move(false, s, true, false, true), None, "not flying");
+        assert_eq!(is_fly_move(true, s, true, true, true), None, "Cmd+S saves");
         assert_eq!(
-            is_fly_move(true, s, false, true),
+            is_fly_move(true, s, false, true, true),
             Some(FlyKey::S),
             "a release always stops"
+        );
+        // A text field has focus, or a sheet is open: the key is theirs, but a key held since
+        // before is still let go.
+        assert_eq!(is_fly_move(true, s, true, false, false), None, "typed");
+        assert_eq!(
+            is_fly_move(true, s, false, false, false),
+            Some(FlyKey::S),
+            "released while typing"
         );
     }
 
