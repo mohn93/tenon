@@ -428,6 +428,18 @@ impl Layout {
             })
             .collect();
         let mut layout = Layout::new(meshes, &models, parts, paths, cuts, hidden, strict_parts);
+        // Notes a viewer hides with the parts they point at are neither drawn nor picked.
+        let notes = scene.view_hidden_notes();
+        if !notes.is_empty() {
+            layout
+                .annotations
+                .retain(|(_, id, _)| !matches!(id, EntityId::Note(n) if notes.contains(n)));
+            layout.strict_annotations = layout
+                .annotations
+                .iter()
+                .take_while(|(k, ..)| *k < strict_parts)
+                .count();
+        }
         // The model's axes at the root; inside a group or component its own (the identity).
         if context.is_empty() {
             layout.axes = scene.axes().frame();

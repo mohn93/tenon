@@ -44,6 +44,7 @@ mod import;
 mod instances;
 mod interference;
 mod intersect;
+mod isolate;
 mod joints;
 mod library;
 mod materials;
@@ -382,7 +383,8 @@ impl Document {
     }
 
     /// Hides every part but `keep` (root groups and components) from every view of the model:
-    /// drawing, picking, snapping and Zoom Extents. This is for looking only: the model, the
+    /// drawing, picking, snapping and Zoom Extents, with the root's leader notes that point at
+    /// a hidden part (their anchor lies nearest it). This is for looking only: the model, the
     /// undo history and the saved file are untouched, but the revision moves so what is derived
     /// from the model is rebuilt. False (nothing changes) when none of `keep` is a root
     /// instance, or when the document is not read only (only a viewer hides parts).
@@ -402,17 +404,21 @@ impl Document {
         if hidden == *self.scene.view_hidden() {
             return false;
         }
+        let notes = isolate::notes_pointing_at(&self.scene, &hidden);
         self.scene.set_view_hidden(hidden);
+        self.scene.set_view_hidden_notes(notes);
         self.view_changed();
         true
     }
 
-    /// Shows every part again after [`Document::isolate`]. False when none was hidden.
+    /// Shows every part (and note) again after [`Document::isolate`]. False when none was
+    /// hidden.
     pub fn show_all(&mut self) -> bool {
         if self.scene.view_hidden().is_empty() {
             return false;
         }
         self.scene.set_view_hidden(BTreeSet::new());
+        self.scene.set_view_hidden_notes(BTreeSet::new());
         self.view_changed();
         true
     }
@@ -752,7 +758,7 @@ impl Document {
                         )
                         .chain(
                             m.notes()
-                                .filter(|(_, n)| shown(n.tag()))
+                                .filter(|(id, n)| self.scene.note_shown(*id, n))
                                 .map(|(id, _)| EntityId::Note(id)),
                         )
                         .chain(

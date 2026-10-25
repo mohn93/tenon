@@ -146,3 +146,78 @@ fn only_a_read_only_document_can_isolate() {
     assert!(!d.isolated());
     assert_eq!(d.revision(), revision);
 }
+
+/// The root's notes, by text.
+fn note_ids(d: &Document) -> std::collections::BTreeMap<String, kernel::NoteId> {
+    d.scene()
+        .root()
+        .notes()
+        .filter_map(|(id, n)| match n {
+            kernel::Note::Leader { text: Some(t), .. } => Some((t.clone(), id)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn isolating_hides_the_notes_pointing_at_hidden_parts() {
+    let (mut d, a, b) = two_groups();
+    run(
+        &mut d,
+        json!({"type": "add_label", "target": format!("i{}", b.0), "text": "B label"}),
+    );
+    // A point just off the second square, nearer it than anything else.
+    run(
+        &mut d,
+        json!({"type": "add_note", "anchor": [11.0, 1.0, 0.2], "position": [11, 3, 1], "text": "B near"}),
+    );
+    run(
+        &mut d,
+        json!({"type": "add_note", "anchor": [1.0, 1.0, 0.0], "position": [1, 3, 1], "text": "A"}),
+    );
+    // Root geometry of its own, nearer than either group.
+    run(
+        &mut d,
+        json!({"type": "add_edge", "start": [5, 0, 0], "end": [5, 2, 0]}),
+    );
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [5, 5, 0], "opposite": [7, 7, 0]}),
+    );
+    run(
+        &mut d,
+        json!({"type": "add_note", "anchor": [6.0, 6.0, 0.1], "position": [6, 8, 1], "text": "Root"}),
+    );
+    let notes = note_ids(&d);
+    assert_eq!(notes.len(), 4, "{notes:?}");
+    d.set_read_only(true);
+
+    assert!(d.isolate(&[a]));
+    let hidden = d.scene().view_hidden_notes().clone();
+    assert_eq!(
+        hidden,
+        std::collections::BTreeSet::from([notes["B label"], notes["B near"]])
+    );
+    let root = d.scene().root();
+    for (text, id) in &notes {
+        let note = root.note(*id).unwrap();
+        assert_eq!(
+            d.scene().note_shown(*id, note),
+            !hidden.contains(id),
+            "{text}"
+        );
+    }
+    // Keeping the other part hides the other notes instead.
+    assert!(d.isolate(&[b]));
+    assert_eq!(
+        *d.scene().view_hidden_notes(),
+        std::collections::BTreeSet::from([notes["A"]])
+    );
+    // Show all brings every note back, and nothing of it is saved.
+    assert!(d.show_all());
+    assert!(d.scene().view_hidden_notes().is_empty());
+    assert!(d.isolate(&[a]));
+    let bytes = d.encode_bytes().unwrap();
+    d.open_bytes("again", &bytes, true).unwrap();
+    assert!(d.scene().view_hidden_notes().is_empty());
+}

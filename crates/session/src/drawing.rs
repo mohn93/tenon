@@ -597,7 +597,7 @@ pub fn extent_points(doc: &Document) -> Vec<DVec3> {
             .chain(
                 model
                     .notes()
-                    .filter(|(_, n)| shown(n.tag()))
+                    .filter(|(id, n)| scene.note_shown(*id, n))
                     .map(|(id, _)| EntityId::Note(id)),
             );
         for id in shapes {
@@ -693,7 +693,7 @@ fn annotations(doc: &Document, camera: &Camera, parts: &[Placement<'_>], drawing
             .chain(
                 model
                     .notes()
-                    .filter(|(_, n)| shown(n.tag()))
+                    .filter(|(id, n)| scene.note_shown(*id, n))
                     .map(|(id, _)| EntityId::Note(id)),
             );
         for id in shapes {
