@@ -1826,7 +1826,8 @@ impl Editor {
     /// Imports an OBJ, STL, SketchUp, glTF or COLLADA file (the format its extension names)
     /// into the open context as `import_options` say (by default a group, which becomes the
     /// selection), as one undo step. A SketchUp file keeps its own units, axes and faces: only
-    /// `place` applies; a COLLADA file keeps its own units and axes (see `ImportApplies`). False if it cannot be imported; the status then says why.
+    /// `place` applies; a COLLADA file keeps its own units and axes (see `ImportApplies`).
+    /// False if it cannot be imported; the status then says why.
     pub fn import_file(&mut self, path: &Path) -> bool {
         self.reset_tool();
         self.typed.clear();

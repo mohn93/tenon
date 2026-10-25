@@ -1314,8 +1314,8 @@ pub enum Command {
     /// as one undo step: as a new group (default) or component named after the file, placed at
     /// the context's origin and selected, or (`"as": "context"`) as loose geometry merging with
     /// what it touches, which becomes the selection. `format` defaults to the one the extension
-    /// names (`.obj`, `.stl`, `.skp`, `.gltf`, `.glb`, `.dae`), else to SketchUp for a file with SketchUp's header. OBJ
-    /// and STL units are meters times `scale` (default 1); `up` is the file's up axis (default
+    /// names (`.obj`, `.stl`, `.skp`, `.gltf`, `.glb`, `.dae`), else to SketchUp for a file
+    /// with SketchUp's header. OBJ and STL units are meters times `scale` (default 1); `up` is the file's up axis (default
     /// `y` for OBJ, `z` for STL, as `export` writes them). Corners closer than 1e-6 m are
     /// welded, and with `merge_coplanar` (default true) neighbouring faces in one plane with
     /// one material become one face. OBJ materials come from its `mtllib` libraries. A

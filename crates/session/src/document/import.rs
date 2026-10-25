@@ -249,8 +249,8 @@ impl Document {
         Ok(changed)
     }
 
-    /// Reads a glTF or COLLADA file's `bytes` and adds it to the open context as `import_changes` does:
-    /// its nodes as groups and shared meshes as components (see `scene_read`), inside a new
+    /// Reads a glTF or COLLADA file's `bytes` and adds it to the open context as
+    /// `import_changes` does: its nodes as groups and shared meshes as components (see `scene_read`), inside a new
     /// group or component named after the file (exploded for `"as": "context"`), at the
     /// file's own units times `scale`; `o.up` overrides the file's up axis. Side files are
     /// read beside `path` (none `from_bytes`). Nothing changes on failure.
@@ -381,8 +381,9 @@ impl Document {
     /// texture when the image can be used (else its color, with a warning per reason). A
     /// texture's size is the one most polygons painted with it give by their texture
     /// coordinates, their points taken through `affine` (file to model, without node
-    /// transforms); 1 m by 1 m when none gives one. Returns each scene material's model material and texture size, the
-    /// materials added with their changes, and those of them with a texture.
+    /// transforms); 1 m by 1 m when none gives one. Returns each scene material's model
+    /// material and texture size, the materials added with their changes, and those of them
+    /// with a texture.
     #[allow(clippy::type_complexity)]
     fn scene_materials(
         &mut self,

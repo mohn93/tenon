@@ -39,7 +39,8 @@ impl Editor {
 
     /// Imports an OBJ, STL, SketchUp, glTF or COLLADA file from its `bytes` as `import_file`
     /// does the file (`name` gives the format and the group's name). An OBJ's material
-    /// libraries and a glTF's or COLLADA file's side files are not read. False if it cannot be imported; the status then says why.
+    /// libraries and a glTF's or COLLADA file's side files are not read. False if it cannot be
+    /// imported; the status then says why.
     pub fn import_bytes(&mut self, name: &str, bytes: Vec<u8>) -> bool {
         self.reset_tool();
         self.typed.clear();
