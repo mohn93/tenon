@@ -3948,6 +3948,9 @@ impl ApplicationHandler<AppEvent> for App {
         // The session's lock goes with the window either way.
         if let Some(s) = self.state.as_mut() {
             s.autosave_at_exit();
+            // A quit AppKit ends (Dock > Quit, log out) exits the process without dropping the
+            // window, so the session's lock file goes here.
+            s.session = None;
             // The share's server stops with the app.
             #[cfg(not(target_arch = "wasm32"))]
             {
