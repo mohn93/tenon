@@ -178,7 +178,12 @@ pub(super) fn dock(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> Doc
     // the 3D view.
     let area =
         egui::Rect::from_min_size(ui.cursor().min, Vec2::new(width, top_height(split, height)));
-    let mut top_ui = ui.new_child(egui::UiBuilder::new().max_rect(area).layout(*ui.layout()));
+    let mut top_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt("dock-top-area")
+            .max_rect(area)
+            .layout(*ui.layout()),
+    );
     let mut clip = ui.clip_rect();
     let margin = f32::from(DOCK_MARGIN);
     (clip.min.x, clip.max.x) = (
