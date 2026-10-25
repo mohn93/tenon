@@ -390,13 +390,19 @@ fn crosses(rings: &[Vec<DVec2>]) -> bool {
             || on(d3, p, q, r)
             || on(d4, p, q, s)
     };
-    let segments: Vec<(usize, usize, DVec2, DVec2)> = rings
+    let mut segments: Vec<(usize, usize, DVec2, DVec2)> = rings
         .iter()
         .enumerate()
         .flat_map(|(k, l)| (0..l.len()).map(move |i| (k, i, l[i], l[(i + 1) % l.len()])))
         .collect();
+    // Swept by x: only sides whose x ranges overlap can touch.
+    segments.sort_by(|a, b| a.2.x.min(a.3.x).total_cmp(&b.2.x.min(b.3.x)));
     for (x, &(k, i, p, q)) in segments.iter().enumerate() {
+        let right = p.x.max(q.x);
         for &(k2, j, r, s) in &segments[x + 1..] {
+            if r.x.min(s.x) > right {
+                break;
+            }
             let n = rings[k].len();
             if k == k2 && (j == (i + 1) % n || i == (j + 1) % n) {
                 continue;
@@ -538,10 +544,22 @@ impl Model {
                 normal,
             });
         }
-        // Which loops lie inside which, in one plane.
+        // Which loops lie inside which, in one plane; a loop's box must lie in the other's.
+        let boxes: Vec<(DVec3, DVec3)> = flat
+            .iter()
+            .map(|f| {
+                f.l.iter().fold(
+                    (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)),
+                    |(lo, hi), v| (lo.min(self.pos(*v)), hi.max(self.pos(*v))),
+                )
+            })
+            .collect();
         let inside = |i: usize, j: usize| -> bool {
             let (a, b) = (&flat[i], &flat[j]);
-            if a.normal.dot(b.normal).abs() < 1.0 - PLANE_ANGLE_TOL
+            let pad = DVec3::splat(LENGTH_TOL);
+            if (boxes[i].0 + pad).cmplt(boxes[j].0).any()
+                || (boxes[i].1 - pad).cmpgt(boxes[j].1).any()
+                || a.normal.dot(b.normal).abs() < 1.0 - PLANE_ANGLE_TOL
                 || b.plane.distance(self.pos(a.l[0])).abs() > LENGTH_TOL
             {
                 return false;
@@ -809,6 +827,36 @@ mod tests {
         let fixed = r.model.expect("closed");
         assert!((volume(&fixed) - 7.0).abs() < 1e-9);
         fixed.validate().unwrap();
+    }
+
+    #[test]
+    fn a_ring_with_sixteen_hundred_holes_is_checked_for_crossings_quickly() {
+        let mut rings = vec![vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(40.0, 0.0),
+            DVec2::new(40.0, 40.0),
+            DVec2::new(0.0, 40.0),
+        ]];
+        for k in 0..1600 {
+            let c = DVec2::new((k % 40) as f64 + 0.5, (k / 40) as f64 + 0.5);
+            rings.push(
+                (0..16)
+                    .rev()
+                    .map(|i| {
+                        let a = std::f64::consts::TAU * i as f64 / 16.0;
+                        c + DVec2::new(a.cos(), a.sin()) * 0.3
+                    })
+                    .collect(),
+            );
+        }
+        let t = std::time::Instant::now();
+        assert!(!crosses(&rings));
+        assert!(t.elapsed() < std::time::Duration::from_secs(5));
+        // A hole moved onto its neighbour crosses it.
+        for p in rings[2].iter_mut() {
+            p.x -= 0.5;
+        }
+        assert!(crosses(&rings));
     }
 
     #[test]
