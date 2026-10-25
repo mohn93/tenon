@@ -47,11 +47,11 @@ pub fn csv_length(meters: f64, units: &Units) -> String {
 }
 
 /// `text` as a CSV field: quoted when it holds a comma, a quote or a line break, with quotes
-/// doubled; and, as a spreadsheet would run a text that starts with `=`, `+`, `-` or `@` as a
-/// formula, led by an apostrophe.
+/// doubled; and, as a spreadsheet would run a text that starts with `=`, `+`, `-` or `@` (or a
+/// tab or carriage return before one) as a formula, led by an apostrophe.
 pub fn csv_text(text: &str) -> String {
     let guarded;
-    let text = if text.starts_with(['=', '+', '-', '@']) {
+    let text = if text.starts_with(['=', '+', '-', '@', '\t', '\r']) {
         guarded = format!("'{text}");
         &guarded
     } else {
@@ -148,12 +148,12 @@ pub fn draw_pages(pdf: &mut Pdf, rows: &[CutRowInfo], units: &Units, page_mm: [f
     let per_page = (((ph - top - PAGE_MARGIN_MM - ROW_MM) / ROW_MM).floor() as usize).max(1);
     let pages = rows.len().div_ceil(per_page).max(1);
     let x = |f: f64| PAGE_MARGIN_MM + width * f;
+    let name_room = x(MATERIAL_AT) - x(NAME_AT) - 2.0;
     for n in 0..pages {
         let mut page = pdf.page(page_mm);
         page.text([PAGE_MARGIN_MM, PAGE_MARGIN_MM + 4.0], TITLE_PT, "Cut list");
         let heads = header(units);
         let cell = |page: &mut crate::pdf::PageBuilder, y: f64, cells: [&str; 6]| {
-            let name_room = x(MATERIAL_AT) - x(NAME_AT) - 2.0;
             page.text([x(NAME_AT), y], PAGE_PT, &fitted(cells[0], name_room));
             let material_room = x(RIGHT_EDGES[0] - 0.14) - x(MATERIAL_AT) - 2.0;
             page.text(
@@ -185,10 +185,13 @@ pub fn draw_pages(pdf: &mut Pdf, rows: &[CutRowInfo], units: &Units, page_mm: [f
         for (i, row) in rows.iter().skip(n * per_page).take(per_page).enumerate() {
             let y = top + ROW_MM * (i as f64 + 1.0);
             let cells = table_cells(row, units);
+            // A long name is cut, not the mark after it.
             let name = if row.solid {
                 cells[0].clone()
             } else {
-                format!("{} (not solid)", cells[0])
+                let mark = " (not solid)";
+                let room = name_room - text_width_mm(mark, PAGE_PT);
+                format!("{}{mark}", fitted(&cells[0], room))
             };
             cell(
                 &mut page,
@@ -253,6 +256,8 @@ mod tests {
         assert_eq!(csv_text("-x"), "'-x");
         assert_eq!(csv_text("@sum"), "'@sum");
         assert_eq!(csv_text("+1,2"), "\"'+1,2\"");
+        assert_eq!(csv_text("\t=1"), "'\t=1");
+        assert_eq!(csv_text("\r=1"), "\"'\r=1\"");
     }
 
     #[test]
@@ -308,6 +313,16 @@ mod tests {
             "{cut}"
         );
         assert_eq!(fitted("Leg", 30.0), "Leg");
+    }
+
+    #[test]
+    fn a_long_name_that_is_not_solid_keeps_its_mark_on_the_page() {
+        let mut r = row(&"x".repeat(200), None);
+        r.solid = false;
+        let mut pdf = Pdf::new();
+        draw_pages(&mut pdf, &[r], &mm(), [297.0, 210.0]);
+        let text = String::from_utf8_lossy(&pdf.finish()).into_owned();
+        assert!(text.contains(".. \\(not solid\\)) Tj"), "{text}");
     }
 
     #[test]
