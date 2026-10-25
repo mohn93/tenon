@@ -34,6 +34,9 @@ const BASE: u32 = 9;
 const LAYER_COUNT_POS: usize = 3405;
 /// The active-layer anchor, a back-reference to Layer0.
 const ACTIVE_LAYER_ANCHOR_POS: usize = 3505;
+/// Layer0's colour in the scaffold: three bytes after the `Layer_Layer0` string and the
+/// 256 marker.
+const LAYER0_RGB_POS: usize = 3476;
 const DEF_COUNT_POS: usize = 3507;
 const ROOT_COUNT_POS: usize = 3511;
 const TAIL_POS: usize = 3515;
@@ -269,7 +272,7 @@ pub fn write(doc: &Doc) -> Result<Vec<u8>, WriteError> {
         let def = &doc.definitions[d];
         let count = ctx.entities(&mut ar, Owner::Definition(d), &def.geometry, &def_slots);
         ar.patch_u32(count_at, count);
-        ar.definition_end(plan.def_guids[d], &def.name, TIMESTAMP);
+        ar.definition_end(plan.def_guids[d], &def.name, TIMESTAMP, def.is_group);
         def_slots[d] = Some(slot);
     }
     let defs_buf = std::mem::take(&mut ar.buf);
@@ -299,6 +302,13 @@ pub fn write(doc: &Doc) -> Result<Vec<u8>, WriteError> {
         &mut out,
         layers_at + (LAYER_COUNT_POS - MATERIAL_INSERT_POS),
         plan.layer_count,
+    );
+    // The scaffold's Layer0 carries the colour of old SketchUp files, [255, 84, 84];
+    // files SketchUp 2024 writes (and its templates) have white.
+    put(
+        &mut out,
+        layers_at + (LAYER0_RGB_POS - MATERIAL_INSERT_POS),
+        &[255, 255, 255],
     );
     out.extend_from_slice(&tags_buf);
 

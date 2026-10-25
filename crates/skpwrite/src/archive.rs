@@ -483,8 +483,15 @@ impl Archive {
     }
 
     /// Close a definition: no relationships, its GUID and name, the timestamp, the
-    /// behaviour gap and a thumbnail with no image.
-    pub(crate) fn definition_end(&mut self, guid: [u8; 16], name: &str, timestamp: u32) {
+    /// behaviour block and a thumbnail with no image. The block's last `u32` is 1 for a
+    /// group's definition and 0 for a component's: it is what SketchUp's `group?` reads.
+    pub(crate) fn definition_end(
+        &mut self,
+        guid: [u8; 16],
+        name: &str,
+        timestamp: u32,
+        group: bool,
+    ) {
         self.u32(0);
         self.u16(0);
         self.bytes(&guid);
@@ -492,7 +499,8 @@ impl Archive {
         self.string("");
         self.string("");
         self.u32(timestamp);
-        self.bytes(&[0; 43]);
+        self.bytes(&[0; 39]);
+        self.u32(group as u32);
         self.new_of_class("CThumbnail", THUMBNAIL_SCHEMA);
         self.preamble_no_pid();
         self.new_of_prefix_class(CAMERA_SLOT);
