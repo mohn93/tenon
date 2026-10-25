@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=sketchup-alt
+Comment=3D modeling
+Exec=app %f
+Icon=sketchup-alt
+Terminal=false
+Categories=Graphics;3DGraphics;

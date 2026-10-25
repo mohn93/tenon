@@ -91,6 +91,8 @@ start ("More info", then "Run anyway"); a downloaded zip may also need Propertie
 before it is unpacked. The C runtime is linked into `app.exe`, so the zip needs no Visual C++
 redistributable.
 
+See [packaging.md](packaging.md) for the installer (MSI) built by CI.
+
 ## Known gaps
 
 - The Windows build has been run only by CI (a `windows-2022` runner with no GPU, so rendering
