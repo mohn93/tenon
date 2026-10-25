@@ -381,49 +381,64 @@ impl Search<'_> {
     }
 }
 
-/// A placed triangle with its box and unit normal, for telling cheaply that two triangles
-/// are no nearer than a distance.
+/// A placed triangle with its box, a unit direction across it and how far its own corners
+/// reach along that direction, for telling cheaply that two triangles are no nearer than a
+/// distance.
 #[derive(Clone, Copy)]
 struct Near {
     t: [DVec3; 3],
     lo: DVec3,
     hi: DVec3,
+    /// The unit normal; for a (nearly) straight triangle the cross product is mostly
+    /// rounding, so this is only some direction, which `span` makes up for.
     normal: DVec3,
+    /// The least and greatest offsets of the corners along `normal`, from the first corner.
+    span: (f64, f64),
+    /// The largest coordinate, at least 1, which scales the margin.
+    size: f64,
 }
 
 /// How much farther than a limit two triangles' lower bound must be before they are passed
-/// over: a margin far above rounding, so no pair that could be nearer is ever skipped.
+/// over, per meter of the largest coordinate (and at least this): a margin far above
+/// rounding, so no pair that could be nearer is ever skipped.
 const APART_MARGIN: f64 = 1e-12;
 
 impl Near {
     fn of(t: [DVec3; 3]) -> Near {
+        let normal = (t[1] - t[0]).cross(t[2] - t[0]).normalize_or_zero();
+        let e = t.map(|x| (x - t[0]).dot(normal));
+        let (lo, hi) = (t[0].min(t[1]).min(t[2]), t[0].max(t[1]).max(t[2]));
         Near {
             t,
-            lo: t[0].min(t[1]).min(t[2]),
-            hi: t[0].max(t[1]).max(t[2]),
-            normal: (t[1] - t[0]).cross(t[2] - t[0]).normalize_or_zero(),
+            lo,
+            hi,
+            normal,
+            span: (e[0].min(e[1]).min(e[2]), e[0].max(e[1]).max(e[2])),
+            size: lo.abs().max(hi.abs()).max_element().max(1.0),
         }
     }
 
     /// Whether `other` is surely farther than `limit` from this triangle: their boxes are, or
-    /// the corners of one lie all on one side of the other's plane, farther than `limit`.
+    /// the two lie apart along the normal of one, farther than `limit`.
     fn apart(&self, other: &Near, limit: f64) -> bool {
-        let limit = limit + APART_MARGIN;
+        let limit = limit + APART_MARGIN * self.size.max(other.size);
         box_distance((self.lo, self.hi), (other.lo, other.hi)) > limit
             || plane_gap(self, other) > limit
             || plane_gap(other, self) > limit
     }
 }
 
-/// How far the corners of `q` lie from the plane of `p` when all lie on one side of it (0
-/// when they straddle it or `p` is degenerate): no point of `q` is nearer than that to `p`.
+/// How far apart `p` and `q` lie along the normal of `p` (0 when they overlap along it or
+/// `p` has no normal): the corners of each projected on it, so no point of `q` is nearer
+/// than that to `p` whatever the normal is, even for a straight `p`.
 fn plane_gap(p: &Near, q: &Near) -> f64 {
     if p.normal == DVec3::ZERO {
         return 0.0;
     }
     let d = q.t.map(|x| (x - p.t[0]).dot(p.normal));
     let (lo, hi) = (d[0].min(d[1]).min(d[2]), d[0].max(d[1]).max(d[2]));
-    lo.max(-hi).max(0.0)
+    let (plo, phi) = p.span;
+    (lo - phi).max(plo - hi).max(0.0)
 }
 
 fn crossing_pair(
@@ -964,5 +979,77 @@ mod tests {
             }
         }
         assert!(apart > 1000, "{apart}");
+    }
+
+    /// A straight or nearly straight triangle turned and placed up to 1 km out, and a small
+    /// triangle within a few millimeters of one of its corners, from `rnd`.
+    fn sliver_and_neighbour(rnd: &mut impl FnMut() -> f64, k: usize) -> ([DVec3; 3], [DVec3; 3]) {
+        let l = 0.01 + rnd();
+        let h = [0.0, 1e-12, 1e-9, 1e-6, 1e-3][k % 5];
+        let p = [
+            DVec3::ZERO,
+            DVec3::new(l * rnd(), h, 0.0),
+            DVec3::new(l, 0.0, 0.0),
+        ];
+        let turn =
+            glam::DQuat::from_euler(glam::EulerRot::XYZ, rnd() * 6.3, rnd() * 6.3, rnd() * 6.3);
+        let out = 10f64.powf(rnd() * 3.0);
+        let at = DVec3::new(rnd(), rnd(), rnd()) * out;
+        let place = DAffine3::from_rotation_translation(turn, at);
+        let p = p.map(|x| place.transform_point3(x));
+        let c = DVec3::new(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5) * 0.004 + p[k % 3];
+        let q = [
+            c,
+            c + DVec3::new(rnd(), rnd(), rnd()) * 0.01,
+            c + DVec3::new(rnd(), -rnd(), rnd()) * 0.01,
+        ];
+        (p, q)
+    }
+
+    fn random(seed: u64) -> impl FnMut() -> f64 {
+        let mut seed = seed;
+        move || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        }
+    }
+
+    #[test]
+    fn straight_triangles_far_out_are_never_passed_over() {
+        // The bound along a straight triangle's normal (which is only rounding) must still
+        // hold, so a pair is never taken for farther apart than it is.
+        let mut rnd = random(11);
+        for k in 0..20_000 {
+            let (p, q) = sliver_and_neighbour(&mut rnd, k);
+            let d = triangle_distance(p, q).distance;
+            let (np, nq) = (Near::of(p), Near::of(q));
+            assert!(
+                !np.apart(&nq, d) && !nq.apart(&np, d),
+                "{p:?} and {q:?}, {d} apart, passed over"
+            );
+        }
+    }
+
+    #[test]
+    fn trees_of_straight_triangles_far_out_find_the_brute_force_minimum() {
+        // Rows of slivers, each with a neighbour near one of them: what the tree finds is the
+        // nearest pair triangle by triangle.
+        let mut rnd = random(5);
+        for k in 0..400 {
+            let (p, q) = sliver_and_neighbour(&mut rnd, k);
+            let step = (p[2] - p[0]).cross(DVec3::Z).normalize_or(DVec3::X) * 0.003;
+            let row: Vec<[DVec3; 3]> = (-4..=4).map(|i| p.map(|x| x + step * i as f64)).collect();
+            let near = vec![q, q.map(|x| x + DVec3::splat(0.02))];
+            let (a, b) = (Bvh::new(row.clone()), Bvh::new(near.clone()));
+            let place = DAffine3::IDENTITY;
+            let tree = a.distance(&place, &b, &place, f64::INFINITY, 0.0).unwrap();
+            let brute = row
+                .iter()
+                .flat_map(|t| near.iter().map(|u| triangle_distance(*t, *u).distance))
+                .fold(f64::INFINITY, f64::min);
+            assert_eq!(tree.distance, brute, "{k}");
+        }
     }
 }
