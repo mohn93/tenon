@@ -773,6 +773,7 @@ fn geometry(
             loops,
             front: material(g.face_material.get(f)),
             back: material(g.face_back_material.get(f)),
+            texture: None,
             tag: layer(&g.face_layer, f),
             hidden,
         });

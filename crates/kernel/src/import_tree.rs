@@ -14,6 +14,7 @@ use crate::ids::{DefinitionId, EdgeId, InstanceId, MaterialId, TagId, VertexId};
 use crate::import::{FLAT_TOL, MAX_IMPORT_FACES, normal_of, pieces, weld};
 use crate::model::{ChangeSet, Edge, Face, Guide, Instance, Model};
 use crate::scene::{DefinitionKind, MeshId, Scene, SceneChange};
+use crate::texture::TexturePlacement;
 use crate::transform::rings_are_valid;
 
 /// Deepest nesting of instances an import tree may have (the root's instances are depth 1).
@@ -67,6 +68,8 @@ pub struct ImportFace {
     pub loops: Vec<Vec<usize>>,
     pub front: Option<MaterialId>,
     pub back: Option<MaterialId>,
+    /// Where the texture lies on the face (see `Face::texture`).
+    pub texture: Option<TexturePlacement>,
     pub tag: Option<TagId>,
     pub hidden: bool,
 }
@@ -412,6 +415,7 @@ struct ShapedFace {
     normal: DVec3,
     front: Option<MaterialId>,
     back: Option<MaterialId>,
+    texture: Option<TexturePlacement>,
     tag: Option<TagId>,
     hidden: bool,
 }
@@ -466,6 +470,7 @@ fn shape<'a>(
                     normal,
                     front: f.front,
                     back: f.back,
+                    texture: f.texture,
                     tag: f.tag,
                     hidden: f.hidden,
                 });
@@ -632,6 +637,7 @@ impl Model {
             let mut face = Face::new(outer, loops, f.normal);
             face.front = f.front;
             face.back = f.back;
+            face.texture = f.texture;
             face.tag = f.tag;
             face.hidden = f.hidden;
             self.insert_face(face);
@@ -685,6 +691,7 @@ mod tests {
                 loops: vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7]],
                 front: None,
                 back: None,
+                texture: None,
                 tag: None,
                 hidden: false,
             }],

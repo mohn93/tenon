@@ -75,7 +75,7 @@ pub use ids::{
     CamFollowerId, CouplingId, CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId,
     GuideId, InstanceId, JointId, MaterialId, NoteId, PageId, SectionId, StyleId, TagId, VertexId,
 };
-pub use import::{MAX_IMPORT_FACES, MeshPolygon, MeshReport};
+pub use import::{MAX_IMPORT_FACES, MeshPolygon, MeshReport, polygon_geometry};
 pub use import_tree::{
     ImportDefinition, ImportEdge, ImportFace, ImportGeometry, ImportInstance, ImportTree,
     MAX_IMPORT_DEFINITIONS, MAX_IMPORT_DEPTH, MAX_IMPORT_INSTANCES, MAX_IMPORT_PLACED_FACES,

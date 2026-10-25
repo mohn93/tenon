@@ -514,6 +514,7 @@ fn an_import_tree_on_a_missing_tag_is_refused_and_keeps_its_tags() {
             loops: vec![vec![0, 1, 2, 3]],
             front: None,
             back: None,
+            texture: None,
             tag: face,
             hidden: false,
         }],

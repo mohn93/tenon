@@ -5,7 +5,7 @@ use glam::{DAffine3, DMat3, DQuat, DVec3};
 use kernel::{
     DefinitionId, DefinitionKind, Guide, ImportDefinition, ImportEdge, ImportFace, ImportGeometry,
     ImportInstance, ImportTree, KernelError, MAX_IMPORT_DEPTH, MAX_IMPORT_PLACED_FACES,
-    MAX_IMPORT_PLACEMENTS, MeshId, Model, Scene,
+    MAX_IMPORT_PLACEMENTS, MeshId, MeshPolygon, Model, Scene, TexturePlacement, polygon_geometry,
 };
 
 fn face(loops: &[&[usize]]) -> ImportFace {
@@ -13,6 +13,7 @@ fn face(loops: &[&[usize]]) -> ImportFace {
         loops: loops.iter().map(|l| l.to_vec()).collect(),
         front: None,
         back: None,
+        texture: None,
         tag: None,
         hidden: false,
     }
@@ -493,4 +494,145 @@ fn trees_resolving_to_too_many_placements_are_refused() {
     let report = import(&mut s, &fan_tree(6, 10, unit_box())).unwrap();
     assert_eq!(report.instances, 51);
     s.validate().unwrap();
+}
+
+fn polygon(corners: &[usize]) -> MeshPolygon {
+    MeshPolygon {
+        corners: corners.to_vec(),
+        material: None,
+    }
+}
+
+#[test]
+fn polygon_geometry_merges_triangles_with_one_texture_placement() {
+    let points = [
+        DVec3::ZERO,
+        DVec3::X,
+        DVec3::new(1.0, 1.0, 0.0),
+        // The second triangle's corners again, as an exporter writes each triangle's own.
+        DVec3::ZERO,
+        DVec3::new(1.0, 1.0, 0.0),
+        DVec3::Y,
+    ];
+    let polygons = [polygon(&[0, 1, 2]), polygon(&[3, 4, 5])];
+    let turned = TexturePlacement {
+        rotation_deg: 30.0,
+        ..TexturePlacement::default()
+    };
+    let nudged = TexturePlacement {
+        rotation_deg: 30.0 + 1e-7,
+        ..TexturePlacement::default()
+    };
+    let (g, skipped) =
+        polygon_geometry(&points, &polygons, &[Some(turned), Some(nudged)], &[], true).unwrap();
+    assert_eq!((g.points.len(), g.faces.len(), skipped), (4, 1, 0));
+    let kept = g.faces[0].texture.unwrap();
+    assert!((kept.rotation_deg - 30.0).abs() < 1e-6, "{kept:?}");
+    assert!(g.edges.is_empty());
+
+    let other = TexturePlacement {
+        rotation_deg: 31.0,
+        ..TexturePlacement::default()
+    };
+    let (g, _) =
+        polygon_geometry(&points, &polygons, &[Some(turned), Some(other)], &[], true).unwrap();
+    assert_eq!(g.faces.len(), 2, "different placements stay apart");
+    // The default placement and one out of range are left off.
+    let wild = TexturePlacement {
+        scale: [0.0, 1.0],
+        ..TexturePlacement::default()
+    };
+    let (g, _) = polygon_geometry(
+        &points,
+        &polygons,
+        &[Some(TexturePlacement::default()), Some(wild)],
+        &[],
+        true,
+    )
+    .unwrap();
+    assert_eq!(g.faces.len(), 1);
+    assert_eq!(g.faces[0].texture, None);
+
+    // The placement reaches the built face.
+    let (g, _) =
+        polygon_geometry(&points, &polygons, &[Some(turned), Some(turned)], &[], true).unwrap();
+    let mut s = Scene::new();
+    import(
+        &mut s,
+        &ImportTree {
+            definitions: vec![],
+            root: g,
+        },
+    )
+    .unwrap();
+    s.validate().unwrap();
+    let (_, f) = mesh(&s, "Tree").faces().next().unwrap();
+    assert_eq!(f.texture, Some(turned));
+}
+
+/// An open cylinder band of `n` quads, each cut into two triangles with corners of their own,
+/// and a top cap, with the file's normals: radial on the band, up on the cap.
+fn banded(n: usize) -> (Vec<DVec3>, Vec<MeshPolygon>, Vec<DVec3>) {
+    let at = |k: usize, z: f64| {
+        let a = std::f64::consts::TAU * (k % n) as f64 / n as f64;
+        DVec3::new(a.cos(), a.sin(), z)
+    };
+    let radial = |p: DVec3| DVec3::new(p.x, p.y, 0.0);
+    let (mut points, mut polygons, mut normals) = (Vec::new(), Vec::new(), Vec::new());
+    let mut add = |corners: [DVec3; 3], normal: &dyn Fn(DVec3) -> DVec3| {
+        let start = points.len();
+        for c in corners {
+            points.push(c);
+            normals.push(normal(c));
+        }
+        polygons.push(polygon(&[start, start + 1, start + 2]));
+    };
+    for k in 0..n {
+        let (a, b, c, d) = (at(k, 0.0), at(k + 1, 0.0), at(k + 1, 1.0), at(k, 1.0));
+        add([a, b, c], &radial);
+        add([a, c, d], &radial);
+        add([DVec3::Z, d, c], &|_| DVec3::Z);
+    }
+    (points, polygons, normals)
+}
+
+#[test]
+fn polygon_geometry_softens_smooth_surfaces_and_keeps_creases() {
+    let n = 8;
+    let (points, polygons, normals) = banded(n);
+    let (g, _) = polygon_geometry(&points, &polygons, &[], &normals, true).unwrap();
+    // The band's quads come back whole, the cap's triangles as one face.
+    assert_eq!(g.faces.len(), n + 1);
+    // The seams between quads are soft; the cap's rim stays hard.
+    assert_eq!(g.edges.len(), n);
+    assert!(g.edges.iter().all(|e| e.soft));
+    for e in &g.edges {
+        let (a, b) = (g.points[e.a], g.points[e.b]);
+        assert!((a.z - b.z).abs() > 0.5, "a seam runs up the band");
+    }
+    let mut s = Scene::new();
+    let report = import(
+        &mut s,
+        &ImportTree {
+            definitions: vec![],
+            root: g,
+        },
+    )
+    .unwrap();
+    assert_eq!(report.hard, 0);
+    s.validate().unwrap();
+    let m = mesh(&s, "Tree");
+    assert_eq!(m.edges().filter(|(_, e)| e.soft).count(), n);
+
+    // Without normals the mesh is flat shaded: nothing is soft.
+    let (g, _) = polygon_geometry(&points, &polygons, &[], &[], true).unwrap();
+    assert!(g.edges.is_empty());
+    // Without merging, the quads' diagonals are soft too (their triangles share normals).
+    let (g, _) = polygon_geometry(&points, &polygons, &[], &normals, false).unwrap();
+    assert_eq!(g.faces.len(), 3 * n);
+    assert_eq!(
+        g.edges.len(),
+        n,
+        "diagonals of flat quads are coplanar, so not soft"
+    );
 }
