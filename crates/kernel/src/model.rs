@@ -350,6 +350,49 @@ impl Op {
         }
     }
 
+    /// The op with its vertex, edge, face and curve ids moved on by `by`, as drawing the
+    /// same geometry into an empty mesh `by` ids later makes it; None for an op on anything
+    /// else (instances, guides, annotations, section planes), which drawing does not make.
+    pub(crate) fn shifted(&self, by: u64) -> Option<Op> {
+        let v = |id: VertexId| VertexId(id.0 + by);
+        let edge = |e: &Edge| Edge {
+            v: e.v.map(v),
+            curve: e.curve.map(|c| CurveId(c.0 + by)),
+            ..e.clone()
+        };
+        let face = |f: &Face| {
+            let ring = |l: &Vec<VertexId>| l.iter().map(|x| v(*x)).collect::<Vec<_>>();
+            Face {
+                outer: ring(&f.outer),
+                holes: f.holes.iter().map(ring).collect(),
+                ..f.clone()
+            }
+        };
+        let e = |id: EdgeId| EdgeId(id.0 + by);
+        let f = |id: FaceId| FaceId(id.0 + by);
+        let entity = |id: &EntityId| match *id {
+            EntityId::Vertex(x) => Some(EntityId::Vertex(v(x))),
+            EntityId::Edge(x) => Some(EntityId::Edge(e(x))),
+            EntityId::Face(x) => Some(EntityId::Face(f(x))),
+            _ => None,
+        };
+        Some(match self {
+            Op::AddVertex(id, x) => Op::AddVertex(v(*id), x.clone()),
+            Op::RemoveVertex(id, x) => Op::RemoveVertex(v(*id), x.clone()),
+            Op::MoveVertex(id, a, b) => Op::MoveVertex(v(*id), *a, *b),
+            Op::AddEdge(id, x) => Op::AddEdge(e(*id), edge(x)),
+            Op::RemoveEdge(id, x) => Op::RemoveEdge(e(*id), edge(x)),
+            Op::ChangeEdge(id, a, b) => Op::ChangeEdge(e(*id), edge(a), edge(b)),
+            Op::AddFace(id, x) => Op::AddFace(f(*id), face(x)),
+            Op::RemoveFace(id, x) => Op::RemoveFace(f(*id), face(x)),
+            Op::PaintFace(id, a, b) => Op::PaintFace(f(*id), *a, *b),
+            Op::PlaceTexture(id, a, b) => Op::PlaceTexture(f(*id), *a, *b),
+            Op::SetTag(id, a, b) => Op::SetTag(entity(id)?, *a, *b),
+            Op::SetHidden(id, a, b) => Op::SetHidden(entity(id)?, *a, *b),
+            _ => return None,
+        })
+    }
+
     /// The entity this op touches and whether it exists before and after the op; None for an
     /// op on no one entity (a change of the active section plane, see `ChangeSet::summary`).
     fn entity(&self) -> Option<(EntityId, bool, bool)> {
@@ -545,10 +588,18 @@ pub struct Model {
     vertex_cells: HashMap<[i64; 3], Vec<VertexId>>,
     /// See `Model::geometry_stamp`.
     stamp: GeometryStamp,
+    /// Changes with every change to the mesh and is kept by a copy, so two meshes with the
+    /// same content stamp hold the same entities; see `Model::content_stamp`.
+    content_stamp: u64,
 }
 
-/// The next stamp `GeometryStamp` hands out.
+/// The next stamp handed out, shared by `GeometryStamp` and the content stamp: each is handed
+/// out once in the process.
 static NEXT_STAMP: AtomicU64 = AtomicU64::new(1);
+
+fn next_stamp() -> u64 {
+    NEXT_STAMP.fetch_add(1, Ordering::Relaxed)
+}
 
 /// A number no other state of any model's vertices, edges and faces has had in this run (a
 /// clone shares its model's until either changes).
@@ -557,7 +608,7 @@ struct GeometryStamp(u64);
 
 impl GeometryStamp {
     fn new() -> Self {
-        GeometryStamp(NEXT_STAMP.fetch_add(1, Ordering::Relaxed))
+        GeometryStamp(next_stamp())
     }
 }
 
@@ -627,6 +678,7 @@ impl Model {
             dimensions,
             notes,
             next_id,
+            content_stamp: next_stamp(),
             ..Model::default()
         };
         for (id, v) in &vertices {
@@ -656,10 +708,19 @@ impl Model {
         }
         self.sections = sections;
         self.active_section = active;
+        self.content_stamp = next_stamp();
         self
     }
 
     // ---- read access ----
+
+    /// Names the mesh's content: a new stamp with every change (and for a mesh built from
+    /// parts), the same in a copy. 0 for a new, empty mesh. What is worked out from a mesh can
+    /// be kept with its stamp and used again while the stamp is the same. Unlike
+    /// `geometry_stamp`, instances, guides, annotations and section planes move it too.
+    pub(crate) fn content_stamp(&self) -> u64 {
+        self.content_stamp
+    }
 
     /// The spatial index over the current geometry, built on first use after a change.
     pub fn index(&self) -> &Index {
@@ -818,6 +879,7 @@ impl Model {
     }
 
     pub(crate) fn apply_op(&mut self, op: Op) {
+        self.content_stamp = next_stamp();
         // The index holds vertex, edge and face positions only: tags, paint, instances,
         // guides and annotations leave it valid.
         if matches!(
@@ -1127,6 +1189,15 @@ impl Model {
     /// The ops recorded since the last `take_changes`.
     pub(crate) fn pending(&self) -> &[Op] {
         &self.pending
+    }
+
+    /// Records `ops` as if made here, then reserves the ids up to `next`: how a recorded
+    /// edit is made again.
+    pub(crate) fn replay(&mut self, ops: impl IntoIterator<Item = Op>, next: u64) {
+        for op in ops {
+            self.record(op);
+        }
+        self.reserve_ids(next);
     }
 
     fn record(&mut self, op: Op) {

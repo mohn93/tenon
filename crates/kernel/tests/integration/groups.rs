@@ -907,3 +907,71 @@ fn unique_names_count_up_from_two_and_drop_a_trailing_number() {
     assert_eq!(s.unique_name("Chair"), "Chair#3");
     assert_eq!(s.unique_name("Chair#2"), "Chair#3");
 }
+
+#[test]
+fn a_group_copied_again_comes_out_as_one_drawn_afresh() {
+    use kernel::Solid;
+    // A tube (holes, curves, soft sides), a sphere and a torus, each a group; the tube and the
+    // sphere grouped again so a copy copies nested groups too.
+    let mut s = Scene::new();
+    let solid = |s: &mut Scene, solid: Solid, name: &str, at: DVec3| {
+        s.add_solid(
+            MeshId::Root,
+            &solid,
+            DefinitionKind::Group,
+            name,
+            DAffine3::from_translation(at),
+            None,
+        )
+        .unwrap()
+        .0
+    };
+    let tube = solid(
+        &mut s,
+        Solid::tube(0.5, 0.3, 1.0, 24).unwrap(),
+        "Tube",
+        p(0.0, 0.0, 0.0),
+    );
+    let ball = solid(
+        &mut s,
+        Solid::sphere(0.4, 16).unwrap(),
+        "Ball",
+        p(2.0, 0.0, 0.0),
+    );
+    let ring = solid(
+        &mut s,
+        Solid::torus(0.6, 0.1, 24, 12).unwrap(),
+        "Ring",
+        p(4.0, 0.0, 0.0),
+    );
+    let (pair, _) = s
+        .make_group(
+            MeshId::Root,
+            &[],
+            &[],
+            &[tube, ball],
+            DefinitionKind::Group,
+            "Pair",
+        )
+        .unwrap();
+    for group in [pair, ring] {
+        // The first copy draws; copies after it replay that drawing. A scene read back from
+        // its data has none to replay, so it draws its first one afresh: the two must agree.
+        s.copy_instances(MeshId::Root, &[group], p(0.0, 3.0, 0.0), 1)
+            .unwrap();
+        let mut fresh = Scene::from_data(&s.to_data()).unwrap();
+        let before = s.clone();
+        let change = s
+            .copy_instances(MeshId::Root, &[group], p(0.0, 6.0, 0.0), 3)
+            .unwrap();
+        fresh
+            .copy_instances(MeshId::Root, &[group], p(0.0, 6.0, 0.0), 3)
+            .unwrap();
+        s.validate().unwrap();
+        assert_eq!(s, fresh);
+        s.apply(&change.inverse());
+        assert_eq!(s, before);
+        s.apply(&change);
+        assert_eq!(s, fresh);
+    }
+}

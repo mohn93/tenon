@@ -588,11 +588,34 @@ fn read_archive<R: Read + Seek>(
         .map_err(|_| "not a sketchup-alt file".to_string())?;
     let json = read_limited(entry, MAX_DOCUMENT_BYTES, "the document")?;
     // Check the header first, so a newer file gets a clear message rather than a field error.
-    let header: Value = serde_json::from_slice(&json).map_err(json_error)?;
-    if header["format"] != FORMAT {
+    // Only its two fields are kept (the rest is skipped, not built); a document that is not
+    // an object they can be read from that way is read whole, which finds them as before or
+    // says why it cannot.
+    #[derive(Deserialize)]
+    struct Header {
+        #[serde(default)]
+        format: Value,
+        #[serde(default)]
+        schema_version: Value,
+    }
+    let object = json.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{');
+    let header = match serde_json::from_slice::<Header>(&json)
+        .ok()
+        .filter(|_| object)
+    {
+        Some(h) => h,
+        None => {
+            let whole: Value = serde_json::from_slice(&json).map_err(json_error)?;
+            Header {
+                format: whole["format"].clone(),
+                schema_version: whole["schema_version"].clone(),
+            }
+        }
+    };
+    if header.format != FORMAT {
         return Err("not a sketchup-alt file".into());
     }
-    let Some(version) = header["schema_version"].as_u64().filter(|v| *v >= 1) else {
+    let Some(version) = header.schema_version.as_u64().filter(|v| *v >= 1) else {
         return Err("the file has no valid schema version (a whole number from 1)".into());
     };
     if version > u64::from(SCHEMA_VERSION) {

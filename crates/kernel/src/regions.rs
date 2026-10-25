@@ -1,6 +1,6 @@
 //! Bounded regions of a planar 2D graph: an outer loop (counter-clockwise) plus holes (clockwise).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use glam::{DVec2, DVec3};
 
@@ -198,27 +198,42 @@ impl PlaneGraph {
             nbrs.entry(a).or_default().push(b);
             nbrs.entry(b).or_default().push(a);
         }
+        // Each list in angle order, each angle worked out once (a stable sort, so equal
+        // angles keep their order).
+        let mut keyed: Vec<(f64, VertexId)> = Vec::new();
         for (v, list) in nbrs.iter_mut() {
             let o = self.pos[v];
-            list.sort_by(|x, y| {
-                let ax = (self.pos[x] - o).to_angle();
-                let ay = (self.pos[y] - o).to_angle();
-                ax.total_cmp(&ay)
-            });
+            keyed.clear();
+            keyed.extend(list.iter().map(|x| ((self.pos[x] - o).to_angle(), *x)));
+            keyed.sort_by(|a, b| a.0.total_cmp(&b.0));
+            list.clear();
+            list.extend(keyed.iter().map(|(_, x)| *x));
         }
-        let mut visited: BTreeSet<(VertexId, VertexId)> = BTreeSet::new();
+        // The vertices numbered in id order, and the lists by number. A side (u, w) is the
+        // first place w has in u's list, where it is marked visited.
+        let ids: Vec<VertexId> = nbrs.keys().copied().collect();
+        let number: HashMap<VertexId, usize> =
+            ids.iter().enumerate().map(|(k, v)| (*v, k)).collect();
+        let lists: Vec<Vec<usize>> = nbrs
+            .values()
+            .map(|l| l.iter().map(|x| number[x]).collect())
+            .collect();
+        let first = |u: usize, w: usize| lists[u].iter().position(|x| *x == w).unwrap();
+        let mut visited: Vec<Vec<bool>> = lists.iter().map(|l| vec![false; l.len()]).collect();
         let mut walks = Vec::new();
-        for (&start, list) in &nbrs {
-            for &next in list {
-                if visited.contains(&(start, next)) {
+        for start in 0..lists.len() {
+            for slot in 0..lists[start].len() {
+                let next = lists[start][slot];
+                if visited[start][first(start, next)] {
                     continue;
                 }
                 let mut walk = Vec::new();
                 let (mut u, mut w) = (start, next);
                 loop {
-                    visited.insert((u, w));
-                    walk.push(u);
-                    let around = &nbrs[&w];
+                    let k = first(u, w);
+                    visited[u][k] = true;
+                    walk.push(ids[u]);
+                    let around = &lists[w];
                     let i = around.iter().position(|x| *x == u).unwrap();
                     let turn = around[(i + around.len() - 1) % around.len()];
                     (u, w) = (w, turn);
@@ -254,10 +269,17 @@ fn remove_spurs(w: &mut Vec<VertexId>) {
 fn split_pinches(w: &[VertexId]) -> Vec<Vec<VertexId>> {
     let mut loops = Vec::new();
     let mut stack: Vec<VertexId> = Vec::new();
+    // Where each vertex on the stack stands (the stack never holds one twice).
+    let mut at: HashMap<VertexId, usize> = HashMap::new();
     for &v in w {
-        if let Some(j) = stack.iter().position(|x| *x == v) {
-            loops.push(stack.split_off(j));
+        if let Some(&j) = at.get(&v) {
+            let pinched = stack.split_off(j);
+            for x in &pinched {
+                at.remove(x);
+            }
+            loops.push(pinched);
         }
+        at.insert(v, stack.len());
         stack.push(v);
     }
     if !stack.is_empty() {
@@ -424,5 +446,112 @@ mod tests {
             assert!(p.is_some(), "{r:?}");
             assert_eq!(g.interior_point(r, Some(&index)), p, "{r:?}");
         }
+    }
+
+    #[test]
+    fn walks_and_pinches_come_out_as_the_first_way_of_finding_them() {
+        // The walk as first written: sides kept in a set, lists looked up by vertex.
+        fn reference(g: &PlaneGraph) -> Vec<Vec<VertexId>> {
+            let mut nbrs: BTreeMap<VertexId, Vec<VertexId>> = BTreeMap::new();
+            for &[a, b] in &g.edges {
+                nbrs.entry(a).or_default().push(b);
+                nbrs.entry(b).or_default().push(a);
+            }
+            for (v, list) in nbrs.iter_mut() {
+                let o = g.pos[v];
+                list.sort_by(|x, y| {
+                    let ax = (g.pos[x] - o).to_angle();
+                    let ay = (g.pos[y] - o).to_angle();
+                    ax.total_cmp(&ay)
+                });
+            }
+            let mut visited: BTreeSet<(VertexId, VertexId)> = BTreeSet::new();
+            let mut walks = Vec::new();
+            for (&start, list) in &nbrs {
+                for &next in list {
+                    if visited.contains(&(start, next)) {
+                        continue;
+                    }
+                    let mut walk = Vec::new();
+                    let (mut u, mut w) = (start, next);
+                    loop {
+                        visited.insert((u, w));
+                        walk.push(u);
+                        let around = &nbrs[&w];
+                        let i = around.iter().position(|x| *x == u).unwrap();
+                        let turn = around[(i + around.len() - 1) % around.len()];
+                        (u, w) = (w, turn);
+                        if (u, w) == (start, next) {
+                            break;
+                        }
+                    }
+                    walks.push(walk);
+                }
+            }
+            walks
+        }
+        fn pinches(w: &[VertexId]) -> Vec<Vec<VertexId>> {
+            let mut loops = Vec::new();
+            let mut stack: Vec<VertexId> = Vec::new();
+            for &v in w {
+                if let Some(j) = stack.iter().position(|x| *x == v) {
+                    loops.push(stack.split_off(j));
+                }
+                stack.push(v);
+            }
+            if !stack.is_empty() {
+                loops.push(stack);
+            }
+            loops
+        }
+        // A 5 x 5 grid of points (numbered out of order) with every cell's sides, some
+        // diagonals, spurs, a separate triangle and a loop pinched at a shared corner.
+        let n = 5u64;
+        let id = |x: u64, y: u64| (x * 7 + y * 3) % 25;
+        let mut pts = vec![(0.0, 0.0); 25];
+        for x in 0..n {
+            for y in 0..n {
+                pts[id(x, y) as usize] = (x as f64, y as f64 + 0.01 * x as f64);
+            }
+        }
+        let mut edges = Vec::new();
+        for x in 0..n {
+            for y in 0..n {
+                if x + 1 < n && y != 2 {
+                    edges.push((id(x, y), id(x + 1, y)));
+                }
+                if y + 1 < n && x != 3 {
+                    edges.push((id(x, y), id(x, y + 1)));
+                }
+                if (x + y) % 3 == 0 && x + 1 < n && y + 1 < n {
+                    edges.push((id(x, y), id(x + 1, y + 1)));
+                }
+            }
+        }
+        pts.extend([
+            (10.0, 0.0),
+            (11.0, 0.0),
+            (10.5, 1.0),
+            (2.2, 2.4),
+            (12.0, 1.0),
+            (12.0, 0.0),
+        ]);
+        edges.extend([
+            (25, 26),
+            (26, 27),
+            (27, 25),
+            (id(2, 2), 28),
+            (26, 29),
+            (29, 30),
+            (30, 26),
+        ]);
+        let g = graph(&pts, &edges);
+        let walks = g.walks();
+        assert_eq!(walks, reference(&g));
+        assert!(walks.len() > 5);
+        for w in &walks {
+            assert_eq!(split_pinches(w), pinches(w));
+        }
+        assert!(walks.iter().any(|w| split_pinches(w).len() > 1));
     }
 }

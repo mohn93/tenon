@@ -1,6 +1,8 @@
 //! Making groups and components out of geometry.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+use std::sync::Arc;
 
 use glam::{DAffine3, DVec3};
 
@@ -8,7 +10,7 @@ use crate::annotation::Note;
 use crate::edit::KernelError;
 use crate::geom::LENGTH_TOL;
 use crate::ids::{DefinitionId, EdgeId, FaceId, InstanceId, NoteId, VertexId};
-use crate::model::{Guide, Instance, Model};
+use crate::model::{Guide, Instance, Model, Op};
 use crate::scene::{DefinitionKind, MeshId, Parts, Scene, SceneChange};
 use crate::transform::Stencil;
 
@@ -343,7 +345,16 @@ impl Scene {
             name.map_or_else(|| original.name.clone(), str::to_string),
             original.kind,
         );
-        let stencil = whole(&original.mesh);
+        // A copy of a mesh drawn before (and unchanged since) is the same drawing again, its
+        // ids moved on: the recorded ops are replayed rather than the stencil drawn.
+        let stamp = original.mesh.geometry_stamp();
+        let drawn = self
+            .drawn_copies
+            .0
+            .get(&id)
+            .filter(|d| d.stamp == stamp)
+            .cloned();
+        let stencil = drawn.is_none().then(|| whole(&original.mesh));
         let children: Vec<Instance> = original.mesh.instances().map(|(_, i)| i.clone()).collect();
         let guides: Vec<Guide> = original.mesh.guides().map(|(_, g)| *g).collect();
         let planes = original
@@ -381,9 +392,34 @@ impl Scene {
             });
         }
         let (copy, added) = self.add_definition(&name, kind);
+        // The ids the copy's mesh starts at (see `Scene::edit`); never before a recorded
+        // drawing's, as ids only grow.
+        let base = self.next_id();
+        let drawn = drawn.filter(|d| base >= d.base);
+        let stencil = match (&drawn, stencil) {
+            (Some(_), _) => None,
+            (None, Some(stencil)) => Some(stencil),
+            (None, None) => Some(whole(&self.definition(id).expect("copied").mesh)),
+        };
+        let mut recorded = None;
         let filled = self
             .edit(MeshId::Definition(copy), |m| {
-                m.draw_stencil(&stencil, &[DAffine3::IDENTITY]);
+                if let Some(d) = &drawn {
+                    let by = base - d.base;
+                    let ops = d.ops.iter().map(|op| op.shifted(by).expect("drawing ops"));
+                    m.replay(ops, d.next + by);
+                } else if let Some(stencil) = &stencil {
+                    m.draw_stencil(stencil, &[DAffine3::IDENTITY]);
+                    let ops = m.pending();
+                    if ops.iter().all(|op| op.shifted(0).is_some()) {
+                        recorded = Some(DrawnCopy {
+                            stamp,
+                            base,
+                            ops: Arc::new(ops.to_vec()),
+                            next: m.next_id(),
+                        });
+                    }
+                }
                 for i in placed {
                     m.insert_instance(i);
                 }
@@ -396,6 +432,16 @@ impl Scene {
                 Ok(m.take_changes())
             })
             .expect("drawing a copy cannot fail");
+        if let Some(d) = recorded {
+            let gone: Vec<DefinitionId> = (self.drawn_copies.0.keys())
+                .filter(|k| self.definition(**k).is_none())
+                .copied()
+                .collect();
+            for k in gone {
+                self.drawn_copies.0.remove(&k);
+            }
+            self.drawn_copies.0.insert(id, d);
+        }
         (copy, SceneChange::join([change, added.into(), filled]))
     }
 
@@ -492,14 +538,44 @@ impl Scene {
     fn prune(&mut self) -> SceneChange {
         let mut steps = Vec::new();
         loop {
+            // What is placed, gathered once a round rather than counted per definition.
+            let placed: BTreeSet<DefinitionId> = self
+                .meshes()
+                .flat_map(|(_, m)| m.instances())
+                .map(|(_, i)| i.definition)
+                .collect();
             let unused = self
                 .definitions()
-                .find(|(id, d)| d.kind == DefinitionKind::Group && self.instance_count(*id) == 0)
+                .find(|(id, d)| d.kind == DefinitionKind::Group && !placed.contains(id))
                 .map(|(id, _)| id);
             let Some(id) = unused else { break };
             steps.push(self.remove_definition(id));
         }
         SceneChange { steps }
+    }
+}
+
+/// The drawings copies of group meshes made, by the copied definition: copying a mesh that
+/// is unchanged since (the same geometry stamp, see `Model::geometry_stamp`) into an empty mesh draws the same
+/// ops again, each vertex, edge, face and curve id moved on by as many ids as the copy starts
+/// later. Not part of the model: a copy of the scene starts with the same drawings, and
+/// equality leaves them out.
+#[derive(Clone, Default)]
+pub(crate) struct DrawnCopies(BTreeMap<DefinitionId, DrawnCopy>);
+
+/// The ops drawing a copy of a mesh made, the mesh's stamp, the first id of the copy and the
+/// next id after it.
+#[derive(Clone)]
+struct DrawnCopy {
+    stamp: u64,
+    base: u64,
+    ops: Arc<Vec<Op>>,
+    next: u64,
+}
+
+impl fmt::Debug for DrawnCopies {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "DrawnCopies({})", self.0.len())
     }
 }
 

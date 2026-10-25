@@ -419,3 +419,43 @@ fn followers_round_trip_through_scene_data() {
     bad.cam_followers[0].follower = 987654;
     assert!(Scene::from_data(&bad).is_err());
 }
+
+#[test]
+fn a_cam_changed_after_a_drive_is_met_as_it_now_stands() {
+    let (mut r, _) = valve();
+    r.scene.drive_joint(r.crank_joint, deg(20.0), None).unwrap();
+    // Each drive below matches one in a copy of the scene made fresh from its data.
+    let drive_both = |s: &mut Scene, crank: f64| {
+        let mut fresh = Scene::from_data(&s.to_data()).unwrap();
+        s.drive_joint(r.crank_joint, crank, None).unwrap();
+        fresh.drive_joint(r.crank_joint, crank, None).unwrap();
+        assert_eq!(*s, fresh);
+        value(s, r.follower_joint)
+    };
+    let before = drive_both(&mut r.scene, deg(40.0));
+    // The cam grows a fifth about its axis: the follower rides that much higher on the base
+    // circle.
+    let d = r.scene.root().instance(r.cam).unwrap().definition;
+    let all = r
+        .scene
+        .definition(d)
+        .unwrap()
+        .mesh
+        .vertices()
+        .map(|(id, _)| id)
+        .collect();
+    let grow = DAffine3::from_scale(DVec3::new(1.2, 1.0, 1.2));
+    let grown = r
+        .scene
+        .edit(MeshId::Definition(d), |m| m.transform_vertices(&all, grow))
+        .unwrap();
+    let after = drive_both(&mut r.scene, deg(60.0));
+    assert!(
+        (after - before - 0.2 * RB).abs() <= 1.2 * facet_error(),
+        "{before} {after}"
+    );
+    // Undone, the cam is met as it was.
+    r.scene.apply(&grown.inverse());
+    let back = drive_both(&mut r.scene, deg(40.0));
+    assert!((back - before).abs() < 1e-12, "{before} {back}");
+}

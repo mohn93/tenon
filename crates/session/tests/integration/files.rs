@@ -387,6 +387,23 @@ fn files_with_out_of_range_numbers_or_versions_do_not_open() {
 }
 
 #[test]
+fn a_header_is_read_from_a_document_object_only() {
+    // The header's two values in an array are no header.
+    let listed = edited_file("listed.skr", |d| {
+        *d = json!([d["format"].clone(), d["schema_version"].clone()]);
+    });
+    open_fails(&listed, "not a sketchup-alt file");
+    let unnamed = edited_file("format-null.skr", |d| d["format"] = Value::Null);
+    open_fails(&unnamed, "not a sketchup-alt file");
+    let unversioned = edited_file("version-null.skr", |d| d["schema_version"] = Value::Null);
+    open_fails(&unversioned, "schema version");
+    let newer = edited_file("version-newer.skr", |d| {
+        d["schema_version"] = json!(1_000_000)
+    });
+    open_fails(&newer, "newer than this app");
+}
+
+#[test]
 fn new_and_open_refuse_to_drop_unsaved_changes_unless_told_to() {
     let path = scratch("unsaved.skr");
     let mut d = doc();

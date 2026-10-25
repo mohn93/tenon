@@ -565,15 +565,18 @@ struct Cut<'a> {
 impl<'a> Cut<'a> {
     fn new(a: &'a Model, b: &'a Model) -> Result<Cut<'a>, BooleanError> {
         let segments = crossings(a, b)?;
-        let (mut wa, mut wb) = (a.clone(), b.clone());
-        if !segments.is_empty() {
-            wa.draw_segments(&segments);
-            wa.take_changes();
-            wb.draw_segments(&segments);
-            wb.take_changes();
-        }
-        let class_a = classes(&wa, a, b)?;
-        let class_b = classes(&wb, b, a)?;
+        let (wa, wb) = (a.clone(), b.clone());
+        // Each solid is cut and classified on its own, the two side by side.
+        let cut = |mut w: Model, own: &Model, other: &Model| {
+            if !segments.is_empty() {
+                w.draw_segments(&segments);
+                w.take_changes();
+            }
+            let classes = classes(&w, own, other);
+            (w, classes)
+        };
+        let ((wa, class_a), (wb, class_b)) = both(|| cut(wa, a, b), || cut(wb, b, a));
+        let (class_a, class_b) = (class_a?, class_b?);
         Ok(Cut {
             a,
             b,
@@ -618,6 +621,39 @@ impl<'a> Cut<'a> {
             return Err(BooleanError::NotClosed);
         }
         Ok(Some(result))
+    }
+}
+
+/// `f()` and `g()`, run at the same time on a second thread where one can be started (not in
+/// the browser); each gives what it would alone.
+fn both<A: Send, B: Send>(f: impl FnOnce() -> A + Send, g: impl FnOnce() -> B + Send) -> (A, B) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // `g` waits here for whichever thread runs it: the second one, or this one when no
+        // thread can be started.
+        let g = std::sync::Mutex::new(Some(g));
+        let take = || {
+            let g = g.lock().unwrap_or_else(|e| e.into_inner()).take();
+            g.expect("run once")()
+        };
+        std::thread::scope(|s| {
+            // As much stack as the main thread has, for the deepest meshes.
+            let other = std::thread::Builder::new()
+                .stack_size(8 << 20)
+                .spawn_scoped(s, take);
+            let a = f();
+            let b = match other {
+                Ok(handle) => handle
+                    .join()
+                    .unwrap_or_else(|e| std::panic::resume_unwind(e)),
+                Err(_) => take(),
+            };
+            (a, b)
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        (f(), g())
     }
 }
 
