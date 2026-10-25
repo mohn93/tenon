@@ -119,9 +119,10 @@ fn appearance(ui: &mut Ui, theme: ThemeChoice, scale: UiScale, actions: &mut Vec
         });
 }
 
-/// What a plain trackpad scroll does: two radio buttons, naming Ctrl for Cmd off macOS.
+/// What a plain trackpad scroll does: two radio buttons, naming Ctrl for Cmd off Apple's
+/// computers (`shortcuts::mac_labels`).
 fn input(ui: &mut Ui, trackpad: TrackpadScroll, actions: &mut Vec<UiAction>) {
-    let cmd = if cfg!(target_os = "macos") {
+    let cmd = if crate::shortcuts::mac_labels() {
         "Cmd"
     } else {
         "Ctrl"

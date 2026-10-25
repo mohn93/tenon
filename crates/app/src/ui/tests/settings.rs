@@ -46,7 +46,7 @@ fn the_settings_window_settles_in_one_frame() {
 
 /// The Input tab's choice labels, with the window's word for Cmd.
 fn trackpad_labels() -> (String, String) {
-    let cmd = if cfg!(target_os = "macos") {
+    let cmd = if crate::shortcuts::mac_labels() {
         "Cmd"
     } else {
         "Ctrl"
