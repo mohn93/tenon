@@ -1422,6 +1422,57 @@ fn export_pdf_writes_a_pdf_with_one_page_per_sheet_or_reports_no_gpu() {
 }
 
 #[test]
+fn export_pdf_adds_the_cut_list_pages_when_asked() {
+    let mut h = HeadlessHost::new();
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "add_box", "corner": [0, 0, 0], "size": [1.2, 0.0254, 0.019],
+               "as": "group", "name": "Shelf (long)"}),
+    );
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "set_units", "length": "millimeters", "precision": 1}),
+    );
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "set_camera", "eye": [0.6, 0.0, 50], "target": [0.6, 0.0, 0], "fov_y_deg": 30,
+               "up": [0, 1, 0], "projection": "parallel"}),
+    );
+    let dir = scratch_dir("cut-list");
+    let plain = dir.join("plain.pdf");
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "export_pdf", "path": plain.display().to_string(), "dpi": 72}),
+    );
+    if no_gpu(&r) {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    }
+    assert_eq!(r["result"]["pdf"]["sheets"], 1, "{r}");
+    let with = dir.join("with.pdf");
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "export_pdf", "path": with.display().to_string(), "dpi": 72,
+               "cut_list": true}),
+    );
+    assert_eq!(r["result"]["pdf"]["sheets"], 2, "{r}");
+    let text = String::from_utf8_lossy(&std::fs::read(&with).unwrap()).into_owned();
+    assert!(text.contains("/Count 2"));
+    assert!(
+        text.contains("(Cut list) Tj") && text.contains("Shelf \\(long\\)"),
+        "{text}"
+    );
+    assert!(text.contains("Length \\(mm\\)"), "{text}");
+    assert!(text.contains("(1200 mm) Tj"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn export_pdf_refuses_bad_input_and_other_files_before_rendering() {
     let mut h = HeadlessHost::new();
     call(&mut h, "batch", json!({"commands": square()}));

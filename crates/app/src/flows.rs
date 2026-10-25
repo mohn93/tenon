@@ -509,6 +509,39 @@ impl Flows {
         }
     }
 
+    /// The Cut List window's Export CSV: asks where to write the cut list, or where files have
+    /// no path has the platform save it.
+    pub fn export_cut_list(&mut self, env: &mut Env) -> Vec<Effect> {
+        if self.waiting.is_some() {
+            return Vec::new();
+        }
+        if !env.platform.features().file_paths {
+            return self.export_as(env, "csv");
+        }
+        let stem = self.export_stem(env);
+        let request = SaveRequest {
+            filters: vec![Filter::new("Cut list (CSV)", &["csv"])],
+            name: format!("{stem}-cut-list.csv"),
+            ask: true,
+            write_back: false,
+        };
+        match env
+            .platform
+            .pick_save_path(&request, self.reply(PlatformReply::Path))
+        {
+            Answer::Ready(path) => {
+                if let Some(path) = path {
+                    env.editor.export_file(&path);
+                }
+                Vec::new()
+            }
+            Answer::Pending => {
+                self.waiting = Some(Waiting::ExportPath);
+                Vec::new()
+            }
+        }
+    }
+
     /// The export format `ext` was chosen (where files have no path): exports the model as
     /// bytes and has the platform save them, offering only that format.
     pub fn export_as(&mut self, env: &mut Env, ext: &str) -> Vec<Effect> {
@@ -1200,6 +1233,26 @@ mod tests {
         });
         assert!(fx.is_empty());
         assert_eq!(platform.saved.borrow().len(), 1);
+    }
+
+    #[test]
+    fn the_cut_list_exports_as_csv_where_files_have_no_path() {
+        let platform = web();
+        let mut editor = with_rectangle();
+        let mut f = flows();
+        platform
+            .saves
+            .borrow_mut()
+            .push_back(Answer::Ready(Ok(Some("Untitled.csv".into()))));
+        run(&mut f, &mut editor, &platform, |f, env| {
+            f.export_cut_list(env)
+        });
+        let saved = platform.saved.borrow();
+        let (request, files) = &saved[0];
+        assert_eq!(request.filters[0].extensions, ["csv"]);
+        assert_eq!(files[0].name, "Untitled.csv");
+        let text = String::from_utf8(files[0].bytes.clone()).unwrap();
+        assert!(text.starts_with("Name,Material,Length (m),"), "{text}");
     }
 
     fn opened_skr(name: &str) -> Answer<Option<Picked>> {

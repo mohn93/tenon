@@ -38,7 +38,11 @@ mod clip;
 mod input;
 mod intersect;
 pub use input::{DriveError, Driven, Stopped};
+mod cut_list;
 mod interference;
+pub use cut_list::CutListReport;
+#[cfg(test)]
+pub use cut_list::CutListRow;
 mod joints;
 pub use interference::InterferenceReport;
 #[cfg(test)]
@@ -313,6 +317,8 @@ pub struct Editor {
     soften: SoftenWindow,
     /// The Check Interference window: what the last check found, while it is open.
     interference: Option<InterferenceReport>,
+    /// The Cut List window: the parts as of the revision it was read at, while it is open.
+    cut_list: Option<CutListReport>,
     /// While an agent's `tool_input` runs: every command run, with its result.
     issued: Option<Vec<(Command, Result<Outcome, CommandError>)>>,
     /// The modifier keys the window reports the user holding.
@@ -421,6 +427,7 @@ impl Editor {
             flying: false,
             soften: SoftenWindow::default(),
             interference: None,
+            cut_list: None,
             issued: None,
             user_mods: Mods::default(),
             agent_mods: Mods::default(),
@@ -486,6 +493,7 @@ impl Editor {
         self.joint_drag = None;
         self.style_before_add.clear();
         self.interference = None;
+        self.cut_list = None;
     }
 
     /// How many times the document was replaced (new or open, by the window or an agent).

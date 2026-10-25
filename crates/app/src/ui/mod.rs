@@ -337,6 +337,14 @@ pub enum UiAction {
     InterferencePair(usize),
     /// Close the Check Interference window.
     CloseInterference,
+    /// Tools > Cut List: list the parts with their sizes in a window.
+    ShowCutList,
+    /// Select the parts of a row of the Cut List window and zoom to them.
+    CutListRow(usize),
+    /// Write the Cut List as a CSV file.
+    ExportCutList,
+    /// Close the Cut List window.
+    CloseCutList,
     /// Make the selected edges soft or hard (Entity Info's Soft checkbox).
     SetSoft(bool),
     /// Set the texture offset of the faces (those selected when the field was edited), in
@@ -644,6 +652,8 @@ pub struct View<'a> {
     pub soften: Option<u8>,
     /// The Check Interference window's report while it is open.
     pub interference: Option<&'a crate::editor::InterferenceReport>,
+    /// The Cut List window's report while it is open.
+    pub cut_list: Option<&'a crate::editor::CutListReport>,
     /// Whether the selected edges are all soft, when only edges are selected.
     pub edges_soft: Option<bool>,
     /// Whether everything selected that can be hidden is, None when nothing selected can be.
@@ -888,6 +898,9 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
     }
     if let Some(report) = view.interference {
         dialogs::interference_window(ui, report, actions);
+    }
+    if let Some(report) = view.cut_list {
+        dialogs::cut_list_window(ui, report, actions);
     }
     if let Some(menu) = view.viewport_menu {
         dialogs::viewport_menu(ui, menu, actions);

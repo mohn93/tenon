@@ -36,6 +36,7 @@ fn spec(scale: Option<f64>) -> PrintSpec {
         landscape: false,
         scale,
         dpi: 150,
+        cut_list: false,
     }
 }
 
@@ -245,6 +246,7 @@ fn chunks_cover_the_tile_within_4096() {
         landscape: true,
         scale: Some(100.0),
         dpi: 300,
+        cut_list: false,
     };
     let l = layout(&d, &d.camera, &sp).unwrap();
     let s = &l.sheets[0];

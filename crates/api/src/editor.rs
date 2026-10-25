@@ -266,6 +266,11 @@ pub enum EditorCommand {
         /// Pixels per inch of the images, 72 to 300 (default 150).
         #[serde(default)]
         dpi: Option<u32>,
+        /// Add the cut list (see the `cut_list` query; the whole model grouped by definition,
+        /// sizes in the display units) as pages after the view's sheets, counted in
+        /// `pdf.sheets`. Default false.
+        #[serde(default)]
+        cut_list: Option<bool>,
         /// Replace an existing file that is not a PDF (default false).
         #[serde(default)]
         overwrite: Option<bool>,

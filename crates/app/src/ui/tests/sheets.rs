@@ -390,6 +390,7 @@ fn the_print_sheet_reports_its_options() {
     assert_eq!(click(&mut h, "Letter"), []);
     assert_eq!(click(&mut h, "Portrait"), []);
     assert_eq!(click(&mut h, "1 :"), []);
+    assert_eq!(click(&mut h, "Add cut list pages"), []);
     assert_eq!(
         click(&mut h, "Export..."),
         [UiAction::ConfirmPrint(PrintOptions {
@@ -397,6 +398,7 @@ fn the_print_sheet_reports_its_options() {
             landscape: false,
             scale: Some(PrintOptions::DEFAULT_SCALE),
             dpi: 150,
+            cut_list: true,
         })]
     );
 }
@@ -414,6 +416,7 @@ fn the_print_sheet_starts_from_the_remembered_values_and_fits_by_default() {
         landscape: false,
         scale: Some(50.0),
         dpi: 200,
+        cut_list: false,
     };
     let mut h = harness(Fixture {
         sheet: Some(Sheet::Print {

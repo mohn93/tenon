@@ -65,6 +65,8 @@ pub struct PrintOptions {
     /// Print at 1:scale (a parallel view); None fits the view on one sheet.
     pub scale: Option<f64>,
     pub dpi: u32,
+    /// Add the cut list as pages after the view.
+    pub cut_list: bool,
 }
 
 impl Default for PrintOptions {
@@ -74,6 +76,7 @@ impl Default for PrintOptions {
             landscape: true,
             scale: None,
             dpi: DEFAULT_DPI,
+            cut_list: false,
         }
     }
 }
@@ -89,6 +92,7 @@ impl PrintOptions {
             landscape: self.landscape,
             scale: self.scale,
             dpi: self.dpi,
+            cut_list: self.cut_list,
         }
     }
 
@@ -499,11 +503,13 @@ mod tests {
             landscape: false,
             scale: Some(50.0),
             dpi: 200,
+            cut_list: true,
         };
         let spec = options.spec();
         assert_eq!(spec.paper, Paper::Tabloid);
         assert!(!spec.landscape);
         assert_eq!((spec.scale, spec.dpi), (Some(50.0), 200));
+        assert!(spec.cut_list);
         let wild = PrintOptions {
             scale: Some(-3.0),
             dpi: 5000,

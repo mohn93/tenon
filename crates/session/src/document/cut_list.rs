@@ -35,11 +35,16 @@ impl Document {
         self.cut_rows(m, &instances, inherited, group_by)
     }
 
+    /// The cut list of the whole model (the root's groups and components), grouped by
+    /// definition, whichever group is open.
+    pub fn cut_list_root(&self) -> Result<Vec<CutRowInfo>, CommandError> {
+        self.cut_rows(self.scene.root(), &[], None, CutListGrouping::Definition)
+    }
+
     /// The model's cut list as CSV in the display units: the root's parts grouped by
     /// definition, whichever group is open.
     pub(super) fn cut_list_csv(&self) -> Result<String, CommandError> {
-        let rows = self.cut_rows(self.scene.root(), &[], None, CutListGrouping::Definition)?;
-        Ok(to_csv(&rows, &self.units))
+        Ok(to_csv(&self.cut_list_root()?, &self.units))
     }
 
     fn cut_rows(

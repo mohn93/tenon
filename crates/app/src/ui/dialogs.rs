@@ -194,6 +194,68 @@ pub(super) fn interference_window(
     }
 }
 
+/// The Cut List window: a table of the parts (name, material, length, width, thickness,
+/// quantity) in the model's units; a click on a row selects its parts, Export CSV writes the
+/// list.
+pub(super) fn cut_list_window(
+    ui: &mut Ui,
+    report: &crate::editor::CutListReport,
+    actions: &mut Vec<UiAction>,
+) {
+    let mut open = true;
+    let title = "Cut List";
+    let shown = egui::Window::new(title)
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(true)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ui.ctx().content_rect().center())
+        .show(ui.ctx(), |ui| {
+            if report.rows.is_empty() {
+                ui.label("No parts");
+            } else {
+                let list = egui::ScrollArea::both().max_height(360.0).show(ui, |ui| {
+                    egui::Grid::new("cut-list-table")
+                        .num_columns(6)
+                        .striped(true)
+                        .show(ui, |ui| {
+                            for head in &report.headers {
+                                ui.label(RichText::new(head).strong());
+                            }
+                            ui.end_row();
+                            for (i, row) in report.rows.iter().enumerate() {
+                                let name = if row.solid {
+                                    row.cells[0].clone()
+                                } else {
+                                    format!("{} (not solid)", row.cells[0])
+                                };
+                                let mut button = ui.button(&name);
+                                if let Some(note) = &row.note {
+                                    button = button.on_hover_text(note);
+                                }
+                                if button.clicked() {
+                                    actions.push(UiAction::CutListRow(i));
+                                }
+                                for cell in &row.cells[1..] {
+                                    ui.label(cell);
+                                }
+                                ui.end_row();
+                            }
+                        });
+                });
+                widgets::name_scroll_bars(ui.ctx(), list.id, "Cut list");
+                ui.label(RichText::new(format!("{} parts", report.parts)).weak());
+            }
+            if ui.button("Export CSV...").clicked() {
+                actions.push(UiAction::ExportCutList);
+            }
+        });
+    widgets::name_title_bar(ui.ctx(), &shown, title);
+    if !open {
+        actions.push(UiAction::CloseCutList);
+    }
+}
+
 /// The viewport's right-click menu, at `menu.at`: for a selected section plane Flip and Active
 /// Cut (checked while the plane is the active one), for faces and groups Intersect Faces with
 /// the model, the selection or the context, and Hide, Unhide, Reverse Faces and Orient Faces

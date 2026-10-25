@@ -1,6 +1,7 @@
 //! A cut list as text: CSV (RFC 4180) and the lengths a table shows, in the model's display
 //! units.
 
+use crate::pdf::{Pdf, text_width_mm};
 use crate::query::CutRowInfo;
 use crate::units::{LengthUnit, Units, decimals, format_length};
 
@@ -110,6 +111,104 @@ pub fn table_cells(row: &CutRowInfo, units: &Units) -> [String; 6] {
     ]
 }
 
+/// Text size of a table page, in points, and the title's.
+const PAGE_PT: f64 = 9.0;
+const TITLE_PT: f64 = 13.0;
+/// Margin of a table page and the height of a row, in millimetres.
+const PAGE_MARGIN_MM: f64 = 15.0;
+const ROW_MM: f64 = 6.0;
+const RULE_MM: f64 = 0.15;
+/// Where the columns start, as fractions of the width between the margins: name, material,
+/// then the right edges of length, width, thickness and quantity.
+const NAME_AT: f64 = 0.0;
+const MATERIAL_AT: f64 = 0.34;
+const RIGHT_EDGES: [f64; 4] = [0.70, 0.82, 0.94, 1.0];
+
+/// `text` cut with ".." so it fits `max_mm` at `PAGE_PT`.
+fn fitted(text: &str, max_mm: f64) -> String {
+    if text_width_mm(text, PAGE_PT) <= max_mm {
+        return text.to_string();
+    }
+    let mut cut: Vec<char> = text.chars().collect();
+    while !cut.is_empty()
+        && text_width_mm(&format!("{}..", cut.iter().collect::<String>()), PAGE_PT) > max_mm
+    {
+        cut.pop();
+    }
+    format!("{}..", cut.into_iter().collect::<String>())
+}
+
+/// Adds the cut list to `pdf` as pages of `page_mm` (width, height): a title, a header row, a
+/// row per part with its sizes in the model's units, and a footer with the page number. As many
+/// pages as the rows need (one for an empty list). Returns the pages added.
+pub fn draw_pages(pdf: &mut Pdf, rows: &[CutRowInfo], units: &Units, page_mm: [f64; 2]) -> usize {
+    let [pw, ph] = page_mm;
+    let width = pw - 2.0 * PAGE_MARGIN_MM;
+    let top = PAGE_MARGIN_MM + 12.0;
+    let per_page = (((ph - top - PAGE_MARGIN_MM - ROW_MM) / ROW_MM).floor() as usize).max(1);
+    let pages = rows.len().div_ceil(per_page).max(1);
+    let x = |f: f64| PAGE_MARGIN_MM + width * f;
+    for n in 0..pages {
+        let mut page = pdf.page(page_mm);
+        page.text([PAGE_MARGIN_MM, PAGE_MARGIN_MM + 4.0], TITLE_PT, "Cut list");
+        let heads = header(units);
+        let cell = |page: &mut crate::pdf::PageBuilder, y: f64, cells: [&str; 6]| {
+            let name_room = x(MATERIAL_AT) - x(NAME_AT) - 2.0;
+            page.text([x(NAME_AT), y], PAGE_PT, &fitted(cells[0], name_room));
+            let material_room = x(RIGHT_EDGES[0] - 0.14) - x(MATERIAL_AT) - 2.0;
+            page.text(
+                [x(MATERIAL_AT), y],
+                PAGE_PT,
+                &fitted(cells[1], material_room),
+            );
+            for (i, edge) in RIGHT_EDGES.iter().enumerate() {
+                let t = cells[2 + i];
+                page.text([x(*edge) - text_width_mm(t, PAGE_PT), y], PAGE_PT, t);
+            }
+        };
+        let head_y = top;
+        cell(
+            &mut page,
+            head_y,
+            [
+                &heads[0], &heads[1], &heads[2], &heads[3], &heads[4], &heads[5],
+            ],
+        );
+        page.line(
+            [PAGE_MARGIN_MM, head_y + 1.5],
+            [PAGE_MARGIN_MM + width, head_y + 1.5],
+            RULE_MM,
+        );
+        if rows.is_empty() {
+            page.text([PAGE_MARGIN_MM, top + ROW_MM * 2.0], PAGE_PT, "No parts");
+        }
+        for (i, row) in rows.iter().skip(n * per_page).take(per_page).enumerate() {
+            let y = top + ROW_MM * (i as f64 + 1.0);
+            let cells = table_cells(row, units);
+            let name = if row.solid {
+                cells[0].clone()
+            } else {
+                format!("{} (not solid)", cells[0])
+            };
+            cell(
+                &mut page,
+                y,
+                [&name, &cells[1], &cells[2], &cells[3], &cells[4], &cells[5]],
+            );
+        }
+        let footer = format!("Cut list, page {} of {pages}", n + 1);
+        page.text(
+            [
+                PAGE_MARGIN_MM + width - text_width_mm(&footer, PAGE_PT),
+                ph - PAGE_MARGIN_MM / 2.0,
+            ],
+            PAGE_PT,
+            &footer,
+        );
+    }
+    pages
+}
+
 #[cfg(test)]
 mod tests {
     use kernel::EntityId;
@@ -180,6 +279,35 @@ mod tests {
             csv.ends_with(",no,\"edge e3 bounds 1 face, open\"\r\n"),
             "{csv}"
         );
+    }
+
+    #[test]
+    fn the_pdf_pages_follow_the_row_count() {
+        let rows: Vec<CutRowInfo> = (0..100).map(|i| row(&format!("Part {i}"), None)).collect();
+        let mut pdf = Pdf::new();
+        assert_eq!(draw_pages(&mut pdf, &[], &mm(), [297.0, 210.0]), 1);
+        let few = draw_pages(&mut pdf, &rows[..5], &mm(), [297.0, 210.0]);
+        assert_eq!(few, 1);
+        let many = draw_pages(&mut pdf, &rows, &mm(), [297.0, 210.0]);
+        assert!(many > 2, "{many}");
+        assert_eq!(pdf.page_count(), 1 + few + many);
+        let bytes = pdf.finish();
+        assert!(bytes.starts_with(b"%PDF-"));
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("(Cut list) Tj"));
+        assert!(text.contains("(Length \\(mm\\)) Tj"), "units in the header");
+        assert!(text.contains("(1200 mm) Tj"));
+    }
+
+    #[test]
+    fn long_names_are_cut_to_fit_their_column() {
+        let long = "x".repeat(200);
+        let cut = fitted(&long, 30.0);
+        assert!(
+            cut.ends_with("..") && text_width_mm(&cut, PAGE_PT) <= 30.0,
+            "{cut}"
+        );
+        assert_eq!(fitted("Leg", 30.0), "Leg");
     }
 
     #[test]
