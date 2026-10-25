@@ -2,12 +2,12 @@
 <!-- The Windows installer (WiX v4: `wix build`, see docs/packaging.md).
      Variables: Version (major.minor.patch), ExePath, IcoPath, NoticesPath. -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Package Name="sketchup-alt" Manufacturer="sketchup-alt" Version="$(Version)"
+  <Package Name="sketchup-alt" Manufacturer="sketchup-alt" Version="$(var.Version)"
            UpgradeCode="8f1f5c0e-6a52-4b8d-9d1c-2f4a7c3e9b61" Scope="perMachine">
     <MajorUpgrade DowngradeErrorMessage="A newer version of sketchup-alt is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <Icon Id="AppIcon" SourceFile="$(IcoPath)" />
+    <Icon Id="AppIcon" SourceFile="$(var.IcoPath)" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
@@ -19,7 +19,7 @@
 
     <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
       <Component Id="AppExeComponent">
-        <File Id="AppExe" Source="$(ExePath)" KeyPath="yes" />
+        <File Id="AppExe" Source="$(var.ExePath)" KeyPath="yes" />
         <!-- .skr files open with the program (the path arrives as its argument). -->
         <ProgId Id="sketchup-alt.skr" Description="sketchup-alt model" Icon="AppIcon">
           <Extension Id="skr" ContentType="application/x-sketchup-alt">
@@ -28,7 +28,7 @@
         </ProgId>
       </Component>
       <Component Id="NoticesComponent">
-        <File Id="Notices" Source="$(NoticesPath)" KeyPath="yes" />
+        <File Id="Notices" Source="$(var.NoticesPath)" KeyPath="yes" />
       </Component>
     </ComponentGroup>
 
