@@ -632,7 +632,12 @@ fn both<A: Send, B: Send>(f: impl FnOnce() -> A + Send, g: impl FnOnce() -> B + 
         // `g` waits here for whichever thread runs it: the second one, or this one when no
         // thread can be started.
         let g = std::sync::Mutex::new(Some(g));
+        // What a test forced is forced on the second thread too.
+        #[cfg(test)]
+        let forced = crate::edit::FORCE_INDEXES.with(|f| f.get());
         let take = || {
+            #[cfg(test)]
+            crate::edit::FORCE_INDEXES.with(|f| f.set(forced));
             let g = g.lock().unwrap_or_else(|e| e.into_inner()).take();
             g.expect("run once")()
         };
