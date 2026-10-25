@@ -583,8 +583,10 @@ faces) is made to agree, the side with less area turning; each hole (the loops t
 make) is filled with one face when it is flat (every vertex within 0.001 mm of its plane, the
 flatness every face keeps) and does not cross itself, a hole lying inside another in the same
 plane and facing the other way becoming that face's hole (the ring on top of a tube); then each
-closed shell is turned to face outward. A hole that is not flat, has no area, crosses itself, lies
-inside another the same way, or whose loops meet at a vertex, is not filled (no patch is guessed),
+closed shell is turned to face outward, or inward when it lies inside an odd number of other
+closed shells (a void stays a void). A hole that is not flat, has no area, crosses itself, lies
+inside another the same way, whose loops meet at a vertex, or whose face would cut through the
+part (an edge crossing it or a vertex lying on it), is not filled (no patch is guessed),
 and edges still shared by more than two faces (two boxes meeting along one edge) are never
 "fixed". The copy replaces the definition only when it is a solid afterwards and every face made
 or touched is flat, wound the right way and triangulates; otherwise the definition is left exactly
