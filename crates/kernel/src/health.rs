@@ -238,10 +238,7 @@ fn closed_depths(m: &Model, shells: &[(Vec<FaceId>, bool)]) -> Vec<usize> {
         let (lo, hi) = boxes[i];
         let holders: Vec<usize> = (0..shells.len())
             .filter(|&j| {
-                j != i
-                    && shells[j].1
-                    && boxes[j].0.cmple(lo).all()
-                    && boxes[j].1.cmpge(hi).all()
+                j != i && shells[j].1 && boxes[j].0.cmple(lo).all() && boxes[j].1.cmpge(hi).all()
             })
             .collect();
         if holders.is_empty() {
@@ -251,9 +248,7 @@ fn closed_depths(m: &Model, shells: &[(Vec<FaceId>, bool)]) -> Vec<usize> {
             continue;
         };
         for j in holders {
-            let part = parts
-                .entry(j)
-                .or_insert_with(|| subset(m, &shells[j].0));
+            let part = parts.entry(j).or_insert_with(|| subset(m, &shells[j].0));
             if point_inside(p, part) == Some(true) {
                 depth[i] += 1;
             }
@@ -372,6 +367,59 @@ fn face_ok(m: &Model, id: FaceId) -> bool {
         }
     }
     m.triangulate(id).is_some_and(|t| !t.is_empty())
+}
+
+/// Whether an edge of `m` passes through the inside of face `f`: crossing its plane there, or
+/// ending there on a vertex that is not the face's own (a cap on a hole that would cut through
+/// the part).
+fn pierced(m: &Model, f: FaceId) -> bool {
+    let Some(face) = m.face(f) else {
+        return false;
+    };
+    let plane = Plane::through(m.pos(face.outer[0]), face.normal);
+    let ring = |l: &[VertexId]| {
+        l.iter()
+            .map(|v| plane.project(m.pos(*v)))
+            .collect::<Vec<_>>()
+    };
+    let outer = ring(&face.outer);
+    let holes: Vec<Vec<DVec2>> = face.holes.iter().map(|h| ring(h)).collect();
+    let own: BTreeSet<VertexId> = face
+        .outer
+        .iter()
+        .chain(face.holes.iter().flatten())
+        .copied()
+        .collect();
+    let (mut lo, mut hi) = (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY));
+    for v in &own {
+        lo = lo.min(m.pos(*v));
+        hi = hi.max(m.pos(*v));
+    }
+    let pad = DVec3::splat(LENGTH_TOL);
+    let (lo, hi) = (lo - pad, hi + pad);
+    let within = |p: DVec3| {
+        let q = plane.project(p);
+        point_in_polygon(q, &outer) && !holes.iter().any(|h| point_in_polygon(q, h))
+    };
+    for (_, e) in m.edges() {
+        let [a, b] = e.v;
+        let (pa, pb) = (m.pos(a), m.pos(b));
+        if pa.min(pb).cmpgt(hi).any() || pa.max(pb).cmplt(lo).any() {
+            continue;
+        }
+        let (da, db) = (plane.distance(pa), plane.distance(pb));
+        for (v, p, d) in [(a, pa, da), (b, pb, db)] {
+            if d.abs() <= LENGTH_TOL && !own.contains(&v) && within(p) {
+                return true;
+            }
+        }
+        if (da > LENGTH_TOL && db < -LENGTH_TOL) || (da < -LENGTH_TOL && db > LENGTH_TOL) {
+            if within(pa + (pb - pa) * (da / (da - db))) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Whether any two sides of `rings` (closed 2D loops) that do not follow each other in one
@@ -667,7 +715,19 @@ pub fn repair(m: &Model) -> Repaired {
     };
     let (agree, _) = turns(&c);
     turn_over(&mut c, agree);
-    let (made, reasons) = c.fill_holes();
+    let (made, mut reasons) = c.fill_holes();
+    let mut cut = false;
+    for &f in &made {
+        if pierced(&c, f) {
+            cut = true;
+            let l = &c.face(f).expect("made").outer;
+            let e = c.edge_between(l[0], l[1]).expect("a side");
+            reasons.push(format!(
+                "a face filling the hole at e{} would cut through the part",
+                e.0
+            ));
+        }
+    }
     r.holes_filled = made.len();
     r.reasons = reasons;
     touched.extend(made);
@@ -692,7 +752,7 @@ pub fn repair(m: &Model) -> Repaired {
             .push(format!("face f{} would not be flat or valid", f.0));
     }
     let left = check(&c);
-    let model = (left.is_solid() && bad.is_empty()).then_some(c);
+    let model = (left.is_solid() && bad.is_empty() && !cut).then_some(c);
     Repaired {
         model,
         repair: r,
@@ -795,7 +855,11 @@ mod tests {
         let mut points = corners(DVec3::ZERO, DVec3::splat(2.0));
         points.extend(corners(DVec3::splat(0.5), DVec3::splat(1.5)));
         let mut faces = sides_of_box(0);
-        faces.extend(sides_of_box(8).into_iter().map(|q| q.into_iter().rev().collect()));
+        faces.extend(
+            sides_of_box(8)
+                .into_iter()
+                .map(|q| q.into_iter().rev().collect()),
+        );
         build(&points, &faces)
     }
 
@@ -806,7 +870,9 @@ mod tests {
         assert!((volume(&m) - 7.0).abs() < 1e-9);
 
         let mut stray = m.clone();
-        stray.add_edge(DVec3::splat(3.0), DVec3::splat(4.0)).unwrap();
+        stray
+            .add_edge(DVec3::splat(3.0), DVec3::splat(4.0))
+            .unwrap();
         stray.take_changes();
         let h = check(&stray);
         assert!(h.reversed_faces.is_empty(), "{h:?}");
@@ -857,6 +923,43 @@ mod tests {
             p.x -= 0.5;
         }
         assert!(crosses(&rings));
+    }
+
+    #[test]
+    fn a_hole_whose_cap_would_cut_through_the_part_is_not_filled() {
+        // A 2 x 2 x 1 m box missing its top, with a pocket from its floor rising to 1.5 m:
+        // a cap on the rim would cut the pocket's walls.
+        let mut points = corners(DVec3::ZERO, DVec3::new(2.0, 2.0, 1.0));
+        points.extend(corners(
+            DVec3::new(0.5, 0.5, 0.0),
+            DVec3::new(1.5, 1.5, 1.5),
+        ));
+        let mut faces: Vec<Vec<usize>> = sides_of_box(0)[2..].to_vec();
+        faces.extend(
+            sides_of_box(8)[1..]
+                .iter()
+                .map(|q| q.iter().rev().copied().collect()),
+        );
+        let mut m = build(&points, &faces);
+        let at = |m: &Model, i: usize| {
+            m.vertices()
+                .find(|(_, v)| v.pos == points[i])
+                .map(|(id, _)| id)
+                .unwrap()
+        };
+        let outer = [0, 2, 3, 1].map(|i| at(&m, i)).to_vec();
+        let hole = [8, 9, 11, 10].map(|i| at(&m, i)).to_vec();
+        m.insert_face(Face::new(outer, vec![hole], DVec3::NEG_Z));
+        m.take_changes();
+        let h = check(&m);
+        assert_eq!(h.open_edges.len(), 4, "{h:?}");
+        let r = repair(&m);
+        assert!(r.model.is_none(), "{:?}", r.repair);
+        assert!(
+            r.repair.reasons.iter().any(|s| s.contains("cut through")),
+            "{:?}",
+            r.repair.reasons
+        );
     }
 
     #[test]
