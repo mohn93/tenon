@@ -315,6 +315,38 @@ fn broken_and_hostile_files_are_refused_and_change_nothing() {
 }
 
 #[test]
+fn a_mirrored_node_keeps_its_faces_facing_out() {
+    let box_doc: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture("box.gltf")).unwrap()).unwrap();
+    for (name, scale) in [("plain", [1.0, 1.0, 1.0]), ("mirrored", [-1.0, 1.0, 1.0])] {
+        for place in ["group", "context"] {
+            let mut v = box_doc.clone();
+            v["nodes"][0]["scale"] = json!(scale);
+            let path = scratch(&format!("{name}-{place}.gltf"));
+            std::fs::write(&path, v.to_string()).unwrap();
+            let mut d = doc();
+            run(
+                &mut d,
+                json!({"type": "import", "path": path.to_str().unwrap(), "as": place}),
+            )
+            .unwrap();
+            d.scene().validate().unwrap();
+            let triangles = d.scene().triangles();
+            let (lo, hi) = bounds(&corners(&d));
+            let center = (lo + hi) / 2.0;
+            assert!(!triangles.is_empty());
+            for t in &triangles {
+                let middle = (t.corners[0] + t.corners[1] + t.corners[2]) / 3.0;
+                assert!(
+                    t.normal.dot(middle - center) > 0.0,
+                    "{name} {place}: a face faces in"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn a_small_file_asking_for_millions_of_items_is_refused_before_they_are_read() {
     // A few megabytes of empty objects would be hundreds of megabytes once read.
     let objects = vec!["{}"; 1_100_000].join(",");
