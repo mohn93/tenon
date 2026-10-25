@@ -168,9 +168,10 @@ impl Gui {
         self.ctx.pixels_per_point()
     }
 
-    /// True while a text field has focus (a focused button must not swallow editor keys).
+    /// True while a text field has focus (a focused button must not swallow editor keys), or
+    /// a press on one waits for the next frame (see `wants_keyboard`).
     pub fn wants_keyboard(&self) -> bool {
-        self.ctx.text_edit_focused()
+        wants_keyboard(&self.ctx, &self.state.egui_input().events)
     }
 
     /// Lays out the panels for this frame.
@@ -299,6 +300,38 @@ fn physical_viewport(central: egui::Rect, pixels_per_point: f32) -> Viewport {
     }
 }
 
+/// Whether keys go to egui: a text field has focus, or one of the `pending` events (those
+/// egui has not had a frame for yet) is a press on one. egui focuses a clicked field only in
+/// its next frame, so keys typed right after the click, before that frame (a slow frame
+/// queues them), would otherwise also reach the editor as shortcuts.
+fn wants_keyboard(ctx: &egui::Context, pending: &[egui::Event]) -> bool {
+    ctx.text_edit_focused()
+        || pending.iter().any(|e| match *e {
+            egui::Event::PointerButton {
+                pos, pressed: true, ..
+            } => text_field_at(ctx, pos),
+            _ => false,
+        })
+}
+
+/// Whether a text field lies at `pos` (in points) in the topmost layer there, as egui last
+/// laid it out.
+fn text_field_at(ctx: &egui::Context, pos: egui::Pos2) -> bool {
+    let Some(layer) = ctx.layer_id_at(pos) else {
+        return false;
+    };
+    let ids: Vec<egui::Id> = ctx.viewport(|v| {
+        v.prev_pass
+            .widgets
+            .get_layer(layer)
+            .filter(|w| w.interact_rect.contains(pos))
+            .map(|w| w.id)
+            .collect()
+    });
+    ids.into_iter()
+        .any(|id| egui::text_edit::TextEditState::load(ctx, id).is_some())
+}
+
 /// See `Gui::wants_pointer_at`.
 fn wants_pointer_at(ctx: &egui::Context, pos: glam::DVec2) -> bool {
     if ctx.egui_is_using_pointer() {
@@ -352,6 +385,50 @@ mod tests {
             wants_pointer_at(&ctx, DVec2::new(1010.0, 610.0)),
             "over the menu"
         );
+    }
+
+    #[test]
+    fn a_press_on_a_text_field_takes_the_keys_before_egui_focuses_it() {
+        let ctx = egui::Context::default();
+        let frame = |events: Vec<egui::Event>| egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+            events,
+            ..Default::default()
+        };
+        let mut text = String::new();
+        let field = std::cell::Cell::new(Rect::NOTHING);
+        let mut ui = |ui: &mut egui::Ui| {
+            field.set(ui.add(egui::TextEdit::singleline(&mut text)).rect);
+        };
+        for _ in 0..2 {
+            ctx.run_ui(frame(Vec::new()), &mut ui)
+                .drop_without_applying_deltas();
+        }
+        let press = |pos: Pos2, pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let at = field.get().center();
+        let elsewhere = Pos2::new(400.0, 500.0);
+        assert!(!wants_keyboard(&ctx, &[]));
+        let clicked = vec![
+            egui::Event::PointerMoved(at),
+            press(at, true),
+            press(at, false),
+        ];
+        // The click waits for the next frame; the keys typed meanwhile are the field's.
+        assert!(!ctx.text_edit_focused());
+        assert!(wants_keyboard(&ctx, &clicked));
+        assert!(!wants_keyboard(
+            &ctx,
+            &[egui::Event::PointerMoved(elsewhere), press(elsewhere, true)]
+        ));
+        ctx.run_ui(frame(clicked), &mut ui)
+            .drop_without_applying_deltas();
+        assert!(ctx.text_edit_focused(), "the frame focuses the field");
+        assert!(wants_keyboard(&ctx, &[]));
     }
 
     #[test]
