@@ -154,51 +154,18 @@ impl Index {
     }
 
     fn from_shapes(shapes: Vec<Shape>) -> Index {
-        let mut index = Index {
-            nodes: Vec::new(),
-            shapes,
-        };
-        if !index.shapes.is_empty() {
-            index.split(0, index.shapes.len());
+        // The tree is built over positions into `shapes`, each shape's box worked out once,
+        // and the shapes put in the order the splits leave them in at the end.
+        let boxes: Vec<(DVec3, DVec3)> = shapes.iter().map(Shape::bounds).collect();
+        let mut order: Vec<usize> = (0..shapes.len()).collect();
+        let mut nodes = Vec::new();
+        if !shapes.is_empty() {
+            split(&mut nodes, &mut order, &boxes, 0, shapes.len());
         }
-        index
-    }
-
-    /// Adds the node over shapes `start..end` and its subtree; returns the node's position.
-    fn split(&mut self, start: usize, end: usize) -> usize {
-        let mut min = DVec3::splat(f64::INFINITY);
-        let mut max = DVec3::splat(f64::NEG_INFINITY);
-        let mut cmin = min;
-        let mut cmax = max;
-        for s in &self.shapes[start..end] {
-            let (a, b) = s.bounds();
-            min = min.min(a);
-            max = max.max(b);
-            cmin = cmin.min((a + b) * 0.5);
-            cmax = cmax.max((a + b) * 0.5);
+        Index {
+            nodes,
+            shapes: order.into_iter().map(|k| shapes[k]).collect(),
         }
-        let at = self.nodes.len();
-        self.nodes.push(Node {
-            min,
-            max,
-            kids: Kids::Leaf(start, end),
-        });
-        if end - start <= LEAF {
-            return at;
-        }
-        // Halve at the median centre along the axis where the centres spread most.
-        let axis = (cmax - cmin).max_position();
-        let centre = |s: &Shape| {
-            let (a, b) = s.bounds();
-            (a[axis] + b[axis]) * 0.5
-        };
-        let mid = (start + end) / 2;
-        self.shapes[start..end]
-            .select_nth_unstable_by(mid - start, |a, b| centre(a).total_cmp(&centre(b)));
-        let left = self.split(start, mid);
-        let right = self.split(mid, end);
-        self.nodes[at].kids = Kids::Inner(left, right);
-        at
     }
 
     /// The nearest face triangle that the ray `origin + t * dir` meets with
@@ -457,6 +424,49 @@ pub fn ray_hits_triangle(from: DVec3, dir: DVec3, [a, b, c]: [DVec3; 3]) -> Opti
     (u >= -eps && v >= -eps && u + v <= 1.0 + eps).then(|| e2.dot(q) / det)
 }
 
+/// Adds the node over the shapes at `order[start..end]` (each with its box in `boxes`) and its
+/// subtree to `nodes`, reordering that part of `order`; returns the node's position.
+fn split(
+    nodes: &mut Vec<Node>,
+    order: &mut [usize],
+    boxes: &[(DVec3, DVec3)],
+    start: usize,
+    end: usize,
+) -> usize {
+    let mut min = DVec3::splat(f64::INFINITY);
+    let mut max = DVec3::splat(f64::NEG_INFINITY);
+    let mut cmin = min;
+    let mut cmax = max;
+    for k in &order[start..end] {
+        let (a, b) = boxes[*k];
+        min = min.min(a);
+        max = max.max(b);
+        cmin = cmin.min((a + b) * 0.5);
+        cmax = cmax.max((a + b) * 0.5);
+    }
+    let at = nodes.len();
+    nodes.push(Node {
+        min,
+        max,
+        kids: Kids::Leaf(start, end),
+    });
+    if end - start <= LEAF {
+        return at;
+    }
+    // Halve at the median centre along the axis where the centres spread most.
+    let axis = (cmax - cmin).max_position();
+    let centre = |k: &usize| {
+        let (a, b) = boxes[*k];
+        (a[axis] + b[axis]) * 0.5
+    };
+    let mid = (start + end) / 2;
+    order[start..end].select_nth_unstable_by(mid - start, |a, b| centre(a).total_cmp(&centre(b)));
+    let left = split(nodes, order, boxes, start, mid);
+    let right = split(nodes, order, boxes, mid, end);
+    nodes[at].kids = Kids::Inner(left, right);
+    at
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,6 +511,74 @@ mod tests {
             found.sort();
             assert_eq!(found, all);
             assert!(all.len() >= 3);
+        }
+    }
+
+    #[test]
+    fn the_tree_is_the_one_splitting_the_shapes_themselves_builds() {
+        // The split as it was first written, moving the shapes and working out each box as
+        // it compares: the tree over positions must come out the same, shape for shape.
+        fn reference(shapes: &mut [Shape], nodes: &mut Vec<(DVec3, DVec3, usize, usize)>) {
+            fn go(
+                shapes: &mut [Shape],
+                nodes: &mut Vec<(DVec3, DVec3, usize, usize)>,
+                start: usize,
+                end: usize,
+            ) {
+                let mut min = DVec3::splat(f64::INFINITY);
+                let mut max = DVec3::splat(f64::NEG_INFINITY);
+                let (mut cmin, mut cmax) = (min, max);
+                for s in &shapes[start..end] {
+                    let (a, b) = s.bounds();
+                    min = min.min(a);
+                    max = max.max(b);
+                    cmin = cmin.min((a + b) * 0.5);
+                    cmax = cmax.max((a + b) * 0.5);
+                }
+                nodes.push((min, max, start, end));
+                if end - start <= LEAF {
+                    return;
+                }
+                let axis = (cmax - cmin).max_position();
+                let centre = |s: &Shape| {
+                    let (a, b) = s.bounds();
+                    (a[axis] + b[axis]) * 0.5
+                };
+                let mid = (start + end) / 2;
+                shapes[start..end]
+                    .select_nth_unstable_by(mid - start, |a, b| centre(a).total_cmp(&centre(b)));
+                go(shapes, nodes, start, mid);
+                go(shapes, nodes, mid, end);
+            }
+            let n = shapes.len();
+            go(shapes, nodes, 0, n);
+        }
+        // Points, segments and triangles on a coarse lattice, so many centres tie.
+        let mut shapes = Vec::new();
+        let mut x = 0.37_f64;
+        let mut next = || {
+            x = (x * 3.9 + 0.123).fract();
+            (x * 8.0).floor() * 0.25
+        };
+        for k in 0..2000u64 {
+            let mut q = || DVec3::new(next(), next(), next());
+            shapes.push(match k % 3 {
+                0 => Shape::Point(VertexId(k), q()),
+                1 => Shape::Segment(EdgeId(k), q(), q()),
+                _ => Shape::Triangle(FaceId(k), [q(), q(), q()]),
+            });
+        }
+        let index = Index::from_shapes(shapes.clone());
+        let mut nodes = Vec::new();
+        reference(&mut shapes, &mut nodes);
+        assert_eq!(index.shapes, shapes);
+        assert_eq!(index.nodes.len(), nodes.len());
+        for (n, (min, max, start, end)) in index.nodes.iter().zip(nodes) {
+            assert_eq!((n.min, n.max), (min, max));
+            match n.kids {
+                Kids::Leaf(s, e) => assert_eq!((s, e), (start, end)),
+                Kids::Inner(..) => assert!(end - start > LEAF),
+            }
         }
     }
 }
