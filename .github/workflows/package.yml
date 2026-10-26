@@ -178,6 +178,10 @@ jobs:
           if [ "${{ matrix.arch }}" = x86_64 ]; then want="$APPIMAGE_RUNTIME_SHA256_X86_64"; else want="$APPIMAGE_RUNTIME_SHA256_AARCH64"; fi
           echo "$want  $file" | sha256sum -c -
 
+      # appimagetool refuses to run without desktop-file-validate.
+      - name: Install desktop-file-utils
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends desktop-file-utils
+
       - name: Package
         run: |
           APPIMAGETOOL="$PWD/appimagetool-${{ matrix.arch }}.AppImage" \
