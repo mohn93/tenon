@@ -378,10 +378,10 @@ fn face_ok(m: &Model, id: FaceId) -> bool {
     m.triangulate(id).is_some_and(|t| !t.is_empty())
 }
 
-/// Whether an edge of `m` passes through the inside of face `f`: crossing its plane there, or
-/// ending there on a vertex that is not the face's own (a cap on a hole that would cut through
-/// the part).
-fn pierced(m: &Model, f: FaceId) -> bool {
+/// Whether one of `edges` (pairs of vertices of `m`) passes through the inside of face `f`:
+/// crossing its plane there, or ending there on a vertex that is not the face's own (a cap on
+/// a hole that would cut through the part).
+fn pierced(m: &Model, f: FaceId, edges: &[[VertexId; 2]]) -> bool {
     let Some(face) = m.face(f) else {
         return false;
     };
@@ -410,8 +410,7 @@ fn pierced(m: &Model, f: FaceId) -> bool {
         let q = plane.project(p);
         point_in_polygon(q, &outer) && !holes.iter().any(|h| point_in_polygon(q, h))
     };
-    for (_, e) in m.edges() {
-        let [a, b] = e.v;
+    for &[a, b] in edges {
         let (pa, pb) = (m.pos(a), m.pos(b));
         if pa.min(pb).cmpgt(hi).any() || pa.max(pb).cmplt(lo).any() {
             continue;
@@ -987,8 +986,29 @@ pub fn repair(m: &Model) -> Repaired {
             }
         }
     }
+    // The edges near the faces made, found once rather than for every face (a patch can be
+    // many triangles).
+    let near: Vec<[VertexId; 2]> = {
+        let (mut lo, mut hi) = (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY));
+        for f in &made {
+            let face = c.face(*f).expect("made");
+            for v in face.outer.iter().chain(face.holes.iter().flatten()) {
+                lo = lo.min(c.pos(*v));
+                hi = hi.max(c.pos(*v));
+            }
+        }
+        let pad = DVec3::splat(LENGTH_TOL);
+        let (lo, hi) = (lo - pad, hi + pad);
+        c.edges()
+            .map(|(_, e)| e.v)
+            .filter(|[a, b]| {
+                let (pa, pb) = (c.pos(*a), c.pos(*b));
+                !(pa.min(pb).cmpgt(hi).any() || pa.max(pb).cmplt(lo).any())
+            })
+            .collect()
+    };
     for &f in &made {
-        if pierced(&c, f) {
+        if pierced(&c, f, &near) {
             cut = true;
             let l = &c.face(f).expect("made").outer;
             let e = c.edge_between(l[0], l[1]).expect("a side");
@@ -1673,5 +1693,195 @@ mod tests {
         let t = std::time::Instant::now();
         assert!(check(&m).self_crossing.is_empty());
         assert!(t.elapsed() < std::time::Duration::from_secs(10));
+    }
+
+    /// `a` with the faces of `b` copied in (new vertices and edges).
+    fn merged(a: &Model, b: &Model) -> Model {
+        let mut m = a.clone();
+        let mut map: BTreeMap<VertexId, VertexId> = BTreeMap::new();
+        for (_, f) in b.faces() {
+            let mut copy = |l: &Vec<VertexId>, m: &mut Model| -> Vec<VertexId> {
+                l.iter()
+                    .map(|v| *map.entry(*v).or_insert_with(|| m.insert_vertex(b.pos(*v))))
+                    .collect()
+            };
+            let outer = copy(&f.outer, &mut m);
+            let holes: Vec<Vec<VertexId>> = f.holes.iter().map(|h| copy(h, &mut m)).collect();
+            for l in std::iter::once(&outer).chain(&holes) {
+                for i in 0..l.len() {
+                    let (x, y) = (l[i], l[(i + 1) % l.len()]);
+                    if m.edge_between(x, y).is_none() {
+                        m.insert_edge(x, y);
+                    }
+                }
+            }
+            m.insert_face(Face::new(outer, holes, f.normal));
+        }
+        m.take_changes();
+        m
+    }
+
+    /// A prism of the ring `ring` (counterclockwise, in z = 0) `h` high.
+    fn extruded(ring: &[DVec3], h: f64) -> Model {
+        let n = ring.len();
+        let mut points = ring.to_vec();
+        points.extend(ring.iter().map(|p| *p + DVec3::Z * h));
+        let mut faces: Vec<Vec<usize>> = vec![(0..n).rev().collect(), (n..2 * n).collect()];
+        for i in 0..n {
+            let j = (i + 1) % n;
+            faces.push(vec![i, j, n + j, n + i]);
+        }
+        build(&points, &faces)
+    }
+
+    #[test]
+    fn valid_shells_at_every_scale_are_not_reported_as_crossing() {
+        // Cone tips, a torus, a thin tube, a thin prism and a concave star (its end faces
+        // triangulated across their reflex corners), at a millimetre, a metre and ten
+        // kilometres.
+        let star: Vec<DVec3> = (0..10)
+            .map(|i| {
+                let a = i as f64 * std::f64::consts::TAU / 10.0;
+                let r = if i % 2 == 0 { 1.0 } else { 0.3 };
+                DVec3::new(r * a.cos(), r * a.sin(), 0.0)
+            })
+            .collect();
+        for s in [1e-3, 1.0, 1e4] {
+            let t = glam::DAffine3::from_scale(DVec3::splat(s));
+            for m in [
+                Solid::cylinder(1.0, 2.0, 64).unwrap().placed(&t).to_model(),
+                Solid::cone(1.0, 0.0, 2.0, 64)
+                    .unwrap()
+                    .placed(&t)
+                    .to_model(),
+                Solid::cone(1.0, 0.5, 2.0, 64)
+                    .unwrap()
+                    .placed(&t)
+                    .to_model(),
+                Solid::torus(2.0, 0.5, 48, 24)
+                    .unwrap()
+                    .placed(&t)
+                    .to_model(),
+                Solid::tube(2.0, 1.9, 3.0, 64)
+                    .unwrap()
+                    .placed(&t)
+                    .to_model(),
+                Solid::sphere(1.0, 64).unwrap().placed(&t).to_model(),
+                Solid::prism(1.0, 0.01, 7, 0.3)
+                    .unwrap()
+                    .placed(&t)
+                    .to_model(),
+                extruded(&star.iter().map(|p| *p * s).collect::<Vec<_>>(), 0.2 * s),
+            ] {
+                let h = check(&m);
+                assert!(h.self_crossing.is_empty(), "scale {s}: {h:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_dent_whose_tip_touches_the_floor_is_not_a_crossing() {
+        // The top of a box pulled down to a point on the middle of its bottom.
+        let mut points = corners(DVec3::ZERO, DVec3::ONE);
+        points.push(DVec3::new(0.5, 0.5, 0.0));
+        let mut faces: Vec<Vec<usize>> = sides_of_box(0);
+        faces.remove(1);
+        faces.extend([vec![4, 5, 8], vec![5, 7, 8], vec![7, 6, 8], vec![6, 4, 8]]);
+        let m = build(&points, &faces);
+        let h = check(&m);
+        assert!(h.is_solid(), "{h:?}");
+        // Pushed a little further, through the floor, it crosses.
+        points[8].z = -0.01;
+        let h = check(&build(&points, &faces));
+        assert!(!h.self_crossing.is_empty(), "{h:?}");
+    }
+
+    #[test]
+    fn one_huge_box_and_a_dense_tiny_sphere_are_checked_quickly() {
+        // Cells sized from the mean triangle would put every triangle of the sphere in one
+        // cell and compare all pairs.
+        let big = Solid::cuboid(DVec3::splat(100.0)).unwrap().to_model();
+        let t = glam::DAffine3::from_scale_rotation_translation(
+            DVec3::splat(0.01),
+            glam::DQuat::IDENTITY,
+            DVec3::splat(50.0),
+        );
+        let small = Solid::sphere(1.0, 200).unwrap().placed(&t).to_model();
+        let m = merged(&big, &small);
+        let t = std::time::Instant::now();
+        assert!(crossing_faces(&m).is_empty());
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            t.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_vertex_on_the_edge_of_a_faces_hole_is_mended() {
+        // A 3 m box with a square tunnel through it, one tunnel wall in two halves whose
+        // middle corners lie on the edges of the holes in the top and bottom faces.
+        let mut points = corners(DVec3::ZERO, DVec3::splat(3.0));
+        points.extend(corners(
+            DVec3::new(1.0, 1.0, 0.0),
+            DVec3::new(2.0, 2.0, 3.0),
+        ));
+        points.push(DVec3::new(1.5, 1.0, 0.0));
+        points.push(DVec3::new(1.5, 1.0, 3.0));
+        let faces: Vec<(Vec<usize>, Vec<Vec<usize>>)> = vec![
+            (vec![0, 2, 3, 1], vec![vec![9, 11, 10, 8]]),
+            (vec![4, 5, 7, 6], vec![vec![14, 15, 13, 12]]),
+            (vec![0, 1, 5, 4], vec![]),
+            (vec![2, 6, 7, 3], vec![]),
+            (vec![0, 4, 6, 2], vec![]),
+            (vec![1, 3, 7, 5], vec![]),
+            (vec![12, 17, 16, 8], vec![]),
+            (vec![17, 13, 9, 16], vec![]),
+            (vec![11, 15, 14, 10], vec![]),
+            (vec![10, 14, 12, 8], vec![]),
+            (vec![13, 15, 11, 9], vec![]),
+        ];
+        let mut m = Model::new();
+        let ids: Vec<VertexId> = points.iter().map(|p| m.insert_vertex(*p)).collect();
+        for (outer, holes) in &faces {
+            let outer: Vec<VertexId> = outer.iter().map(|i| ids[*i]).collect();
+            let holes: Vec<Vec<VertexId>> = holes
+                .iter()
+                .map(|h| h.iter().map(|i| ids[*i]).collect())
+                .collect();
+            for l in std::iter::once(&outer).chain(&holes) {
+                for i in 0..l.len() {
+                    if m.edge_between(l[i], l[(i + 1) % l.len()]).is_none() {
+                        m.insert_edge(l[i], l[(i + 1) % l.len()]);
+                    }
+                }
+            }
+            let pts: Vec<DVec3> = outer.iter().map(|v| m.pos(*v)).collect();
+            m.insert_face(Face::new(outer, holes, vector_area(&pts).normalize()));
+        }
+        m.take_changes();
+        assert!(!check(&m).is_solid());
+        let r = repair(&m);
+        assert_eq!(r.repair.tjunctions_mended, 2, "{:?}", r.repair);
+        let fixed = r.model.expect("mended");
+        fixed.validate().unwrap();
+        assert!(check(&fixed).is_solid());
+        assert!((volume(&fixed) - 24.0).abs() < 1e-9, "{}", volume(&fixed));
+    }
+
+    #[test]
+    fn a_vertex_already_in_the_faces_loop_is_not_spliced_again() {
+        // A triangle fan whose open rim passes over one of its own corners: the face cannot
+        // take that corner twice, so the edge is left and nothing is fixed.
+        let points = vec![
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(2.0, 0.0, 0.0),
+            DVec3::new(1.0, 1.0, 0.0),
+            DVec3::new(1.0, 0.0, 0.0),
+        ];
+        let m = build(&points, &[vec![0, 1, 2, 3]]);
+        let r = repair(&m);
+        assert_eq!(r.repair.tjunctions_mended, 0, "{:?}", r.repair);
+        assert!(r.model.is_none());
     }
 }

@@ -10,16 +10,10 @@ use crate::geom::LENGTH_TOL;
 use crate::ids::{FaceId, VertexId};
 use crate::model::Model;
 
-/// Most grid cells one triangle is entered in; a larger one is tested against every other.
-const MAX_CELLS: usize = 4096;
-
 /// How near a plane a corner counts as on it when sections of triangles are taken; far
 /// finer than `LENGTH_TOL`, so the fans of a sphere's poles (nearly flat, sharing a vertex)
 /// do not read as overlapping.
 const ON_PLANE: f64 = 1e-11;
-
-/// Most cells along one axis of the grid.
-const MAX_AXIS: f64 = 128.0;
 
 struct Tri {
     face: FaceId,
@@ -65,54 +59,44 @@ pub fn crossing_faces(m: &Model) -> Vec<FaceId> {
             out.insert(b.face);
         }
     };
-    if tris.len() < 2 {
-        return Vec::new();
-    }
-    let (mut lo, mut hi) = (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY));
-    let mut mean = 0.0;
-    for t in &tris {
-        lo = lo.min(t.lo);
-        hi = hi.max(t.hi);
-        mean += (t.hi - t.lo).max_element();
-    }
-    mean /= tris.len() as f64;
-    let cell = (2.0 * mean)
-        .max((hi - lo).max_element() / MAX_AXIS)
-        .max(LENGTH_TOL);
-    let at = |p: DVec3| ((p - lo) / cell).floor().as_ivec3();
-    let mut grid: HashMap<[i32; 3], Vec<usize>> = HashMap::new();
-    let mut big: Vec<usize> = Vec::new();
-    for (k, t) in tris.iter().enumerate() {
-        let (c0, c1) = (at(t.lo), at(t.hi));
-        let n = (c1 - c0 + 1).as_i64vec3();
-        if n.x * n.y * n.z > MAX_CELLS as i64 {
-            big.push(k);
-            continue;
+    // A grid of cells at every power of two: each triangle goes in the cells of the level
+    // just larger than its box (padded by half `LENGTH_TOL` a side, so padded boxes meet
+    // exactly when `test` compares them), at most eight. A triangle then looks in its own
+    // level and every coarser one, so a pair is met where the larger of the two lives,
+    // whatever the spread of sizes.
+    let pad = DVec3::splat(LENGTH_TOL / 2.0);
+    let level = |t: &Tri| ((t.hi - t.lo).max_element() + LENGTH_TOL).log2().ceil() as i32;
+    let cell = |p: DVec3, k: i32| (p / 2f64.powi(k)).floor().as_i64vec3().to_array();
+    let mut grid: HashMap<(i32, [i64; 3]), Vec<usize>> = HashMap::new();
+    let mut levels: BTreeSet<i32> = BTreeSet::new();
+    let cells_of = |t: &Tri, k: i32| {
+        let (c0, c1) = (cell(t.lo - pad, k), cell(t.hi + pad, k));
+        (c0[0]..=c1[0]).flat_map(move |x| {
+            (c0[1]..=c1[1]).flat_map(move |y| (c0[2]..=c1[2]).map(move |z| [x, y, z]))
+        })
+    };
+    let at: Vec<i32> = tris.iter().map(level).collect();
+    for (i, t) in tris.iter().enumerate() {
+        levels.insert(at[i]);
+        for c in cells_of(t, at[i]) {
+            grid.entry((at[i], c)).or_default().push(i);
         }
-        for x in c0.x..=c1.x {
-            for y in c0.y..=c1.y {
-                for z in c0.z..=c1.z {
-                    grid.entry([x, y, z]).or_default().push(k);
+    }
+    for (a, ta) in tris.iter().enumerate() {
+        for &k in levels.range(at[a]..) {
+            for c in cells_of(ta, k) {
+                let Some(list) = grid.get(&(k, c)) else {
+                    continue;
+                };
+                for &b in list {
+                    // A pair of one level is taken once, from the lower index; a pair is met
+                    // in every cell its boxes share, and tested in the one holding the low
+                    // corner of their overlap.
+                    if (k == at[a] && b <= a) || cell(ta.lo.max(tris[b].lo) - pad, k) != c {
+                        continue;
+                    }
+                    test(ta, &tris[b]);
                 }
-            }
-        }
-    }
-    for (c, list) in &grid {
-        for (i, &a) in list.iter().enumerate() {
-            for &b in &list[i + 1..] {
-                // A pair is met in every cell they share; test it in the one holding the low
-                // corner of their boxes' overlap.
-                let corner = at(tris[a].lo.max(tris[b].lo));
-                if corner.to_array() == *c {
-                    test(&tris[a], &tris[b]);
-                }
-            }
-        }
-    }
-    for (i, &a) in big.iter().enumerate() {
-        for b in (0..tris.len()).filter(|b| !big[..i].contains(b)) {
-            if b != a {
-                test(&tris[a], &tris[b]);
             }
         }
     }
