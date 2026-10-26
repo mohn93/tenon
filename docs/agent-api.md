@@ -676,7 +676,8 @@ The answer is `{"type": "cut_list", "rows": [{"name", "material", "length", "wid
   nested placements multiplied). The boxes tried are the one along the placement's own axes
   (which wins a tie, so a board reads as drawn) and, for each shown face (the largest first), the
   ones with its normal and each of its sides; the least volume wins, then the least area for a
-  flat part. A board turned 30 degrees reads its true size, a scaled instance its scaled size, a
+  flat part. The facets of a smooth surface (faces with a soft edge) and the sides of circles and
+  arcs give no box, so a dowel reads its diameter rather than the width across its flats. A board turned 30 degrees reads its true size, a scaled instance its scaled size, a
   sheared or skewed part the box that fits it tightest. Parts with very many corners try fewer
   faces (about two million corner-frame measurements at most).
 - `material` is the name of the material most faces of the part show outside, else the

@@ -10,7 +10,7 @@ use std::collections::{BTreeSet, HashMap};
 use glam::{DAffine3, DMat3, DVec3};
 
 use crate::geom::vector_area;
-use crate::ids::{DefinitionId, InstanceId, MaterialId, TagId};
+use crate::ids::{DefinitionId, InstanceId, MaterialId, TagId, VertexId};
 use crate::mass::dominant_material;
 use crate::model::{Instance, Model};
 use crate::scene::{DefinitionKind, MeshId, Scene};
@@ -97,11 +97,24 @@ struct Shape {
 const WORK: usize = 2_000_000;
 
 impl Shape {
-    /// Adds the shown geometry of `m`, `place` taking its points to the final space.
+    /// Adds the shown geometry of `m`, `place` taking its points to the final space. The
+    /// facets of a smooth surface (a face with a soft edge) and the sides of circles and arcs
+    /// give no frame: they approximate a round part, whose box follows the round, not its
+    /// flats.
     fn add(&mut self, scene: &Scene, m: &Model, hidden: &BTreeSet<TagId>, place: &DAffine3) {
         self.points
             .extend(shown_points(m, hidden).map(|p| place.transform_point3(p)));
+        let edge = |a: VertexId, b: VertexId| m.edge_between(a, b).and_then(|e| m.edge(e));
         for (_, f) in m.faces().filter(|(_, f)| scene.face_shown(f)) {
+            let n = f.outer.len();
+            let ring = |i: usize| (f.outer[i], f.outer[(i + 1) % n]);
+            if std::iter::once(&f.outer)
+                .chain(&f.holes)
+                .flat_map(|l| (0..l.len()).map(move |i| (l[i], l[(i + 1) % l.len()])))
+                .any(|(a, b)| edge(a, b).is_some_and(|e| e.soft))
+            {
+                continue;
+            }
             let pts: Vec<DVec3> = f
                 .outer
                 .iter()
@@ -111,8 +124,12 @@ impl Shape {
             let Some(normal) = area.try_normalize() else {
                 continue;
             };
-            let sides: Vec<DVec3> = (0..pts.len())
-                .filter_map(|i| (pts[(i + 1) % pts.len()] - pts[i]).try_normalize())
+            let sides: Vec<DVec3> = (0..n)
+                .filter(|i| {
+                    let (a, b) = ring(*i);
+                    !edge(a, b).is_some_and(|e| e.curve.is_some() && !e.polygon)
+                })
+                .filter_map(|i| (pts[(i + 1) % n] - pts[i]).try_normalize())
                 .collect();
             self.faces.push((normal, area.length(), sides));
         }
