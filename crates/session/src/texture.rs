@@ -80,6 +80,58 @@ pub fn decode(encoded: Vec<u8>) -> Result<TextureImage, String> {
     })
 }
 
+/// A PNG or JPEG file's bytes turned upright as its EXIF orientation says (a phone keeps a
+/// photo on its side and says so), re-encoded in the same format; the bytes as they are when
+/// they need no turning. Fails, saying why, as [`decode`] does, and when the turned image
+/// would be more than [`MAX_TEXTURE_BYTES`].
+pub fn upright(encoded: Vec<u8>) -> Result<Vec<u8>, String> {
+    use image::ImageDecoder;
+    use image::metadata::Orientation;
+
+    let (format, _, _) = dimensions(&encoded)?;
+    let turned = {
+        let mut reader = ImageReader::new(Cursor::new(&encoded[..]))
+            .with_guessed_format()
+            .map_err(|_| "the image is broken".to_string())?;
+        let mut limits = Limits::default();
+        limits.max_image_width = Some(MAX_TEXTURE_PIXELS);
+        limits.max_image_height = Some(MAX_TEXTURE_PIXELS);
+        reader.limits(limits);
+        let mut decoder = reader
+            .into_decoder()
+            .map_err(|_| "the image is broken".to_string())?;
+        // An unreadable orientation is taken as none, as viewers do.
+        let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+        if orientation == Orientation::NoTransforms {
+            None
+        } else {
+            let mut image = image::DynamicImage::from_decoder(decoder)
+                .map_err(|_| "the image is broken".to_string())?;
+            image.apply_orientation(orientation);
+            Some(image)
+        }
+    };
+    let Some(image) = turned else {
+        return Ok(encoded);
+    };
+    let mut turned = Vec::new();
+    let written = match format {
+        ImageFormat::Jpeg => image::DynamicImage::ImageRgb8(image.to_rgb8()).write_with_encoder(
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut turned, 92),
+        ),
+        ImageFormat::Png => {
+            image.write_with_encoder(image::codecs::png::PngEncoder::new(&mut turned))
+        }
+    };
+    written.map_err(|_| "the image could not be turned upright".to_string())?;
+    if turned.len() as u64 > MAX_TEXTURE_BYTES {
+        return Err(format!(
+            "file too large: turned upright, the image is more than {MAX_TEXTURE_BYTES} bytes"
+        ));
+    }
+    Ok(turned)
+}
+
 /// A texture `width` by `height` meters of a PNG or JPEG file's bytes, decoded as [`decode`]
 /// does. Fails, saying why, as [`decode`] does; the size is checked when the texture is given
 /// to a material.
@@ -150,6 +202,50 @@ mod tests {
         assert!(err.contains("at most 4096"), "{err}");
         let err = decode(vec![0; MAX_TEXTURE_BYTES as usize + 1]).unwrap_err();
         assert!(err.contains("file too large"), "{err}");
+    }
+
+    /// A JPEG `width` x `height` pixels, left half dark and right half light, whose EXIF
+    /// orientation is `orientation`.
+    fn oriented_jpeg(width: u32, height: u32, orientation: u16) -> Vec<u8> {
+        let mut jpeg = Vec::new();
+        image::RgbImage::from_fn(width, height, |x, _| {
+            image::Rgb(if x < width / 2 { [0; 3] } else { [255; 3] })
+        })
+        .write_to(&mut Cursor::new(&mut jpeg), image::ImageFormat::Jpeg)
+        .unwrap();
+        // An APP1 Exif segment after SOI: a little-endian TIFF header with one IFD entry.
+        let mut tiff = b"II*\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0".to_vec();
+        tiff.extend(orientation.to_le_bytes());
+        tiff.extend([0, 0, 0, 0, 0, 0]);
+        let mut app1 = b"Exif\0\0".to_vec();
+        app1.extend(tiff);
+        let mut out = jpeg[..2].to_vec();
+        out.extend([0xFF, 0xE1]);
+        out.extend(((app1.len() + 2) as u16).to_be_bytes());
+        out.extend(app1);
+        out.extend(&jpeg[2..]);
+        out
+    }
+
+    #[test]
+    fn upright_turns_a_photo_kept_on_its_side_and_leaves_others_as_they_are() {
+        let plain = png(3, 2);
+        assert_eq!(upright(plain.clone()).unwrap(), plain);
+        let level = oriented_jpeg(16, 8, 1);
+        assert_eq!(upright(level.clone()).unwrap(), level);
+        // 6: turn 90 degrees clockwise to show; the dark left half ends on top.
+        let turned = decode(upright(oriented_jpeg(16, 8, 6)).unwrap()).unwrap();
+        assert_eq!(
+            (turned.format, turned.width, turned.height),
+            (ImageFormat::Jpeg, 8, 16)
+        );
+        let at = |x: u32, y: u32| turned.pixels[((y * turned.width + x) * 4) as usize];
+        assert!(
+            at(4, 2) < 60 && at(4, 13) > 200,
+            "{} {}",
+            at(4, 2),
+            at(4, 13)
+        );
     }
 
     #[test]

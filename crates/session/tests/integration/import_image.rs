@@ -310,3 +310,75 @@ fn the_image_survives_saving_and_exports_as_a_textured_face() {
     );
     assert!(doc["meshes"][0]["primitives"][0]["attributes"]["TEXCOORD_0"].is_u64());
 }
+
+#[test]
+fn the_image_corners_land_on_the_face_corners_for_any_normal_and_x_axis() {
+    let cases: [([f64; 3], Option<[f64; 3]>); 7] = [
+        ([0.0, 0.0, -1.0], None),
+        ([0.0, 0.0, -1.0], Some([0.0, 1.0, 0.0])),
+        ([-1.0, 0.0, 0.0], None),
+        ([0.0, -1.0, 1.0], Some([1.0, 1.0, 0.0])),
+        ([0.3, -0.5, -0.8], Some([1.0, 2.0, 3.0])),
+        ([0.0, 0.0, 1.0], Some([1.0, 1e-12, 0.0])),
+        ([1e-12, 0.0, 1.0], None),
+    ];
+    let file = png("corners.png", 4, 2);
+    let origin = DVec3::new(3.0, -2.0, 5.0);
+    for (n, given) in cases {
+        let mut d = doc();
+        let mut extra = json!({"origin": origin.to_array(), "normal": n, "width": 2, "lift": 0});
+        if let Some(x) = given {
+            extra["x_axis"] = json!(x);
+        }
+        let out = run(&mut d, pic(&file, extra)).unwrap();
+        let (points, front, _, normal) = corners(&d, &out);
+        let n = DVec3::from(n).normalize();
+        assert!((normal - n).length() < 1e-6, "{n:?} {normal:?}");
+        // Measured in the picture's own frame: width along x_axis, height along normal x x_axis.
+        let x = points
+            .iter()
+            .zip(&front)
+            .find(|(_, f)| near(**f, DVec2::new(2.0, 0.0)))
+            .map(|(p, _)| (*p - origin) / 2.0)
+            .expect("an image corner at (2, 0)");
+        let y = n.cross(x);
+        for (p, f) in points.iter().zip(&front) {
+            let rel = *p - origin;
+            let at = DVec2::new(rel.dot(x), rel.dot(y));
+            assert!((*f - at).length() < 1e-6, "{n:?}: {f:?} at {at:?}");
+        }
+        if let Some(given) = given {
+            let given = DVec3::from(given);
+            let flat = (given - n * given.dot(n)).normalize();
+            assert!((x - flat).length() < 1e-6, "{n:?}: width runs along {x:?}");
+        }
+    }
+}
+
+#[test]
+fn a_photo_kept_on_its_side_is_placed_upright() {
+    // A 16 x 8 pixel JPEG whose EXIF orientation (6) says to turn it a quarter clockwise.
+    let mut jpeg = Vec::new();
+    image::RgbImage::new(16, 8)
+        .write_to(
+            &mut std::io::Cursor::new(&mut jpeg),
+            image::ImageFormat::Jpeg,
+        )
+        .unwrap();
+    let mut app1 =
+        b"Exif\0\0II*\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0\x06\0\0\0\0\0\0\0".to_vec();
+    let mut photo = vec![0xFF, 0xD8, 0xFF, 0xE1];
+    photo.extend(((app1.len() + 2) as u16).to_be_bytes());
+    photo.append(&mut app1);
+    photo.extend(&jpeg[2..]);
+    let data = base64::engine::general_purpose::STANDARD.encode(photo);
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "import_image", "data": data, "origin": [0, 0, 0], "width": 1}),
+    )
+    .unwrap();
+    let m = &ask(&d, json!({"type": "materials"}))["materials"][0];
+    assert_eq!(m["texture"]["pixel_width"], 8, "{m}");
+    assert_eq!(m["texture"]["height"], 2.0, "{m}");
+}

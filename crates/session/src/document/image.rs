@@ -14,7 +14,7 @@ use super::import::read_limited;
 use super::{Document, check_coordinates, unit_vector};
 use crate::command::{CommandError, ErrorKind};
 use crate::texture::{
-    MAX_TEXTURE_BYTES, average_color, check_total_pixels, dimensions, texture_from_bytes,
+    MAX_TEXTURE_BYTES, average_color, check_total_pixels, dimensions, texture_from_bytes, upright,
 };
 
 /// The name of the group and material when the image has none to give.
@@ -72,6 +72,7 @@ impl Document {
             }
         };
         let (bytes, stem) = read_image(path, data)?;
+        let bytes = upright(bytes).map_err(|e| image_error(path, e))?;
         let (_, pixels_wide, pixels_high) = dimensions(&bytes).map_err(|e| image_error(path, e))?;
         check_total_pixels(
             self.texture_pixels_besides(None),

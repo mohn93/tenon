@@ -26,7 +26,11 @@ impl Editor {
     /// `import_image` step; Escape goes back to the tool used before. An image over the
     /// texture limits (see `import_image`) or a broken file is refused, with why in the status.
     pub fn place_image(&mut self, name: &str, bytes: &[u8]) -> Result<(), CommandError> {
-        let (_, wide, high) = match texture::dimensions(bytes) {
+        // Turned upright and decoded once here, so a broken file is refused before the tool
+        // comes out and the outline has the proportions the picture will have.
+        let checked = texture::upright(bytes.to_vec())
+            .and_then(|b| texture::decode(b.clone()).map(|i| (b, i.width, i.height)));
+        let (bytes, wide, high) = match checked {
             Ok(d) => d,
             Err(m) => {
                 return Err(self.refuse(CommandError::new(
@@ -42,7 +46,7 @@ impl Editor {
             .unwrap_or(DEFAULT_NAME);
         self.start_paste_tool(ImageTool::new(ImageSpec {
             name: stem.to_string(),
-            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+            data: base64::engine::general_purpose::STANDARD.encode(&bytes),
             aspect: f64::from(high) / f64::from(wide),
         }));
         Ok(())

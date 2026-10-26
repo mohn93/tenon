@@ -298,8 +298,8 @@ pub enum Command {
     /// Place a PNG or JPEG picture as a new group named `name` (default the file's name without
     /// its extension, or "Image"): one rectangle face `width` meters wide (0.001 to 1000) and as
     /// high as the image's proportions make it, painted front and back with a new material of
-    /// the same name (made unique) whose texture is the image, fitted to fill the face exactly
-    /// (the back is not mirrored). Give the image as `path` (a PNG or JPEG file of at most 16
+    /// the same name (made unique) whose texture is the image (turned upright first when its
+    /// EXIF orientation says so), fitted to fill the face exactly (the back is not mirrored). Give the image as `path` (a PNG or JPEG file of at most 16
     /// MiB and 4096 pixels on each side) or `data` (the file's bytes in base64); exactly one.
     /// `origin` is the picture's lower left corner, in the open context. `normal` (default Z)
     /// is the way the picture faces; `x_axis` (default horizontal in the plane, or X on a level
