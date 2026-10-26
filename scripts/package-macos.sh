@@ -62,7 +62,24 @@ mkdir -p "$stage"
 cp -R "$app" "$stage/"
 ln -s /Applications "$stage/Applications"
 dmg="$out/sketchup-alt-$version-macos-$arch_name.dmg"
-hdiutil create -volname "sketchup-alt $version" -srcfolder "$stage" -ov -format UDZO "$dmg"
+# hdiutil sizes the image itself, but on a busy runner it has failed with "No space left on
+# device" or "Resource busy"; so the size is given (the folder's size plus 20% and 20 MB) and a
+# failed attempt is retried after a pause, with a leftover mount of the volume detached first.
+stage_kb="$(du -sk "$stage" | awk '{ print $1 }')"
+size_mb=$(( stage_kb / 1024 * 12 / 10 + 20 ))
+volname="sketchup-alt $version"
+attempt=1
+until hdiutil create -volname "$volname" -srcfolder "$stage" -size "${size_mb}m" -ov -format UDZO "$dmg"; do
+    if [ "$attempt" -ge 4 ]; then
+        echo "hdiutil create failed $attempt times" >&2
+        exit 1
+    fi
+    echo "hdiutil create failed (attempt $attempt); retrying" >&2
+    hdiutil detach "/Volumes/$volname" -force >/dev/null 2>&1 || true
+    rm -f "$dmg"
+    sleep $(( attempt * 5 ))
+    attempt=$(( attempt + 1 ))
+done
 rm -rf "$stage"
 
 lipo -archs "$app/Contents/MacOS/app"
