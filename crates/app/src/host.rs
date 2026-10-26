@@ -447,6 +447,7 @@ fn tool_input_result(editor: &Editor, driven: Driven) -> ToolInputResult {
         commands: driven
             .issued
             .into_iter()
+            .map(|(command, result)| (without_image_data(command), result))
             .map(|(command, result)| match result {
                 Ok(outcome) => Issued {
                     command,
@@ -462,6 +463,18 @@ fn tool_input_result(editor: &Editor, driven: Driven) -> ToolInputResult {
             .collect(),
         revision: editor.doc().revision(),
     }
+}
+
+/// `command` as `tool_input` reports it: a picture's image data (up to 16 MiB, in base64) is
+/// left out, said in its place, so placing an image does not send the image back.
+fn without_image_data(mut command: Command) -> Command {
+    if let Command::ImportImage {
+        data: Some(data), ..
+    } = &mut command
+    {
+        *data = format!("({} base64 characters left out)", data.len());
+    }
+    command
 }
 
 /// The editor's state as agents see it.

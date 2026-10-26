@@ -2675,6 +2675,9 @@ fn place_image_follows_the_cursor_and_two_clicks_size_and_place_it() {
     assert_eq!(r["preview"].as_array().unwrap().len(), 4, "{r}");
     let r = input(&mut e, json!([{"type": "click", "point": [5, 2, 0]}]));
     assert_eq!(ran(&r), ["import_image"], "{r}");
+    // The image data is not sent back.
+    let sent = r["commands"][0]["command"]["data"].as_str().unwrap();
+    assert!(sent.contains("left out") && sent.len() < 64, "{sent}");
     assert_eq!(r["editor"]["tool"], "line", "{r}");
     assert_eq!(r["editor"]["phase"], "idle", "{r}");
     let m = ask(&mut e, json!({"type": "materials"}));
@@ -2738,9 +2741,15 @@ fn place_image_refuses_oversize_and_broken_images_before_the_tool_comes_out() {
     image::RgbaImage::new(8192, 1)
         .write_to(&mut std::io::Cursor::new(&mut big), image::ImageFormat::Png)
         .unwrap();
+    // A whole header but a cut-off body is caught too.
+    let mut cut = base64::engine::general_purpose::STANDARD
+        .decode(picture_data())
+        .unwrap();
+    cut.truncate(cut.len() - 20);
     for data in [
         base64::engine::general_purpose::STANDARD.encode(big),
         base64::engine::general_purpose::STANDARD.encode(b"hello"),
+        base64::engine::general_purpose::STANDARD.encode(cut),
     ] {
         let r = call(
             &mut e,

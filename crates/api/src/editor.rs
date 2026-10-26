@@ -249,7 +249,8 @@ pub enum EditorCommand {
     /// base64), exactly one. A picture follows the cursor on the face or ground plane under it;
     /// the first click (`tool_input`) sets a corner, moving sizes it keeping the image's
     /// proportions, a typed length sets the width, and the second click (or the typed width)
-    /// places it as one `import_image` step. Escape or `cancel` goes back to the tool used
+    /// places it as one `import_image` step, facing the camera (`tool_input` reports it with
+    /// `data` left out). Escape or `cancel` goes back to the tool used
     /// before. `invalid_input` or `file` for an image over the limits (see `import_image`),
     /// before the tool comes out.
     PlaceImage {
