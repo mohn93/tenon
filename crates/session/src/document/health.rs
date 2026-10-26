@@ -83,6 +83,14 @@ fn problems(definition: DefinitionId, health: &Health) -> Vec<HealthProblem> {
             count(n, "internal face", "internal faces"),
         );
     }
+    if !h.self_crossing.is_empty() {
+        let n = h.self_crossing.len();
+        add(
+            ProblemKind::SelfCrossing,
+            faces(&h.self_crossing),
+            format!("{} cross each other", count(n, "face", "faces")),
+        );
+    }
     if h.no_volume {
         add(
             ProblemKind::NoVolume,
@@ -245,6 +253,7 @@ impl Document {
                     parts: holders[&d].clone(),
                     fixed,
                     welded: r.welded,
+                    tjunctions_mended: r.tjunctions_mended,
                     strays_removed: r.strays_removed,
                     internal_removed: r.internal_removed,
                     holes_filled: r.holes_filled,
@@ -258,6 +267,7 @@ impl Document {
                     parts: holders[&d].clone(),
                     fixed,
                     welded: 0,
+                    tjunctions_mended: 0,
                     strays_removed: 0,
                     internal_removed: 0,
                     holes_filled: 0,
@@ -269,5 +279,28 @@ impl Document {
         }
         self.make_solid_report = Some(report);
         Ok(SceneChange::join(changes))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kernel::{DefinitionId, FaceId};
+
+    #[test]
+    fn faces_that_cross_each_other_are_a_problem_of_their_own() {
+        let health = Health {
+            reason: Some("its faces cross each other".into()),
+            self_crossing: vec![FaceId(3), FaceId(9)],
+            ..Health::default()
+        };
+        let list = problems(DefinitionId(1), &health);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].kind, ProblemKind::SelfCrossing);
+        assert_eq!(list[0].text, "2 faces cross each other");
+        assert_eq!(
+            list[0].ids,
+            vec![EntityId::Face(FaceId(3)), EntityId::Face(FaceId(9))]
+        );
     }
 }

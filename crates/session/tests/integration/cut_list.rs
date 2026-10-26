@@ -102,6 +102,26 @@ fn a_board_turned_thirty_degrees_keeps_its_true_size() {
 }
 
 #[test]
+fn a_sheared_board_reads_the_smallest_box_around_it() {
+    let mut d = doc();
+    let b = board(&mut d);
+    run(
+        &mut d,
+        json!({"type": "rotate", "ids": [b], "center": [0, 0, 0], "angle": 30}),
+    );
+    run(
+        &mut d,
+        json!({"type": "scale", "ids": [b], "origin": [0, 0, 0], "factors": [2, 1, 1]}),
+    );
+    let r = rows(&d, json!({"type": "cut_list"}));
+    assert_eq!(r.len(), 1);
+    let s = size(&r[0]);
+    for (got, want) in s.iter().zip([1.874_86, 0.110_94, 0.02]) {
+        assert!((got - want).abs() < 1e-4, "{s:?}");
+    }
+}
+
+#[test]
 fn a_scaled_instance_is_its_own_row() {
     let mut d = doc();
     let b = board(&mut d);
@@ -402,4 +422,64 @@ fn the_open_contexts_cut_list_is_written_as_the_window_shows_it() {
         json!({"type": "export", "path": whole.to_str().unwrap()}),
     );
     assert!(std::fs::read_to_string(&whole).unwrap().contains("Board"));
+}
+
+#[test]
+fn instances_that_differ_only_in_the_shape_of_their_placement_are_sized_apart() {
+    // One board as drawn, one mirrored, one stretched then turned (no shear) and one turned
+    // then stretched (sheared): the sizes found for one placement are not reused for another.
+    let mut d = doc();
+    let a = board(&mut d);
+    let copy = |d: &mut Document, y: f64| {
+        run(d, json!({"type": "copy", "ids": [a], "offset": [0, y, 0]}))["placed"][0].clone()
+    };
+    let mirrored = copy(&mut d, 1.0);
+    run(
+        &mut d,
+        json!({"type": "scale", "ids": [mirrored], "origin": [0, 1, 0], "factors": [-1, 1, 1]}),
+    );
+    let plain = copy(&mut d, 2.0);
+    run(
+        &mut d,
+        json!({"type": "scale", "ids": [plain], "origin": [0, 2, 0], "factors": [2, 1, 1]}),
+    );
+    run(
+        &mut d,
+        json!({"type": "rotate", "ids": [plain], "center": [0, 2, 0], "angle": 30}),
+    );
+    let sheared = copy(&mut d, 3.0);
+    run(
+        &mut d,
+        json!({"type": "rotate", "ids": [sheared], "center": [0, 3, 0], "angle": 30}),
+    );
+    run(
+        &mut d,
+        json!({"type": "scale", "ids": [sheared], "origin": [0, 3, 0], "factors": [2, 1, 1]}),
+    );
+    let r = rows(&d, json!({"type": "cut_list"}));
+    assert_eq!(r.len(), 3, "{r:?}");
+    close(size(&r[0]), [2.0, 0.1, 0.02]);
+    assert_eq!(r[0]["ids"], json!([plain]));
+    let s = size(&r[1]);
+    for (got, want) in s.iter().zip([1.874_86, 0.110_94, 0.02]) {
+        assert!((got - want).abs() < 1e-4, "{s:?}");
+    }
+    assert_eq!(r[1]["ids"], json!([sheared]));
+    close(size(&r[2]), [1.0, 0.1, 0.02]);
+    assert_eq!(r[2]["quantity"], 2);
+}
+
+#[test]
+fn a_dowel_reads_its_diameter_not_the_width_across_its_flats() {
+    // The sides of a circle are not taken for the sides of the part: a 24-sided cylinder
+    // read along its flats would be 1.7% smaller than the circle drawn.
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_cylinder", "base": [0, 0, 0], "radius": 0.015, "height": 0.5,
+               "segments": 24, "as": "component"}),
+    );
+    let r = rows(&d, json!({"type": "cut_list"}));
+    assert_eq!(r.len(), 1);
+    close(size(&r[0]), [0.5, 0.03, 0.03]);
 }

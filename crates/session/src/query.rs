@@ -226,6 +226,8 @@ pub enum ProblemKind {
     Gaps,
     /// Faces every one of whose edges bounds three or more faces.
     InternalFaces,
+    /// Faces of a closed shell that cross another face of it.
+    SelfCrossing,
     /// Closed, but enclosing no volume.
     NoVolume,
     /// The part has no faces at all.

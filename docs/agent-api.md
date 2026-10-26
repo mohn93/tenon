@@ -569,7 +569,7 @@ its own (only instances) has nothing to check.
 
 | Query | Answer |
 |---|---|
-| `{"type": "model_health"}` | `{"type": "model_health", "parts": [{"id", "name", "fixable", "problems": [{"definition", "kind", "ids", "text"}]}], "checked", "revision"}`: the parts among the open context's groups and components (`ids` limits them; every one when absent or empty) that are not solids, in order, `checked` how many parts were looked at. `name` is the definition's name; `fixable` is whether `make_solid` would close every definition of the part (the repair is tried on copies). Each problem names the definition and its entities in id order: `open_edges` (edges bounding one face), `shared_edges` (edges shared by more than two faces), `stray_edges` (edges bounding no face), `reversed_faces` (faces turned inside out: in a closed shell those facing in, in an open shell whose faces disagree the side with less area), `gaps` (vertices on open edges nearer each other than the weld tolerance, as pairs: `["v3", "v40", ...]`), `internal_faces` (faces every one of whose edges bounds three or more faces), `no_volume` (closed but enclosing no volume, `ids` empty) and `no_faces` (the part has no faces anywhere, `ids` empty); `text` says it in words (`"4 open edges"`, `"1 face inside out"`). Never changes the model. |
+| `{"type": "model_health"}` | `{"type": "model_health", "parts": [{"id", "name", "fixable", "problems": [{"definition", "kind", "ids", "text"}]}], "checked", "revision"}`: the parts among the open context's groups and components (`ids` limits them; every one when absent or empty) that are not solids, in order, `checked` how many parts were looked at. `name` is the definition's name; `fixable` is whether `make_solid` would close every definition of the part (the repair is tried on copies). Each problem names the definition and its entities in id order: `open_edges` (edges bounding one face), `shared_edges` (edges shared by more than two faces), `stray_edges` (edges bounding no face), `reversed_faces` (faces turned inside out: in a closed shell those facing in, in an open shell whose faces disagree the side with less area), `gaps` (vertices on open edges nearer each other than the weld tolerance, as pairs: `["v3", "v40", ...]`), `internal_faces` (faces every one of whose edges bounds three or more faces), `self_crossing` (faces of a closed shell that cross another face of it other than along shared edges, vertices or coplanar boundaries: a corner pushed through the opposite wall; such a part is not a solid and `make_solid` leaves it, saying why; two shells in one definition are not compared with each other), `no_volume` (closed but enclosing no volume, `ids` empty) and `no_faces` (the part has no faces anywhere, `ids` empty); `text` says it in words (`"4 open edges"`, `"1 face inside out"`). Never changes the model. |
 
 | Command | Effect |
 |---|---|
@@ -578,29 +578,34 @@ its own (only instances) has nothing to check.
 The repair runs on a copy of the definition, in this order: vertices on open edges nearer than
 the weld tolerance are merged into the lower id (the tolerance is 1e-5 of the definition's
 bounding-box diagonal, at least 0.001 mm and at most 1 mm, and less than a quarter of every edge
-at either vertex; faces at a merged vertex get their normal refitted); edges bounding no face are
-removed; internal faces are removed; each shell (faces reached across edges with exactly two
+at either vertex; faces at a merged vertex get their normal refitted); open edges with other open
+vertices lying on them (T-junctions: within the weld tolerance of the edge and further than it
+from its ends) are split there, the edge's face gaining the vertices and the long edge going;
+edges bounding no face are removed; internal faces are removed; each shell (faces reached across edges with exactly two
 faces) is made to agree, the side with less area turning; each hole (the loops the open edges
 make) is filled with one face when it is flat (every vertex within 0.001 mm of its plane, the
 flatness every face keeps) and does not cross itself, a hole lying inside another in the same
 plane and facing the other way becoming that face's hole (the ring on top of a tube); then each
 closed shell is turned to face outward, or inward when it lies inside an odd number of other
-closed shells (a void stays a void). A hole that is not flat, has no area, crosses itself, lies
-inside another the same way, whose loops meet at a vertex, or whose face would cut through the
-part (an edge crossing it or a vertex lying on it), is not filled (no patch is guessed),
+closed shells (a void stays a void). A hole that is not flat is patched with triangles instead
+(`holes_filled` counts holes): its loop is projected on the plane through its centroid with its
+area normal and ear clipped, new edges running the diagonals. A hole that has no area, crosses
+itself (flat, or flattened for a patch), cannot be triangulated, lies inside another the same
+way, whose loops meet at a vertex, or whose face or patch would cut through the part (an edge
+crossing it or a vertex lying on it, or the closed shell then crossing itself), is not filled,
 and edges still shared by more than two faces (two boxes meeting along one edge) are never
 "fixed". The copy replaces the definition only when it is a solid afterwards and every face made
 or touched is flat, wound the right way and triangulates; otherwise the definition is left exactly
 as it was.
 
 The outcome has `"make_solid": {"entries": [{"definition", "parts", "fixed", "welded",
-"strays_removed", "internal_removed", "holes_filled", "faces_flipped", "left", "reasons"}],
+"tjunctions_mended", "strays_removed", "internal_removed", "holes_filled", "faces_flipped", "left", "reasons"}],
 "solid"}`: one entry per definition that was not a solid, in the order the parts reach them,
 `parts` the parts named (or all) that place it, and `solid` how many definitions were solids
 already. A fixed entry has the counts (`faces_flipped`: faces whose side ended up turned over) and
 empty `left` and `reasons`; an entry with `fixed: false` has zero counts, the problems still found
 after the attempt in `left` (as `model_health` lists them) and why in `reasons` (`"the hole at e12
-is not flat"`, `"holes meet at vertex v7"`). Ids that are not instances are `invalid_input`,
+cannot be triangulated"`, `"holes meet at vertex v7"`). Ids that are not instances are `invalid_input`,
 unknown ones `not_found`. A batch can refer to `ids`.
 
 ### Interference and clearance
@@ -667,9 +672,14 @@ The answer is `{"type": "cut_list", "rows": [{"name", "material", "length", "wid
   tag) are not parts. `ids` of a row are the
   instances of the open context that hold the parts (the cabinet, not its shelves), sorted.
 - `length`, `width` and `thickness` (meters, longest to shortest) are the part's own box: the
-  extent of its shown geometry (hidden edges and faces do not count) along the definition's axes times the length of each axis of its
-  placement (all the nested placements multiplied). A board turned 30 degrees reads its true
-  size, a scaled instance its scaled size; a shear is not followed.
+  smallest box around its shown geometry (hidden edges and faces do not count) as placed (all the
+  nested placements multiplied). The boxes tried are the one along the placement's own axes
+  (which wins a tie, so a board reads as drawn) and, for each shown face (the largest first), the
+  ones with its normal and each of its sides; the least volume wins, then the least area for a
+  flat part. The facets of a smooth surface (faces with a soft edge) and the sides of circles and
+  arcs give no box, so a dowel reads its diameter rather than the width across its flats. A board turned 30 degrees reads its true size, a scaled instance its scaled size, a
+  sheared or skewed part the box that fits it tightest. Parts with very many corners try fewer
+  faces (about two million corner-frame measurements at most).
 - `material` is the name of the material most faces of the part show outside, else the
   instance's, else the nearest enclosing instance's; absent when none.
 - `solid` is false for a part whose geometry is not closed or encloses no volume; `note` says why
