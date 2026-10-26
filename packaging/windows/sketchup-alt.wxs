@@ -14,14 +14,15 @@
       <Directory Id="INSTALLFOLDER" Name="sketchup-alt" />
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder">
-      <Directory Id="StartMenuFolder" Name="sketchup-alt" />
+      <Directory Id="AppMenuFolder" Name="sketchup-alt" />
     </StandardDirectory>
 
     <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
       <Component Id="AppExeComponent">
         <File Id="AppExe" Source="$(var.ExePath)" KeyPath="yes" />
-        <!-- .skr files open with the program (the path arrives as its argument). -->
-        <ProgId Id="sketchup-alt.skr" Description="sketchup-alt model" Icon="AppIcon">
+        <!-- .skr files open with the program (the path arrives as its argument); their icon is
+             the one embedded in app.exe, since a ProgId icon names a file, not an Icon. -->
+        <ProgId Id="sketchup-alt.skr" Description="sketchup-alt model" Icon="AppExe" IconIndex="0">
           <Extension Id="skr" ContentType="application/x-sketchup-alt">
             <Verb Id="open" Command="Open" TargetFile="AppExe" Argument="&quot;%1&quot;" />
           </Extension>
@@ -32,7 +33,7 @@
       </Component>
     </ComponentGroup>
 
-    <ComponentGroup Id="Shortcuts" Directory="StartMenuFolder">
+    <ComponentGroup Id="Shortcuts" Directory="AppMenuFolder">
       <Component Id="StartMenuComponent">
         <Shortcut Id="StartMenuShortcut" Name="sketchup-alt" Target="[INSTALLFOLDER]app.exe"
                   WorkingDirectory="INSTALLFOLDER" />
