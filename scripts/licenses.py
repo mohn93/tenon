@@ -7,7 +7,8 @@
 
 The crates are those reachable through normal (not dev or build) dependency edges from the `app`
 crate on the native targets that are packaged and from the `web` crate on wasm32, as `cargo
-metadata --filter-platform` resolves them from Cargo.lock. Each crate's licence files (LICENSE*,
+metadata --filter-platform` resolves them from Cargo.lock; proc-macro crates run only in the
+compiler, so they and what only they depend on are left out. Each crate's licence files (LICENSE*,
 COPYING*, NOTICE* ...) are read from its package in the cargo registry source cache; identical
 texts are printed once with the crates that carry them. Python standard library only; `cargo`
 must be on the PATH. With --offline cargo does not fetch (the packages must already be cached).
@@ -72,12 +73,27 @@ FALLBACKS = [
     (r"spirv", ["rspirv-Apache-2.0.txt"]),
 ]
 
+# Licence texts of bundled content kept under other names, beside the crate's own licence: paths
+# in the crate's package, or under packaging/licenses when the package does not carry the text.
+EXTRA_FILES = {
+    # The fonts compiled into egui: Ubuntu-Light (Ubuntu font licence), NotoEmoji (OFL), Hack
+    # (MIT and the Bitstream Vera licence) and the emoji icon font (MIT).
+    "epaint_default_fonts": [
+        "fonts/UFL.txt", "fonts/OFL.txt", "fonts/Hack-Regular.txt",
+        "fonts/emoji-icon-font-mit-license.txt",
+    ],
+    # The Phosphor icon fonts in res/ (MIT, Phosphor Icons), as the crate's README names them.
+    "egui-phosphor": ["packaging/licenses/phosphor-icons-MIT.txt"],
+}
+
 SKIP_DIRS = {"target", "tests", "test", "testdata", "examples", "benches", "fuzz", "node_modules"}
 
 # File names taken for a licence or notice text.
 LICENCE_FILE = re.compile(
     r"^(LICEN[CS]E|COPYING|COPYRIGHT|NOTICE|UNLICENSE|PATENTS)([-_.].*)?$", re.IGNORECASE
 )
+# Source files that match LICENCE_FILE by name (objc2-foundation's src/copying.rs).
+CODE_SUFFIXES = {".rs", ".c", ".h", ".py", ".toml", ".json", ".xml", ".sh"}
 
 
 def metadata(target):
@@ -89,7 +105,8 @@ def metadata(target):
 
 
 def shipped(meta, root_names):
-    """Packages reachable from the named workspace crates through normal dependency edges."""
+    """Packages reachable from the named workspace crates through normal dependency edges,
+    not entering proc-macro crates."""
     packages = {p["id"]: p for p in meta["packages"]}
     nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
     stack = [i for i, p in packages.items() if p["name"] in root_names and p["source"] is None]
@@ -99,10 +116,15 @@ def shipped(meta, root_names):
         if i in seen:
             continue
         seen.add(i)
+        if any("proc-macro" in t["kind"] for t in packages[i]["targets"]):
+            continue
         for dep in nodes[i]["deps"]:
             if any(k["kind"] is None for k in dep["dep_kinds"]):
                 stack.append(dep["pkg"])
-    return [packages[i] for i in seen]
+    return [
+        packages[i] for i in seen
+        if not any("proc-macro" in t["kind"] for t in packages[i]["targets"])
+    ]
 
 
 def collect():
@@ -128,7 +150,7 @@ def licence_files(package):
         rel = path.relative_to(folder)
         if not path.is_file() or any(part.lower() in SKIP_DIRS for part in rel.parts[:-1]):
             continue
-        if LICENCE_FILE.match(path.name):
+        if LICENCE_FILE.match(path.name) and path.suffix.lower() not in CODE_SUFFIXES:
             files.append(path)
     return files
 
@@ -145,8 +167,11 @@ def normal(text):
 
 
 def tokens(expr):
+    """The expression's tokens, with the legacy "/" read as OR and the operators upper-cased
+    (SPDX allows them in lower case)."""
     expr = expr.replace("/", " OR ")
-    return re.findall(r"\(|\)|[A-Za-z0-9.+-]+", expr)
+    toks = re.findall(r"\(|\)|[A-Za-z0-9.+-]+", expr)
+    return [t.upper() if t.upper() in ("AND", "OR", "WITH") else t for t in toks]
 
 
 def satisfied(expr, allowed=ALLOWED):
@@ -159,6 +184,8 @@ def satisfied(expr, allowed=ALLOWED):
 
     def take():
         nonlocal pos
+        if pos >= len(toks):
+            raise ValueError(f"bad expression {expr!r}")
         pos += 1
         return toks[pos - 1]
 
@@ -171,6 +198,8 @@ def satisfied(expr, allowed=ALLOWED):
             take()
             return v
         name = take()
+        if name in ("AND", "OR", "WITH", ")"):
+            raise ValueError(f"bad expression {expr!r}")
         if peek() == "WITH":
             take()
             name = f"{name} WITH {take()}"
@@ -221,6 +250,13 @@ def generate(packages):
         files = licence_files(p) or fallback_files(p["name"])
         if not files:
             problems.append(f"{label}: no licence file in the package")
+        folder = Path(p["manifest_path"]).parent
+        for extra in EXTRA_FILES.get(p["name"], []):
+            path = ROOT / extra if extra.startswith("packaging/") else folder / extra
+            if path.is_file():
+                files.append(path)
+            else:
+                problems.append(f"{label}: no {extra} in the package")
         for f in files:
             text = normal(f.read_bytes().decode("utf-8", errors="replace"))
             if text:

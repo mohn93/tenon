@@ -15,3 +15,4 @@ copyright holder from the crate's `authors`, as its repository holds no licence 
 | clipboard-win-BSL-1.0.txt | clipboard-win |
 | rspirv-Apache-2.0.txt | spirv |
 | dispatch-MIT.txt | dispatch |
+| phosphor-icons-MIT.txt | egui-phosphor (its icon fonts; from phosphor-icons/web, which the crate's README names) |
