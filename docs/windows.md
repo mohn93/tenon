@@ -100,8 +100,5 @@ See [packaging.md](packaging.md) for the installer (MSI) built by CI.
 - Under `--api-root`, folders on the way to a file are followed (an OneDrive folder is fine),
   but writing over a file that is a reparse point, such as a cloud file placeholder, is refused
   as a link; the error names symbolic links and other reparse points.
-- The zip does not yet carry the licence notices of the Rust crates compiled into `app.exe`
-  (MIT, Apache-2.0 and others). `THIRD_PARTY_NOTICES.md` covers the vendored code, test
-  fixtures and fonts only. They must be bundled before any public release.
 - Long paths: the app does not opt in to paths past 260 characters; such paths fail with the
   system's error.

@@ -17,6 +17,7 @@ wasm-bindgen --target web --no-typescript --remove-name-section --remove-produce
     --out-dir web/dist \
     "$target_dir/wasm32-unknown-unknown/web/web.wasm"
 cp web/index.html web/dist/index.html
+cp THIRD_PARTY_NOTICES.md web/dist/THIRD_PARTY_NOTICES.md
 # Gzip copies beside the module and its glue: the Open on Phone server and serve-web.sh send them
 # to browsers that take gzip (the module is about a third the size). -n leaves the name and time
 # out, so the same build makes the same bytes.
