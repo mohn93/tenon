@@ -1,0 +1,193 @@
+# Installable packages of the app, built as workflow artifacts only: nothing here creates a
+# release, a tag or a signature beyond macOS's ad-hoc one. Run by hand (Actions, Package, Run
+# workflow) or by a push to main; CI (ci.yml) is separate and unchanged. See docs/packaging.md.
+name: Package
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_VERSION: 1.99.0
+  # appimagetool 1.9.0 (the release of 2024-08-08), checked against these digests before use.
+  APPIMAGETOOL_VERSION: 1.9.0
+  APPIMAGETOOL_SHA256_X86_64: 46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1
+  APPIMAGETOOL_SHA256_AARCH64: 04f45ea45b5aa07bb2b071aed9dbf7a5185d3953b11b47358c1311f11ea94a96
+  # The AppImage runtime (type2-runtime 20251108), checked the same way and handed to
+  # appimagetool, which would otherwise fetch the unpinned "continuous" one.
+  APPIMAGE_RUNTIME_VERSION: "20251108"
+  APPIMAGE_RUNTIME_SHA256_X86_64: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+  APPIMAGE_RUNTIME_SHA256_AARCH64: 00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444
+  WIX_VERSION: 4.0.5
+
+jobs:
+  macos:
+    name: macos dmg
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal \
+            -t aarch64-apple-darwin -t x86_64-apple-darwin
+          rustup default "$RUST_VERSION"
+          rustc --version
+
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: package-macos-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            package-macos-${{ env.RUST_VERSION }}-
+
+      # Universal (aarch64 and x86_64), ad-hoc signed.
+      - name: Package
+        run: UNIVERSAL=1 scripts/package-macos.sh
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sketchup-alt-macos-dmg
+          path: target/package/macos/*.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+  windows:
+    name: windows msi and zip
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+          rustc --version
+
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: package-windows-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            package-windows-${{ env.RUST_VERSION }}-
+
+      # The C runtime is linked in, so neither package needs the Visual C++ redistributable.
+      # SKETCHUP_ALT_WINRES embeds the icon and version resource (crates/app/build.rs).
+      - name: Build
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+          SKETCHUP_ALT_WINRES: "1"
+        run: cargo build --release --locked -p app
+
+      - name: Zip
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -DestinationPath "dist/sketchup-alt-$version-windows-x86_64.zip" -Path `
+            target/release/app.exe, THIRD_PARTY_NOTICES.md, docs/windows.md
+
+      - name: Install WiX
+        run: dotnet tool install --global wix --version "$WIX_VERSION"
+
+      - name: MSI
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          wix build -arch x64 -o "dist/sketchup-alt-$version-windows-x86_64.msi" `
+            -d "Version=$version" -d "ExePath=target/release/app.exe" `
+            -d "IcoPath=packaging/icons/app.ico" -d "NoticesPath=THIRD_PARTY_NOTICES.md" `
+            packaging/windows/sketchup-alt.wxs
+          if ($LASTEXITCODE -ne 0) { throw "wix build failed" }
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sketchup-alt-windows
+          path: |
+            dist/*.msi
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  linux:
+    name: linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+          rustc --version
+
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: package-linux-${{ matrix.arch }}-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            package-linux-${{ matrix.arch }}-${{ env.RUST_VERSION }}-
+
+      - name: Fetch appimagetool
+        run: |
+          file="appimagetool-${{ matrix.arch }}.AppImage"
+          curl -fsSL -o "$file" \
+            "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/$file"
+          if [ "${{ matrix.arch }}" = x86_64 ]; then want="$APPIMAGETOOL_SHA256_X86_64"; else want="$APPIMAGETOOL_SHA256_AARCH64"; fi
+          echo "$want  $file" | sha256sum -c -
+          chmod +x "$file"
+
+      - name: Fetch AppImage runtime
+        run: |
+          file="runtime-${{ matrix.arch }}"
+          curl -fsSL -o "$file" \
+            "https://github.com/AppImage/type2-runtime/releases/download/$APPIMAGE_RUNTIME_VERSION/$file"
+          if [ "${{ matrix.arch }}" = x86_64 ]; then want="$APPIMAGE_RUNTIME_SHA256_X86_64"; else want="$APPIMAGE_RUNTIME_SHA256_AARCH64"; fi
+          echo "$want  $file" | sha256sum -c -
+
+      - name: Package
+        run: |
+          APPIMAGETOOL="$PWD/appimagetool-${{ matrix.arch }}.AppImage" \
+            APPIMAGE_RUNTIME="$PWD/runtime-${{ matrix.arch }}" scripts/package-linux.sh
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sketchup-alt-linux-${{ matrix.arch }}
+          path: |
+            target/package/linux/*.tar.gz
+            target/package/linux/*.AppImage
+          if-no-files-found: error
+          retention-days: 30

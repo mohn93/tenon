@@ -497,6 +497,9 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
     ];
 
     let mut help = vec![Item::new("Keyboard Shortcuts", UiAction::ShowShortcuts(true)).entry()];
+    if view.features.update_check {
+        help.push(Item::new("Check for Updates...", UiAction::CheckForUpdates).entry());
+    }
     if view.features.in_app_dialogs {
         help.push(Item::new("About", UiAction::ShowAbout).entry());
     }

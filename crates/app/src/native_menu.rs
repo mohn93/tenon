@@ -52,7 +52,7 @@ impl NativeMenu {
                         AppSlot::About => {
                             let about = AboutMetadata {
                                 name: Some("sketchup-alt".into()),
-                                version: Some(env!("CARGO_PKG_VERSION").into()),
+                                version: Some(crate::update::version_label()),
                                 ..Default::default()
                             };
                             append(

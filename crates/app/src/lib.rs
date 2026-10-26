@@ -28,6 +28,8 @@ mod menus;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod navigation;
+#[cfg(target_os = "macos")]
+pub mod open_files;
 pub mod paths;
 pub mod prefs;
 mod recovered;
@@ -43,6 +45,7 @@ pub mod shortcuts;
 mod system_quit;
 mod touch;
 mod ui;
+pub mod update;
 pub mod viewer;
 #[cfg(windows)]
 pub mod windows;

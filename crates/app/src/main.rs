@@ -128,6 +128,15 @@ fn main() {
             config.roots = roots;
             config.recovery = recovery;
             config.session = session;
+            // A .skr opened from Finder or the Dock arrives from AppKit, before the window
+            // exists when it launches the app.
+            #[cfg(target_os = "macos")]
+            {
+                let proxy = event_loop.create_proxy();
+                app::open_files::install(move |paths| {
+                    let _ = proxy.send_event(AppEvent::OpenFiles(paths));
+                });
+            }
             let mut app = App::new(event_loop.create_proxy(), config);
             event_loop.run_app(&mut app).expect("run app");
         }
