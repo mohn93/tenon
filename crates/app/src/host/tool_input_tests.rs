@@ -2638,3 +2638,116 @@ fn position_camera_stands_at_a_click_with_the_default_eye_height() {
     assert!(c.get("look_at").is_none_or(|v| v.is_null()), "{c}");
     assert_eq!(e.tool_kind(), tools::ToolKind::LookAround);
 }
+
+/// A 4 x 2 pixel PNG as base64.
+fn picture_data() -> String {
+    use base64::Engine;
+    let mut bytes = Vec::new();
+    image::RgbaImage::from_fn(4, 2, |x, _| image::Rgba([60 * x as u8, 0, 200, 255]))
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+#[test]
+fn place_image_follows_the_cursor_and_two_clicks_size_and_place_it() {
+    let mut e = editor();
+    tool(&mut e, "line");
+    let revision = e.doc().revision();
+    let r = exec(
+        &mut e,
+        json!({"type": "place_image", "data": picture_data()}),
+    );
+    assert_eq!(r["editor"]["tool"], "line", "the tool to go back to: {r}");
+    assert_eq!(r["editor"]["phase"], "active", "{r}");
+    assert_eq!(e.doc().revision(), revision, "placing changes nothing");
+    // Before the first click a picture outline follows the cursor.
+    let r = input(&mut e, json!([{"type": "move", "point": [1, 1, 0]}]));
+    assert_eq!(r["preview"].as_array().unwrap().len(), 4, "{r}");
+    // First corner, then moving sizes it keeping the proportions (4 x 2).
+    let r = input(
+        &mut e,
+        json!([{"type": "click", "point": [1, 1, 0]}, {"type": "move", "point": [5, 2, 0]}]),
+    );
+    assert_eq!(r["preview"].as_array().unwrap().len(), 4, "{r}");
+    let r = input(&mut e, json!([{"type": "click", "point": [5, 2, 0]}]));
+    assert_eq!(ran(&r), ["import_image"], "{r}");
+    assert_eq!(r["editor"]["tool"], "line", "{r}");
+    assert_eq!(r["editor"]["phase"], "idle", "{r}");
+    let m = ask(&mut e, json!({"type": "materials"}));
+    assert_eq!(m["materials"][0]["texture"]["width"], 4.0, "{m}");
+    assert_eq!(m["materials"][0]["texture"]["height"], 2.0, "{m}");
+    assert_eq!(
+        count(&mut e, "instances"),
+        1,
+        "one group; its face is inside"
+    );
+}
+
+#[test]
+fn place_image_takes_a_typed_width_and_escape_cancels() {
+    let mut e = editor();
+    exec(
+        &mut e,
+        json!({"type": "place_image", "data": picture_data()}),
+    );
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [0, 0, 0]},
+            {"type": "move", "point": [-1, -1, 0]},
+            {"type": "type", "text": "3"}
+        ]),
+    );
+    assert_eq!(ran(&r), ["import_image"], "{r}");
+    let m = ask(&mut e, json!({"type": "materials"}));
+    assert_eq!(m["materials"][0]["texture"]["width"], 3.0, "{m}");
+    assert_eq!(m["materials"][0]["texture"]["height"], 1.5, "{m}");
+    // Grown toward the cursor: down and to the left of the first corner.
+    let command = &r["commands"][0]["command"];
+    assert!(near(&command["origin"], [-3.0, -1.5, 0.0]), "{r}");
+    let s = ask(&mut e, json!({"type": "entities", "kinds": ["instance"]}));
+    assert_eq!(s["instances"].as_array().unwrap().len(), 1);
+    assert_eq!(ask(&mut e, json!({"type": "editor"}))["phase"], "idle");
+
+    exec(
+        &mut e,
+        json!({"type": "place_image", "data": picture_data()}),
+    );
+    input(&mut e, json!([{"type": "click", "point": [0, 0, 0]}]));
+    input(&mut e, json!([{"type": "key", "key": "escape"}]));
+    assert_eq!(ask(&mut e, json!({"type": "editor"}))["phase"], "idle");
+    assert_eq!(
+        ask(&mut e, json!({"type": "materials"}))["materials"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "nothing more was placed"
+    );
+}
+
+#[test]
+fn place_image_refuses_oversize_and_broken_images_before_the_tool_comes_out() {
+    use base64::Engine;
+    let mut e = editor();
+    let mut big = Vec::new();
+    image::RgbaImage::new(8192, 1)
+        .write_to(&mut std::io::Cursor::new(&mut big), image::ImageFormat::Png)
+        .unwrap();
+    for data in [
+        base64::engine::general_purpose::STANDARD.encode(big),
+        base64::engine::general_purpose::STANDARD.encode(b"hello"),
+    ] {
+        let r = call(
+            &mut e,
+            "execute",
+            json!({"type": "place_image", "data": data}),
+        );
+        assert!(r["error"].is_object(), "{r}");
+        assert_eq!(ask(&mut e, json!({"type": "editor"}))["phase"], "idle");
+    }
+}
