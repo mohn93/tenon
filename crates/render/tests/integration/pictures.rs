@@ -3,10 +3,11 @@
 //! adapter the machine has and skip without one; they were not run in a window or a browser.
 
 use glam::DVec3;
+use kernel::EntityId;
 use render::Snapshotter;
-use session::{Command, Document, Projection};
+use session::{Command, Document, Projection, Side};
 
-use crate::golden::{WIDTH, doc, look, quadrants_png, run};
+use crate::golden::{WIDTH, add_material, created_face, doc, look, quadrants_png, run};
 
 /// The picture's x axis: turned off the face's grid so its corners fall between the face's own
 /// triangles' pixels and the two surfaces' depths differ by rounding.
@@ -141,4 +142,100 @@ fn a_flush_picture_shows_from_a_grazing_angle_and_in_a_parallel_view() {
     doc.camera.projection = Projection::Parallel;
     let colors = quadrant_colors(&doc, d).unwrap();
     shows_picture(colors, "parallel");
+}
+
+/// Lays a grey face `2 * d` wide `gap` meters above the plane z = 0, over the picture.
+fn cover(doc: &mut Document, d: f64, gap: f64) {
+    let face = created_face(&run(
+        doc,
+        Command::AddRectangle {
+            corner: [-d, -d, gap],
+            opposite: [d, d, gap],
+            normal: None,
+        },
+    ));
+    let grey = add_material(doc, "Grey", [128, 128, 128]);
+    paint(doc, face, grey);
+}
+
+fn paint(doc: &mut Document, face: EntityId, material: session::MaterialId) {
+    run(
+        doc,
+        Command::Paint {
+            ids: vec![face],
+            material: Some(material),
+            side: Side::Both,
+        },
+    );
+}
+
+fn shows_grey(colors: Quadrants, what: &str) {
+    for c in colors.0.into_iter().chain(colors.1) {
+        let (lo, hi) = (c.iter().min().unwrap(), c.iter().max().unwrap());
+        assert!(hi - lo < 30, "{what}: a point of the cover shows {c:?}");
+    }
+}
+
+#[test]
+fn a_flush_picture_does_not_show_through_a_face_in_front_of_it() {
+    // The picture is pulled 2^-12 of its distance nearer in perspective and 2^-12 eye-to-target
+    // distances in a parallel view; a face 1% of the picture's size in front of it hides it in
+    // both (the parallel view's depth spans 200 distances, so a pull scaled by depth alone
+    // would be a twentieth of the distance there).
+    let d = 20.0;
+    for projection in [Projection::Perspective, Projection::Parallel] {
+        let mut doc = flush_picture(d);
+        cover(&mut doc, d, 0.01 * d);
+        look(&mut doc, [0.25 * d, -0.9 * d, 1.1 * d], [0.0, 0.0, 0.0]);
+        doc.camera.projection = projection;
+        let Some(colors) = quadrant_colors(&doc, d) else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        shows_grey(colors, &format!("{projection:?}"));
+    }
+}
+
+#[test]
+fn a_textured_face_that_is_not_a_picture_is_drawn_where_it_lies() {
+    // A root face painted with the quadrants texture, 1.5 cm under a grey face, seen from about
+    // 58 m: only pictures are pulled nearer, so the grey face hides the texture.
+    let d = 40.0;
+    let mut doc = doc();
+    let face = created_face(&run(
+        &mut doc,
+        Command::AddRectangle {
+            corner: [-d, -d, 0.0],
+            opposite: [d, d, 0.0],
+            normal: None,
+        },
+    ));
+    let tiles = run(
+        &mut doc,
+        Command::AddMaterial {
+            name: Some("Tiles".into()),
+            color: None,
+            opacity: None,
+            texture: Some(session::TextureSource {
+                path: Some(picture_file().display().to_string()),
+                width: Some(d),
+                height: Some(d),
+            }),
+            emission: None,
+            metalness: None,
+            roughness: None,
+            density: None,
+            existing: Default::default(),
+        },
+    )
+    .changes
+    .materials[0];
+    paint(&mut doc, face, tiles);
+    cover(&mut doc, d, 0.015);
+    look(&mut doc, [0.25 * d, -0.9 * d, 1.1 * d], [0.0, 0.0, 0.0]);
+    let Some(colors) = quadrant_colors(&doc, d) else {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    };
+    shows_grey(colors, "textured face under a grey one");
 }

@@ -581,13 +581,17 @@ struct FaceOut {
     @location(10) @interpolate(flat) finish: vec4<f32>,
 };
 
-// How much nearer to the eye a textured side is drawn, as a fraction of its depth (2^-11, about 0.05%).
-// Depth is reversed (nearer is larger) and float depth keeps relative precision, so scaling it
-// is the same small fraction of the distance at any range, in perspective and parallel views. It
-// lets a picture lying flush on a face show over the face without flicker: the rasterizer's
-// depth error across a large coplanar face is some 6e-5 of the depth (measured), so this has
-// several times the margin, and is 5 cm at 100 m, under two pixels.
-const TEXTURED_DEPTH_NUDGE: f32 = 0.00048828125;
+// A layer at or above this marks a picture's face (`PICTURE_LAYER` in scene.rs): a group of
+// one textured face, such as Import Image makes.
+const PICTURE_LAYER: f32 = 65536.0;
+
+// How a picture's face is pulled toward the eye (see `biased_clip`): by 2^-12 of its distance in
+// perspective (2.4 cm at 100 m, a fraction of a pixel) and 2^-12 eye-to-target distances in a
+// parallel view. That is some four times the rasterizer's depth error across a large coplanar
+// face (about 6e-5 of the depth, measured), so a picture lying flush on a face shows over it
+// without flicker, and half the pull of edges (1.0005), so the picture's own edges and those
+// of nearby faces still draw over it. Other faces, textured or not, are drawn where they lie.
+const PICTURE_DEPTH_SCALE: f32 = 1.000244140625;
 
 // `selected` (1 or 0) comes from the second vertex buffer, `hovered` from the third.
 @vertex
@@ -605,10 +609,8 @@ fn vs_face(
     @location(10) finish: vec4<f32>,
 ) -> FaceOut {
     var out: FaceOut;
-    out.pos = u.view_proj * vec4<f32>(pos, 1.0);
-    if layer.x >= 0.0 || layer.y >= 0.0 {
-        out.pos.z = out.pos.z * (1.0 + TEXTURED_DEPTH_NUDGE);
-    }
+    let picture = max(layer.x, layer.y) >= PICTURE_LAYER;
+    out.pos = select(u.view_proj * vec4<f32>(pos, 1.0), biased_clip(pos, PICTURE_DEPTH_SCALE), picture);
     out.world = pos;
     out.normal = normal;
     out.selected = selected;
@@ -616,7 +618,7 @@ fn vs_face(
     out.back_color = back_color;
     out.alpha = alpha;
     out.uv = uv;
-    out.layer = layer;
+    out.layer = select(layer, layer - PICTURE_LAYER, layer >= vec2<f32>(PICTURE_LAYER));
     out.glow = glow;
     out.hovered = hovered;
     out.finish = finish;

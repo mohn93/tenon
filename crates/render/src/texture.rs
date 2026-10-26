@@ -92,33 +92,32 @@ fn taps(len: u32, out: u32) -> Vec<Vec<(usize, f32)>> {
 }
 
 /// RGBA8 `pixels` of a `width` x `height` image resampled to `side` x `side` (box filtered when
-/// shrinking, linear when growing; both ways separately).
+/// shrinking, linear when growing; both ways separately). One output row at a time, from the
+/// source rows it takes resampled across, so an 8192 pixel image needs no copy of its own size.
 pub fn resample(pixels: &[u8], width: u32, height: u32, side: u32) -> Vec<u8> {
     let (w, s) = (width as usize, side as usize);
     let across = taps(width, side);
     let down = taps(height, side);
-    // Rows first: height rows of `side` pixels.
-    let mut rows = vec![0f32; height as usize * s * 4];
-    for y in 0..height as usize {
-        for (x, taps) in across.iter().enumerate() {
-            for c in 0..4 {
-                rows[(y * s + x) * 4 + c] = taps
-                    .iter()
-                    .map(|&(k, wt)| f32::from(pixels[(y * w + k) * 4 + c]) * wt)
-                    .sum();
+    let mut out = vec![0u8; s * s * 4];
+    let mut row = vec![0f32; s * 4];
+    let mut sum = vec![0f32; s * 4];
+    for (y, rows) in down.iter().enumerate() {
+        sum.fill(0.0);
+        for &(k, weight) in rows {
+            for (x, taps) in across.iter().enumerate() {
+                for c in 0..4 {
+                    row[x * 4 + c] = taps
+                        .iter()
+                        .map(|&(j, wt)| f32::from(pixels[(k * w + j) * 4 + c]) * wt)
+                        .sum();
+                }
+            }
+            for (total, v) in sum.iter_mut().zip(&row) {
+                *total += v * weight;
             }
         }
-    }
-    let mut out = vec![0u8; s * s * 4];
-    for (y, taps) in down.iter().enumerate() {
-        for x in 0..s {
-            for c in 0..4 {
-                let v: f32 = taps
-                    .iter()
-                    .map(|&(k, wt)| rows[(k * s + x) * 4 + c] * wt)
-                    .sum();
-                out[(y * s + x) * 4 + c] = v.round().clamp(0.0, 255.0) as u8;
-            }
+        for (o, v) in out[y * s * 4..(y + 1) * s * 4].iter_mut().zip(&sum) {
+            *o = v.round().clamp(0.0, 255.0) as u8;
         }
     }
     out
@@ -286,6 +285,27 @@ mod tests {
         // Same size: unchanged.
         let square: Vec<u8> = (0..16 * 4).map(|k| k as u8).collect();
         assert_eq!(resample(&square, 4, 4, 4), square);
+        // Each output pixel is the weighted sum over its taps both ways.
+        let (w, h) = (37u32, 23u32);
+        let odd: Vec<u8> = (0..w * h * 4).map(|i| (i * 7919 % 251) as u8).collect();
+        for side in [8, 16, 64] {
+            let (across, down) = (taps(w, side), taps(h, side));
+            let out = resample(&odd, w, h, side);
+            for y in 0..side as usize {
+                for x in 0..side as usize {
+                    for c in 0..4 {
+                        let mut v = 0.0f32;
+                        for &(k, wy) in &down[y] {
+                            for &(j, wx) in &across[x] {
+                                v += f32::from(odd[(k * w as usize + j) * 4 + c]) * wx * wy;
+                            }
+                        }
+                        let got = f32::from(out[(y * side as usize + x) * 4 + c]);
+                        assert!((got - v).abs() <= 1.0, "{side}: {x},{y}: {got} vs {v}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
