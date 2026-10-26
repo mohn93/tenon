@@ -69,6 +69,16 @@ fn placed(
     Some((corner + u * left + v * down, u, width))
 }
 
+/// `normal` turned to face the camera, so a picture put on the back of a face (inside a room
+/// whose walls face out) lies on the side seen, facing the viewer.
+fn toward_viewer(normal: DVec3, ctx: &ToolContext) -> DVec3 {
+    if ctx.camera.ray(ctx.cursor).dir.dot(normal) > 0.0 {
+        -normal
+    } else {
+        normal
+    }
+}
+
 impl ImageTool {
     pub fn new(image: ImageSpec) -> Self {
         Self {
@@ -119,7 +129,7 @@ impl ImageTool {
         if let Some(face) = hit.face.and_then(|id| ctx.model.face(id)) {
             let origin = ctx.model.position(face.outer[0]).unwrap();
             if (*corner - origin).dot(face.normal).abs() < LENGTH_TOL {
-                *normal = face.normal;
+                *normal = toward_viewer(face.normal, ctx);
             }
         }
     }
@@ -202,12 +212,12 @@ impl Tool for ImageTool {
                     self.hover =
                         on_plane(corner, normal, &hit, ctx).map(|p| self.snapped(p, &hit, ctx));
                 } else {
-                    self.ahead = Some((hit.point, plane_normal(&hit, ctx)));
+                    self.ahead = Some((hit.point, toward_viewer(plane_normal(&hit, ctx), ctx)));
                 }
             }
             ToolEvent::Click(hit) => match self.start {
                 None => {
-                    self.start = Some((hit.point, plane_normal(&hit, ctx)));
+                    self.start = Some((hit.point, toward_viewer(plane_normal(&hit, ctx), ctx)));
                     self.floating = hit.kind != SnapKind::OnFace;
                     self.ahead = None;
                 }
@@ -388,8 +398,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_picture_started_on_a_wall_lies_in_the_walls_plane() {
+    /// The wall x = 0 from y 0 to 4 and z 0 to 3, facing -x (toward the default camera) or +x.
+    fn wall(toward_camera: bool) -> (Model, FaceId) {
         let mut m = Model::new();
         m.add_polygon(&[
             DVec3::new(0.0, 0.0, 0.0),
@@ -398,23 +408,59 @@ mod tests {
             DVec3::new(0.0, 0.0, 3.0),
         ])
         .unwrap();
-        let wall: FaceId = m.faces().next().unwrap().0;
-        let wall_normal = m.face(wall).unwrap().normal;
-        let on_wall = |y: f64, z: f64| Inference {
+        let mut wall: FaceId = m.faces().next().unwrap().0;
+        if toward_camera == (m.face(wall).unwrap().normal.x > 0.0) {
+            wall = m.reverse_faces(&[wall]).1[0];
+        }
+        (m, wall)
+    }
+
+    fn on_wall(wall: FaceId, y: f64, z: f64) -> Inference {
+        Inference {
             point: DVec3::new(0.0, y, z),
             kind: SnapKind::OnFace,
             face: Some(wall),
             locked: None,
-        };
+        }
+    }
+
+    #[test]
+    fn a_picture_started_on_a_wall_lies_in_the_walls_plane() {
+        let (m, wall) = wall(true);
+        let wall_normal = m.face(wall).unwrap().normal;
+        assert!(wall_normal.x < 0.0);
         let mut t = tool();
-        send(&mut t, &m, ToolEvent::Click(on_wall(1.0, 1.0)));
+        send(&mut t, &m, ToolEvent::Click(on_wall(wall, 1.0, 1.0)));
         let (origin, normal, x, width) =
-            image(&send(&mut t, &m, ToolEvent::Click(on_wall(3.0, 2.0))));
-        assert_eq!(
-            (origin, normal, width),
-            (DVec3::new(0.0, 1.0, 1.0), wall_normal, 2.0)
-        );
-        // The width runs along the wall's horizontal direction and the picture stands upright.
+            image(&send(&mut t, &m, ToolEvent::Click(on_wall(wall, 3.0, 2.0))));
+        assert_eq!((normal, width), (wall_normal, 2.0));
+        // The width runs along the wall's horizontal direction and the picture stands upright,
+        // filling the box the two clicks span.
         assert!(x.dot(DVec3::Z).abs() < 1e-9 && x.dot(wall_normal).abs() < 1e-9);
+        assert!(normal.cross(x).dot(DVec3::Z) > 0.999);
+        let far = origin + x * 2.0 + normal.cross(x);
+        let (lo, hi) = (origin.min(far), origin.max(far));
+        assert!((lo - DVec3::new(0.0, 1.0, 1.0)).length() < 1e-9, "{lo:?}");
+        assert!((hi - DVec3::new(0.0, 3.0, 2.0)).length() < 1e-9, "{hi:?}");
+    }
+
+    #[test]
+    fn a_picture_put_on_the_back_of_a_wall_faces_the_viewer() {
+        // The default camera stands at -x, behind a wall facing +x (inside a room, say).
+        let (m, wall) = wall(false);
+        let wall_normal = m.face(wall).unwrap().normal;
+        assert!(wall_normal.x > 0.0);
+        let mut t = tool();
+        let out = send(&mut t, &m, ToolEvent::Move(on_wall(wall, 1.0, 1.0)));
+        assert_eq!(out.preview.len(), 4);
+        send(&mut t, &m, ToolEvent::Click(on_wall(wall, 1.0, 1.0)));
+        let (origin, normal, x, width) =
+            image(&send(&mut t, &m, ToolEvent::Click(on_wall(wall, 3.0, 2.0))));
+        assert_eq!((normal, width), (-wall_normal, 2.0));
+        assert!(normal.cross(x).dot(DVec3::Z) > 0.999, "upright: {x:?}");
+        let far = origin + x * 2.0 + normal.cross(x);
+        let (lo, hi) = (origin.min(far), origin.max(far));
+        assert!((lo - DVec3::new(0.0, 1.0, 1.0)).length() < 1e-9, "{lo:?}");
+        assert!((hi - DVec3::new(0.0, 3.0, 2.0)).length() < 1e-9, "{hi:?}");
     }
 }
