@@ -953,8 +953,14 @@ pub(crate) fn closest_on_line_to_ray(origin: DVec3, dir: DVec3, ray: &Ray, segme
     origin + dir * t
 }
 
+/// How much nearer (meters along the ray) one part's face must be than another's to win; within
+/// it the later part wins, so a picture or other group lying flush on a face of the context is
+/// the one met, not the face below it.
+const FACE_TIE: f64 = kernel::geom::LENGTH_TOL;
+
 /// The nearest face the ray meets in front of its origin: whose it is, the face, and where.
-/// Faces on hidden tags are passed through.
+/// Faces on hidden tags are passed through. Faces equally near (see `FACE_TIE`) go to the later
+/// part.
 fn nearest_face_hit(scenery: &Scenery, ray: &Ray) -> Option<(Owner, FaceId, DVec3)> {
     nearest_face_part(scenery, ray).map(|(k, f, p)| (scenery.part(k).owner, f, p))
 }
@@ -972,7 +978,7 @@ fn nearest_face_part(scenery: &Scenery, ray: &Ray) -> Option<(usize, FaceId, DVe
         .map_or(to, |t| t + 1e-9);
     let mut best: Option<(f64, usize, FaceId)> = None;
     for (k, part) in scenery.parts().enumerate() {
-        let reach = best.map_or(to, |(t, _, _)| t);
+        let reach = best.map_or(to, |(t, _, _)| t + FACE_TIE);
         if !part.may_meet_ray(ray.origin, ray.dir, reach) {
             continue;
         }
@@ -982,7 +988,7 @@ fn nearest_face_part(scenery: &Scenery, ray: &Ray) -> Option<(usize, FaceId, DVe
             from,
             reach,
             |f, t| part.shows_face(f) && part.kept(ray.origin + ray.dir * t),
-        ) && best.is_none_or(|(bt, _, _)| t < bt)
+        ) && best.is_none_or(|(bt, _, _)| t <= bt + FACE_TIE)
         {
             best = Some((t, k, f));
         }
@@ -1681,6 +1687,20 @@ mod tests {
         })
         .unwrap();
         s
+    }
+
+    #[test]
+    fn a_group_flush_on_a_face_is_the_face_under_the_cursor() {
+        // The unit square is in a group; the root gets the same square at the same place.
+        let (c, mut s) = (cam(), scene_with_a_guide_in_a_group());
+        let p = |x, y| DVec3::new(x, y, 0.0);
+        s.edit(kernel::MeshId::Root, |m| {
+            m.add_polygon(&[p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)])
+        })
+        .unwrap();
+        let scenery = Scenery::of(&s, &[]).unwrap();
+        let (owner, ..) = face_under_in(&scenery, &c, px(&c, p(0.5, 0.5))).unwrap();
+        assert!(matches!(owner, Owner::Instance(_)), "{owner:?}");
     }
 
     #[test]
@@ -2807,13 +2827,13 @@ mod tests {
             let mut best: Option<(f64, Owner, FaceId)> = None;
             for part in &scenery.parts {
                 let back = part.place.inverse();
-                let reach = best.map_or(f64::INFINITY, |(t, _, _)| t);
+                let reach = best.map_or(f64::INFINITY, |(t, _, _)| t + crate::inference::FACE_TIE);
                 if let Some((f, t)) = part.model.index().ray_hit(
                     back.transform_point3(ray.origin),
                     back.transform_vector3(ray.dir),
                     0.0,
                     reach,
-                ) && best.is_none_or(|(bt, _, _)| t < bt)
+                ) && best.is_none_or(|(bt, _, _)| t <= bt + crate::inference::FACE_TIE)
                 {
                     best = Some((t, part.owner, f));
                 }

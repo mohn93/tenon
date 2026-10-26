@@ -164,6 +164,22 @@ pub fn pick(scenery: &Scenery, ray: &Ray, reach: Reach) -> Vec<Hit> {
         }
     }
     hits.sort_by(|a, b| a.distance.total_cmp(&b.distance));
+    // Faces equally near go the later part first, so a picture lying flush on a face is met
+    // before the face below it (as `nearest_face_part` picks).
+    let is_face = |h: &Hit| matches!(h.id, EntityId::Face(_));
+    let mut start = 0;
+    while start < hits.len() {
+        let mut end = start + 1;
+        while end < hits.len()
+            && is_face(&hits[start])
+            && is_face(&hits[end])
+            && hits[end].distance - hits[start].distance <= kernel::geom::LENGTH_TOL
+        {
+            end += 1;
+        }
+        hits[start..end].sort_by_key(|h| std::cmp::Reverse(h.part));
+        start = end;
+    }
     hits
 }
 
@@ -263,6 +279,31 @@ mod tests {
         assert_eq!(kinds(&hits), vec![('f', 10.0)]);
         assert_eq!(hits[0].part, 0);
         assert_eq!(inside.path(0), &[i]);
+    }
+
+    /// `scene()` with a face of the root lying exactly under the group's face.
+    fn picture_over_face() -> (Scene, InstanceId) {
+        let (mut s, i) = scene();
+        s.edit(MeshId::Root, |m| {
+            m.add_polygon(&[
+                DVec3::new(5.0, 0.0, 0.0),
+                DVec3::new(6.0, 0.0, 0.0),
+                DVec3::new(6.0, 1.0, 0.0),
+                DVec3::new(5.0, 1.0, 0.0),
+            ])
+        })
+        .unwrap();
+        (s, i)
+    }
+
+    #[test]
+    fn a_group_flush_on_a_face_is_met_before_the_face_below() {
+        let (s, i) = picture_over_face();
+        let v = Scenery::of(&s, &[]).unwrap();
+        let hits = pick(&v, &down_at(5.5, 0.5), Reach::Around { radius: 0.0 });
+        assert_eq!(kinds(&hits), vec![('f', 10.0), ('f', 10.0)]);
+        assert_eq!(v.path(hits[0].part), &[i], "the group's face first");
+        assert!(v.path(hits[1].part).is_empty());
     }
 
     #[test]
