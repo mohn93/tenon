@@ -102,6 +102,26 @@ fn a_board_turned_thirty_degrees_keeps_its_true_size() {
 }
 
 #[test]
+fn a_sheared_board_reads_the_smallest_box_around_it() {
+    let mut d = doc();
+    let b = board(&mut d);
+    run(
+        &mut d,
+        json!({"type": "rotate", "ids": [b], "center": [0, 0, 0], "angle": 30}),
+    );
+    run(
+        &mut d,
+        json!({"type": "scale", "ids": [b], "origin": [0, 0, 0], "factors": [2, 1, 1]}),
+    );
+    let r = rows(&d, json!({"type": "cut_list"}));
+    assert_eq!(r.len(), 1);
+    let s = size(&r[0]);
+    for (got, want) in s.iter().zip([1.874_86, 0.110_94, 0.02]) {
+        assert!((got - want).abs() < 1e-4, "{s:?}");
+    }
+}
+
+#[test]
 fn a_scaled_instance_is_its_own_row() {
     let mut d = doc();
     let b = board(&mut d);
