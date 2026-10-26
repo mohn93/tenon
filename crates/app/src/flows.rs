@@ -926,7 +926,9 @@ mod tests {
         let filters = import_filters();
         assert_eq!(
             filters[0].extensions,
-            ["obj", "stl", "skp", "gltf", "glb", "dae"]
+            [
+                "obj", "stl", "skp", "gltf", "glb", "dae", "png", "jpg", "jpeg"
+            ]
         );
         assert!(filters.iter().any(|f| f.extensions == ["gltf", "glb"]));
         assert!(filters.iter().any(|f| f.extensions == ["dae"]));
