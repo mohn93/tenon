@@ -6,8 +6,9 @@ use std::sync::Arc;
 
 use kernel::{MaterialId, Scene, Texture, TextureImage};
 
-/// The largest layer side, in pixels.
-pub const MAX_LAYER_SIDE: u32 = 1024;
+/// The largest layer side, in pixels (2048 is also the least `max_texture_dimension_2d` of
+/// WebGL2 and downlevel devices; a device allowing less gets smaller layers, see `layer_side`).
+pub const MAX_LAYER_SIDE: u32 = 2048;
 /// The most bytes the array may take with its mipmaps; more or bigger textures get smaller
 /// layers.
 pub const MAX_ARRAY_BYTES: u64 = 256 * 1024 * 1024;
@@ -30,15 +31,26 @@ pub fn layers(scene: &Scene) -> HashMap<MaterialId, u32> {
 }
 
 /// The side of the array's square layers for `images`: a power of two, enough for the largest
-/// image but at most [`MAX_LAYER_SIDE`], and small enough that all layers with their mipmaps
-/// fit in [`MAX_ARRAY_BYTES`]. 1 without images.
-pub fn layer_side(images: &[&TextureImage]) -> u32 {
+/// image but at most [`MAX_LAYER_SIDE`] and at most `device_max` (the device's largest 2D
+/// texture side; an image bigger than the layer is drawn from a scaled copy, the document keeps
+/// the original), and small enough that all layers with their mipmaps fit in
+/// [`MAX_ARRAY_BYTES`]. 1 without images.
+pub fn layer_side(images: &[&TextureImage], device_max: u32) -> u32 {
     let largest = images
         .iter()
         .map(|i| i.width.max(i.height))
         .max()
         .unwrap_or(1);
-    let mut side = largest.next_power_of_two().min(MAX_LAYER_SIDE);
+    // The largest power of two the device allows.
+    let device_max = if device_max.is_power_of_two() {
+        device_max
+    } else {
+        (device_max.max(2) / 2).next_power_of_two()
+    };
+    let mut side = largest
+        .next_power_of_two()
+        .min(MAX_LAYER_SIDE)
+        .min(device_max);
     // A full mip chain adds a third.
     let bytes = |side: u32| images.len() as u64 * u64::from(side).pow(2) * 4 * 4 / 3;
     while side > 1 && bytes(side) > MAX_ARRAY_BYTES {
@@ -161,7 +173,7 @@ impl TextureArray {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, scene: &Scene) -> Self {
         let textured = textured(scene);
         let images: Vec<&TextureImage> = textured.iter().map(|(_, t)| &*t.image).collect();
-        let side = layer_side(&images);
+        let side = layer_side(&images, device.limits().max_texture_dimension_2d);
         let levels = side.ilog2() + 1;
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("material textures"),
@@ -238,14 +250,27 @@ mod tests {
 
     #[test]
     fn layers_fit_the_largest_image_and_the_memory_budget() {
-        assert_eq!(layer_side(&[]), 1);
-        assert_eq!(layer_side(&[&image(3, 2)]), 4);
-        assert_eq!(layer_side(&[&image(300, 20), &image(64, 64)]), 512);
-        assert_eq!(layer_side(&[&image(4096, 4096)]), MAX_LAYER_SIDE);
+        const DEVICE: u32 = 16384;
+        assert_eq!(layer_side(&[], DEVICE), 1);
+        assert_eq!(layer_side(&[&image(3, 2)], DEVICE), 4);
+        assert_eq!(layer_side(&[&image(300, 20), &image(64, 64)], DEVICE), 512);
+        assert_eq!(layer_side(&[&image(4096, 4096)], DEVICE), MAX_LAYER_SIDE);
         // 256 layers of 1024 would take 1.3 GiB: they shrink to 256.
         let big = image(1024, 1024);
         let many: Vec<&TextureImage> = (0..256).map(|_| &big).collect();
-        assert_eq!(layer_side(&many), 256);
+        assert_eq!(layer_side(&many, DEVICE), 256);
+    }
+
+    #[test]
+    fn a_small_device_gets_layers_it_can_hold() {
+        // A 8192 x 8192 picture on a device with 1024 texels a side (or an odd limit): the
+        // layer is the largest power of two within the limit.
+        let big = image(8192, 8192);
+        assert_eq!(layer_side(&[&big], 1024), 1024);
+        assert_eq!(layer_side(&[&big], 2048), 2048);
+        assert_eq!(layer_side(&[&big], 3000), 2048);
+        assert_eq!(layer_side(&[&image(100, 100)], 1024), 128);
+        assert_eq!(layer_side(&[&big], 0), 1);
     }
 
     #[test]
