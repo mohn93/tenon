@@ -16,9 +16,10 @@ pub const MAX_TEXTURE_PIXELS: u32 = 8192;
 pub const MAX_TOTAL_TEXTURE_PIXELS: u64 = 1 << 28;
 
 /// The bytes of base64 `data`, as encoders and people write it: whitespace (line breaks every
-/// 76 characters, indentation) anywhere is ignored and the `=` padding may be left off. Fails,
-/// saying why, when it is not base64 or holds more than [`MAX_TEXTURE_BYTES`] decoded bytes; the
-/// size is counted in decoded bytes, not characters.
+/// 76 characters, indentation) anywhere is ignored, the `=` padding may be left off, and a
+/// leading data URL header (`data:image/png;base64,`) is taken off. Fails, saying why, when it
+/// is not base64 or holds more than [`MAX_TEXTURE_BYTES`] decoded bytes; the size is counted in
+/// decoded bytes, not characters, before anything is copied.
 pub fn decode_base64(data: &str) -> Result<Vec<u8>, String> {
     use base64::Engine;
     use base64::alphabet::STANDARD;
@@ -28,14 +29,23 @@ pub fn decode_base64(data: &str) -> Result<Vec<u8>, String> {
         &STANDARD,
         GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::Indifferent),
     );
-    let compact: String = data.split_whitespace().collect();
-    let digits = compact.trim_end_matches('=').len() as u64;
+    let data = data.trim_start();
+    let data = match data.get(..5) {
+        Some(head) if head.eq_ignore_ascii_case("data:") => data
+            .split_once(";base64,")
+            .map(|(_, rest)| rest)
+            .ok_or("a data URL must be base64 (data:...;base64,...)")?,
+        _ => data,
+    };
+    let trimmed = data.trim_end().trim_end_matches('=');
+    let digits = trimmed.chars().filter(|c| !c.is_whitespace()).count() as u64;
     // 4 characters hold 3 bytes; a trailing 2 or 3 characters hold 1 or 2.
     if digits / 4 * 3 + (digits % 4).saturating_sub(1) > MAX_TEXTURE_BYTES {
         return Err(format!(
             "file too large: a texture is at most {MAX_TEXTURE_BYTES} bytes"
         ));
     }
+    let compact: String = data.split_whitespace().collect();
     engine
         .decode(compact)
         .map_err(|_| "data is not base64".to_string())
@@ -193,6 +203,20 @@ mod tests {
             assert_eq!(decode_base64(text).unwrap(), b"hello", "{text:?}");
         }
         assert!(decode_base64("aGV$bG8=").is_err());
+        // Padding in the middle is not base64.
+        assert!(decode_base64("aGU=bG8=").is_err());
+    }
+
+    #[test]
+    fn base64_takes_a_data_url() {
+        for text in [
+            "data:image/png;base64,aGVsbG8=",
+            "  DATA:image/jpeg;base64,\naGVs\nbG8",
+        ] {
+            assert_eq!(decode_base64(text).unwrap(), b"hello", "{text:?}");
+        }
+        let err = decode_base64("data:text/plain,hello").unwrap_err();
+        assert!(err.contains("data URL"), "{err}");
     }
 
     #[test]

@@ -27,15 +27,15 @@ impl Editor {
     /// texture limits (see `import_image`) or a broken file is refused, with why in the status.
     pub fn place_image(&mut self, name: &str, bytes: &[u8]) -> Result<(), CommandError> {
         // Turned upright and decoded once here, so a broken file is refused before the tool
-        // comes out and the outline has the proportions the picture will have.
-        let checked = texture::upright(bytes.to_vec())
-            .and_then(|b| texture::decode(b.clone()).map(|i| (b, i.width, i.height)))
-            .and_then(|(b, wide, high)| {
-                // The texture budget, as the placement will check it.
-                self.doc
-                    .texture_budget_allows(u64::from(wide) * u64::from(high))?;
-                Ok((b, wide, high))
-            });
+        // comes out and the outline has the proportions the picture will have. The texture
+        // budget, as the placement will check it, goes by the header, before the decoding.
+        let checked = texture::upright(bytes.to_vec()).and_then(|b| {
+            let (_, wide, high) = texture::dimensions(&b)?;
+            self.doc
+                .texture_budget_allows(u64::from(wide) * u64::from(high))?;
+            texture::decode(b.clone())?;
+            Ok((b, wide, high))
+        });
         let (bytes, wide, high) = match checked {
             Ok(d) => d,
             Err(m) => {

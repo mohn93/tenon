@@ -305,7 +305,7 @@ pub enum Command {
     /// is the way the picture faces; `x_axis` (default horizontal in the plane, or X on a level
     /// one, as textures run) the way its width runs, projected into the plane. The picture lies
     /// `lift` meters (default 0, 0 to 1) along `normal` from the plane through `origin`; the
-    /// renderer draws a picture over the face it lies on, so none is needed there. One undo step; the group is
+    /// renderer draws a picture (a group of one textured face) over the face it lies on, so none is needed there. One undo step; the group is
     /// selected and listed in the outcome's `placed` and `definitions`.
     ImportImage {
         #[serde(default)]
