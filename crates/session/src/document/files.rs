@@ -545,10 +545,11 @@ impl Document {
                 "close the open group or component to export the selection",
             ));
         }
-        let (parts, skipped_faces) = self
+        let parts = self
             .scene
-            .triangles_by_part(selection.then_some(&self.selection));
-        if parts.is_empty() {
+            .shared_parts(selection.then_some(&self.selection));
+        let skipped_faces = parts.skipped;
+        if parts.items.is_empty() {
             let message = if selection {
                 "nothing to export: the selection holds no shown face or part".to_string()
             } else if skipped_faces > 0 {
@@ -561,24 +562,19 @@ impl Document {
             };
             return Err(CommandError::new(ErrorKind::InvalidInput, message));
         }
-        let named: Vec<(String, Vec<kernel::Triangle>)> = parts
-            .into_iter()
-            .map(|(instance, triangles)| {
-                let name = instance
-                    .and_then(|i| self.scene.root().instance(i))
-                    .and_then(|i| self.scene.definition(i.definition))
-                    .map_or_else(
-                        || "Loose geometry".to_string(),
-                        |d| match d.kind {
-                            _ if !d.name.trim().is_empty() => d.name.clone(),
-                            kernel::DefinitionKind::Group => "Group".to_string(),
-                            kernel::DefinitionKind::Component => "Component".to_string(),
-                        },
-                    );
-                (name, triangles)
-            })
-            .collect();
-        let (bytes, objects) = crate::threemf::encode(&self.scene, &named)
+        let name_of = |definition: Option<kernel::DefinitionId>| {
+            definition
+                .and_then(|d| self.scene.definition(d))
+                .map_or_else(
+                    || "Loose geometry".to_string(),
+                    |d| match d.kind {
+                        _ if !d.name.trim().is_empty() => d.name.clone(),
+                        kernel::DefinitionKind::Group => "Group".to_string(),
+                        kernel::DefinitionKind::Component => "Component".to_string(),
+                    },
+                )
+        };
+        let (bytes, objects) = crate::threemf::encode(&self.scene, &parts, &name_of)
             .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e))?;
         let mut warnings = export::annotation_warnings(&self.scene);
         for o in objects.iter().filter(|o| !o.closed) {

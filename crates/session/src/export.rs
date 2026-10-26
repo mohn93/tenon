@@ -292,9 +292,12 @@ impl<'a> Groups<'a> {
 /// texture's size, with v counted down from the image's top (glTF's way), shifted by whole
 /// repeats so the numbers stay small.
 fn texcoords(t: &Triangle, texture: &Texture) -> [DVec2; 3] {
-    let st = t
-        .uvs
-        .map(|p| DVec2::new(p.x / texture.width, -p.y / texture.height));
+    repeat_coords(t.uvs, texture.width, texture.height)
+}
+
+/// `texcoords` from the corners' texture positions and the texture's size in meters.
+pub(crate) fn repeat_coords(uvs: [DVec2; 3], width: f64, height: f64) -> [DVec2; 3] {
+    let st = uvs.map(|p| DVec2::new(p.x / width, -p.y / height));
     let shift = st[0].floor();
     st.map(|q| q - shift)
 }
