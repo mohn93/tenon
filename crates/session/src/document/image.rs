@@ -127,6 +127,8 @@ impl Document {
             loops: vec![vec![0, 1, 2, 3]],
             front: Some(material),
             back: Some(material),
+            // Fitted below, once the face's own frame is known.
+            texture: None,
             tag: None,
             hidden: false,
         });
