@@ -173,7 +173,6 @@ fn transform(t: &DAffine3) -> String {
 
 /// A textured material's resources: its `texture2d` and the coordinates its group holds.
 struct TextureGroup {
-    material: MaterialId,
     /// The group's resource id.
     id: usize,
     /// The `texture2d` resource id.
@@ -199,23 +198,23 @@ pub(crate) fn encode(
     }
     // The base materials: each one used, in first-use order; None is the default.
     let mut used: Vec<Option<MaterialId>> = Vec::new();
+    let mut slots: HashMap<Option<MaterialId>, usize> = HashMap::new();
     for mesh in &meshes {
         for (_, m, _) in &mesh.triangles {
             let m = m.filter(|m| scene.material(*m).is_some());
-            if !used.contains(&m) {
+            slots.entry(m).or_insert_with(|| {
                 used.push(m);
-            }
+                used.len() - 1
+            });
         }
     }
-    let slot = |m: Option<MaterialId>| {
-        let m = m.filter(|m| scene.material(*m).is_some());
-        used.iter().position(|u| *u == m).expect("listed")
-    };
+    let slot = |m: Option<MaterialId>| slots[&m.filter(|m| scene.material(*m).is_some())];
     // Resource ids: the base materials are 1, then the textures and their groups, then the
     // objects.
     let mut next_id = 2;
     let mut images: Vec<(std::sync::Arc<kernel::TextureImage>, usize)> = Vec::new();
     let mut groups: Vec<TextureGroup> = Vec::new();
+    let mut group_of: HashMap<MaterialId, usize> = HashMap::new();
     for m in used.iter().flatten() {
         let Some(texture) = scene.material(*m).and_then(|m| m.texture.as_ref()) else {
             continue;
@@ -231,8 +230,8 @@ pub(crate) fn encode(
                 next_id - 1
             }
         };
+        group_of.insert(*m, groups.len());
         groups.push(TextureGroup {
-            material: *m,
             id: next_id,
             texture: texture_id,
             coords: Vec::new(),
@@ -292,7 +291,7 @@ pub(crate) fn encode(
             body.push_str("</vertices>\n<triangles>\n");
             for (t, m, uvs) in &mesh.triangles {
                 let m = m.filter(|m| scene.material(*m).is_some());
-                let group = m.and_then(|m| groups.iter().position(|g| g.material == m));
+                let group = m.and_then(|m| group_of.get(&m).copied());
                 match group {
                     Some(k) => {
                         let g = &mut groups[k];

@@ -609,3 +609,53 @@ fn a_textured_material_writes_its_image_coordinates_and_package_parts() {
         "{coords:?}"
     );
 }
+
+#[test]
+fn a_turned_and_stretched_placement_lands_where_the_model_has_it() {
+    let mut d = doc();
+    let ids = posts(&mut d, 1);
+    run(
+        &mut d,
+        json!({"type": "rotate", "ids": [ids[1]], "center": [3, 0, 0], "axis": [0, 0, 1], "angle": 90}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "scale", "ids": [ids[1]], "origin": [0, 0, 0], "factors": [2, 1, 1]}),
+    )
+    .unwrap();
+    let (bytes, _) = export(&mut d, "turned.3mf", json!({}));
+    let els = model(&bytes);
+    assert_eq!(els.iter().filter(|e| e.0 == "object").count(), 1);
+    let vertices: Vec<glam::DVec3> = els
+        .iter()
+        .filter(|e| e.0 == "vertex")
+        .map(|e| glam::DVec3::from(["x", "y", "z"].map(|k| attr(e, k).unwrap().parse().unwrap())))
+        .collect();
+    // 3MF transforms act on row vectors: the first three triples are the images of x, y and
+    // z, the last the translation.
+    let mut boxes: Vec<[i64; 6]> = els
+        .iter()
+        .filter(|e| e.0 == "item")
+        .map(|item| {
+            let m: Vec<f64> = attr(item, "transform")
+                .unwrap_or("1 0 0 0 1 0 0 0 1 0 0 0")
+                .split(' ')
+                .map(|x| x.parse().unwrap())
+                .collect();
+            let row = |k: usize| glam::DVec3::new(m[3 * k], m[3 * k + 1], m[3 * k + 2]);
+            let placed: Vec<glam::DVec3> = vertices
+                .iter()
+                .map(|v| row(0) * v.x + row(1) * v.y + row(2) * v.z + row(3))
+                .collect();
+            let lo = placed.iter().fold(glam::DVec3::MAX, |a, b| a.min(*b));
+            let hi = placed.iter().fold(glam::DVec3::MIN, |a, b| a.max(*b));
+            [lo.x, lo.y, lo.z, hi.x, hi.y, hi.z].map(|x| x.round() as i64)
+        })
+        .collect();
+    boxes.sort();
+    assert_eq!(
+        boxes,
+        [[0, 0, 0, 1000, 2000, 3000], [2000, 0, 0, 6000, 1000, 3000]]
+    );
+}
