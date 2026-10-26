@@ -169,7 +169,7 @@ impl Editor {
 
     /// Brings out `tool` (a Paste tool) over the current one, which Escape or the placing
     /// click goes back to.
-    pub(super) fn start_paste_tool(&mut self, tool: PasteTool) {
+    pub(super) fn start_paste_tool(&mut self, tool: impl tools::Tool + 'static) {
         // Read before `hover_now`, which shows the hover again.
         let in_view = !self.flying && !self.hover_hidden && !self.covered;
         let back = self.paste_return.unwrap_or(self.kind);

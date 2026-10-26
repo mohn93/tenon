@@ -244,6 +244,21 @@ pub enum EditorCommand {
     /// `insert_library_item`), and for a file that is not a valid item, before the tool comes
     /// out.
     PlaceLibraryItem { path: String },
+    /// Brings out the Image tool with a PNG or JPEG, as File > Import does for an image file:
+    /// give `path` (follows the read rules, `--api-root`) or `data` (the file's bytes in
+    /// base64), exactly one. A picture follows the cursor on the face or ground plane under it;
+    /// the first click (`tool_input`) sets a corner, moving sizes it keeping the image's
+    /// proportions, a typed length sets the width, and the second click (or the typed width)
+    /// places it as one `import_image` step, facing the camera (`tool_input` reports it with
+    /// `data` left out). Escape or `cancel` goes back to the tool used
+    /// before. `invalid_input` or `file` for an image over the limits (see `import_image`),
+    /// before the tool comes out.
+    PlaceImage {
+        #[serde(default)]
+        path: Option<String>,
+        #[serde(default)]
+        data: Option<String>,
+    },
     /// File > Export PDF...: renders the current view (camera, display settings and section
     /// cuts; nothing highlighted) with the GPU and writes it as a PDF at `path`, one page per
     /// sheet. Without `scale` the view is fitted on one sheet; with `scale` (1:N, a parallel
@@ -305,7 +320,7 @@ pub struct PdfReport {
 }
 
 /// The `type` of each editor command.
-pub const EDITOR_COMMANDS: [&str; 15] = [
+pub const EDITOR_COMMANDS: [&str; 16] = [
     "set_tool",
     "set_paint_material",
     "set_import_units",
@@ -319,6 +334,7 @@ pub const EDITOR_COMMANDS: [&str; 15] = [
     "paste_clipboard",
     "paste_in_place",
     "place_library_item",
+    "place_image",
     "export_pdf",
     "play",
 ];

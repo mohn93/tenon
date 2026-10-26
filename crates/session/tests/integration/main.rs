@@ -32,6 +32,7 @@ mod helix;
 mod hide;
 mod history_origin;
 mod import;
+mod import_image;
 mod interference;
 mod intersect;
 mod isolate;

@@ -42,6 +42,7 @@ mod follow_me;
 mod groups;
 mod health;
 mod hide;
+mod image;
 mod import;
 pub(crate) use import::read_limited;
 mod instances;
@@ -823,6 +824,7 @@ impl Document {
             | Command::DeactivateSection {}
             | Command::SetSectionCut { .. }
             | Command::Add3dText { .. }
+            | Command::ImportImage { .. }
             | Command::SetUnits { .. }
             | Command::PushPull { .. }
             | Command::Erase { .. }
@@ -1045,6 +1047,22 @@ impl Document {
                 depth,
                 filled,
             } => self.add_3d_text_changes(text, *position, *height, *depth, *filled),
+            Command::ImportImage {
+                path,
+                data,
+                origin,
+                normal,
+                x_axis,
+                width,
+                name,
+                lift,
+            } => self.import_image_changes(
+                (path.as_deref(), data.as_deref()),
+                (*origin, *normal, *x_axis),
+                *width,
+                name.as_deref(),
+                *lift,
+            ),
             Command::SetUnits {
                 length,
                 precision,

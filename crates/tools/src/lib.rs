@@ -8,6 +8,7 @@ pub mod dimension;
 pub mod erase;
 pub mod follow_me;
 pub mod freehand;
+pub mod image;
 pub mod inference;
 pub mod line;
 pub mod look_around;
@@ -45,6 +46,7 @@ pub use dimension::DimensionTool;
 pub use erase::EraseTool;
 pub use follow_me::FollowMeTool;
 pub use freehand::FreehandTool;
+pub use image::{ImageSpec, ImageTool};
 pub use inference::{
     Axis, Guides, Inference, Involved, Lock, SnapKind, annotation_under_where, edge_under,
     edge_under_in, edge_under_where, face_under, face_under_in, guide_under_where, infer,

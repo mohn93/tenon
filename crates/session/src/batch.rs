@@ -989,6 +989,7 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::DeactivateSection {}
         | Command::SetSectionDisplay { .. }
         | Command::Add3dText { .. }
+        | Command::ImportImage { .. }
         | Command::SetUnits { .. }
         | Command::CloseInstance {}
         | Command::PurgeDefinitions {}

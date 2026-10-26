@@ -212,6 +212,7 @@ fn describe_lists_methods_and_schemas() {
         "add_screen_note",
         "change_note",
         "add_3d_text",
+        "import_image",
         "set_units",
         "add_section_plane",
         "flip_section_plane",

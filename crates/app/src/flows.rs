@@ -10,7 +10,7 @@ use std::sync::Arc;
 use kernel::MaterialId;
 use winit::window::Window;
 
-use crate::editor::{Editor, PrintOptions};
+use crate::editor::{Editor, PrintOptions, is_image_name};
 use crate::platform::{
     Answer, Download, Filter, OpenKind, OpenRequest, Picked, Platform, Reply, SaveRequest, Saved,
     Source, UnsavedChoice, UnsavedPrompt,
@@ -123,14 +123,17 @@ fn open_filters() -> Vec<Filter> {
 fn import_filters() -> Vec<Filter> {
     vec![
         Filter::new(
-            "OBJ, STL, SketchUp, glTF or COLLADA",
-            &["obj", "stl", "skp", "gltf", "glb", "dae"],
+            "OBJ, STL, SketchUp, glTF, COLLADA or image",
+            &[
+                "obj", "stl", "skp", "gltf", "glb", "dae", "png", "jpg", "jpeg",
+            ],
         ),
         Filter::new("OBJ", &["obj"]),
         Filter::new("STL", &["stl"]),
         Filter::new("SketchUp", &["skp"]),
         Filter::new("glTF", &["gltf", "glb"]),
         Filter::new("COLLADA", &["dae"]),
+        Filter::new("Image", &["png", "jpg", "jpeg"]),
     ]
 }
 
@@ -430,7 +433,7 @@ impl Flows {
             .platform
             .pick_open(&request, self.reply(PlatformReply::Picked))
         {
-            Answer::Ready(picked) => self.imported(picked),
+            Answer::Ready(picked) => self.imported(env, picked),
             Answer::Pending => {
                 self.waiting = Some(Waiting::PickImport);
                 Vec::new()
@@ -438,10 +441,25 @@ impl Flows {
         }
     }
 
-    fn imported(&mut self, picked: Option<Picked>) -> Vec<Effect> {
+    fn imported(&mut self, env: &mut Env, picked: Option<Picked>) -> Vec<Effect> {
         self.import = None;
         match picked {
             None => Vec::new(),
+            // A picture goes to the Image tool; it has no import options.
+            Some(Picked {
+                name,
+                source: Source::Bytes(bytes),
+            }) if is_image_name(&name) => {
+                let _ = env.editor.place_image(&name, &bytes);
+                Vec::new()
+            }
+            Some(Picked {
+                source: Source::Path(path),
+                ..
+            }) if path.to_str().is_some_and(is_image_name) => {
+                let _ = env.editor.place_image_from(path.to_str(), None);
+                Vec::new()
+            }
             Some(Picked {
                 source: Source::Path(path),
                 ..
@@ -696,7 +714,7 @@ impl Flows {
                 self.saved_bytes(env, result, then)
             }
             (Waiting::PickOpen, PlatformReply::Picked(picked)) => self.opened(env, picked),
-            (Waiting::PickImport, PlatformReply::Picked(picked)) => self.imported(picked),
+            (Waiting::PickImport, PlatformReply::Picked(picked)) => self.imported(env, picked),
             (Waiting::PickTexture(material), PlatformReply::Picked(picked)) => {
                 self.textured(env, material, picked);
                 Vec::new()
@@ -1214,6 +1232,37 @@ mod tests {
         };
         assert!(f.import_confirmed(&mut env, Path::new("tri.obj")));
         assert!(editor.doc().is_modified());
+    }
+
+    #[test]
+    fn an_imported_image_brings_out_the_image_tool_not_the_options_sheet() {
+        let platform = web();
+        let mut png = Vec::new();
+        image::RgbaImage::new(4, 2)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        platform
+            .opens
+            .borrow_mut()
+            .push_back(Answer::Ready(Some(Picked {
+                name: "poster.PNG".into(),
+                source: Source::Bytes(png),
+            })));
+        let mut editor = editor();
+        let mut f = flows();
+        let fx = run(&mut f, &mut editor, &platform, |f, env| f.import(env));
+        assert!(fx.is_empty(), "no options sheet: {fx:?}");
+        assert!(editor.pasting(), "the Image tool is out");
+        assert_eq!(editor.status_parts().tool, "Image");
+        assert!(!editor.doc().is_modified());
+    }
+
+    #[test]
+    fn the_import_filter_lists_images() {
+        let all = &import_filters()[0];
+        for ext in ["png", "jpg", "jpeg"] {
+            assert!(all.extensions.contains(&ext), "{ext}");
+        }
     }
 
     fn with_rectangle() -> Editor {

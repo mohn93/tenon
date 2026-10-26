@@ -35,6 +35,8 @@ mod agent;
 mod axes;
 mod bytes;
 mod clip;
+mod image;
+pub use image::is_image_name;
 mod input;
 mod intersect;
 pub use input::{DriveError, Driven, Stopped};
@@ -2255,7 +2257,7 @@ impl Editor {
         let pasted = self.apply(out);
         // The Paste tool goes once it pasted (even onto what is there, changing nothing), or on
         // Escape.
-        if is_cancel || is_click && pasted {
+        if is_cancel || (is_click || is_value) && pasted {
             self.end_paste();
         }
         if is_value {
@@ -2349,6 +2351,7 @@ impl Editor {
                 Command::Paste { .. }
                     | Command::InsertLibraryItem { .. }
                     | Command::Add3dText { .. }
+                    | Command::ImportImage { .. }
             );
             let is_axes = matches!(command, Command::SetAxes { .. });
             let revision = self.doc.revision();

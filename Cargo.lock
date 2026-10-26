@@ -283,6 +283,7 @@ version = "0.1.0"
 dependencies = [
  "api",
  "arboard",
+ "base64",
  "egui",
  "egui-phosphor",
  "egui-wgpu",
@@ -290,6 +291,7 @@ dependencies = [
  "egui_kittest",
  "env_logger",
  "glam",
+ "image",
  "kernel",
  "libc",
  "muda",

@@ -402,6 +402,24 @@ pub fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, R
                         .map_err(command_failed)?;
                     None
                 }
+                EditorCommand::PlaceImage {
+                    path: Some(path),
+                    data,
+                } => {
+                    let path = match host.roots() {
+                        Some(roots) => roots
+                            .read(&path)
+                            .map(|p| p.display().to_string())
+                            .map_err(command_failed)?,
+                        None => path,
+                    };
+                    host.editor_command(EditorCommand::PlaceImage {
+                        path: Some(path),
+                        data,
+                    })
+                    .map_err(command_failed)?;
+                    None
+                }
                 command => {
                     host.editor_command(command).map_err(command_failed)?;
                     None

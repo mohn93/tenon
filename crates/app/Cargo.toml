@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 render = { path = "../render" }
 session = { path = "../session" }
+base64.workspace = true
 tools = { path = "../tools" }
 api = { path = "../api" }
 glam.workspace = true
@@ -60,6 +61,7 @@ windows-sys = { version = "=0.61.2", features = [
 
 [dev-dependencies]
 egui_kittest.workspace = true
+image.workspace = true
 
 # The Windows icon and version resource, embedded only when SKETCHUP_ALT_WINRES is set (the
 # packaging workflow), so ordinary builds do not depend on the resource compiler.
