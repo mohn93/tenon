@@ -60,6 +60,8 @@ impl Health {
 pub struct Repair {
     /// Vertices merged into a neighbour across a tiny gap.
     pub welded: usize,
+    /// Open edges split where another edge's vertex lies on them.
+    pub tjunctions_mended: usize,
     pub strays_removed: usize,
     pub internal_removed: usize,
     /// Faces made to fill holes.
@@ -470,6 +472,76 @@ fn crosses(rings: &[Vec<DVec2>]) -> bool {
     false
 }
 
+/// What `fill_holes` made.
+struct Filled {
+    /// Every face made.
+    made: Vec<FaceId>,
+    /// How many holes were filled.
+    holes: usize,
+    /// For each hole patched with triangles, where it is (an edge) and the faces made.
+    patches: Vec<(String, Vec<FaceId>)>,
+    /// Why other holes were left.
+    reasons: Vec<String>,
+}
+
+/// A triangulation of `ring` (counterclockwise, simple) by ear clipping, as index triples,
+/// or None when a clip finds no ear or the ear would have no area. Only the reflex corners
+/// are tested for lying inside an ear.
+fn ear_clip(ring: &[DVec2]) -> Option<Vec<[usize; 3]>> {
+    let n = ring.len();
+    let least = LENGTH_TOL * LENGTH_TOL;
+    let turn = |a: usize, b: usize, c: usize| (ring[b] - ring[a]).perp_dot(ring[c] - ring[b]);
+    let mut prev: Vec<usize> = (0..n).map(|i| (i + n - 1) % n).collect();
+    let mut next: Vec<usize> = (0..n).map(|i| (i + 1) % n).collect();
+    let mut alive = vec![true; n];
+    let mut out = Vec::with_capacity(n.saturating_sub(2));
+    let mut reflex: BTreeSet<usize> = (0..n)
+        .filter(|&i| turn(prev[i], i, next[i]) <= least)
+        .collect();
+    let mut left = n;
+    let mut at = 0;
+    let mut tries = 0;
+    while left > 3 {
+        if tries > left {
+            return None;
+        }
+        let (p, c, q) = (prev[at], at, next[at]);
+        let ear = turn(p, c, q) > least && {
+            let inside = |r: usize| {
+                let side = |a: usize, b: usize| (ring[b] - ring[a]).perp_dot(ring[r] - ring[a]);
+                side(p, c) >= -least && side(c, q) >= -least && side(q, p) >= -least
+            };
+            !reflex
+                .iter()
+                .any(|&r| r != p && r != c && r != q && inside(r))
+        };
+        if ear {
+            out.push([p, c, q]);
+            next[p] = q;
+            prev[q] = p;
+            alive[c] = false;
+            reflex.remove(&c);
+            for v in [p, q] {
+                if turn(prev[v], v, next[v]) > least {
+                    reflex.remove(&v);
+                }
+            }
+            left -= 1;
+            at = p;
+            tries = 0;
+        } else {
+            at = next[at];
+            tries += 1;
+        }
+    }
+    let first = (0..n).find(|i| alive[*i])?;
+    let (p, c, q) = (prev[first], first, next[first]);
+    (turn(p, c, q) > least).then(|| {
+        out.push([p, c, q]);
+        out
+    })
+}
+
 impl Model {
     /// Merges the vertices across `pairs` (each group into its lowest id) and refits the
     /// normals of the faces at the kept vertices. Returns how many vertices went and the
@@ -513,9 +585,161 @@ impl Model {
         (target.len(), faces)
     }
 
+    /// Splits the open edges that other open vertices lie on (within `tol` of the edge, and
+    /// more than `tol` from its ends): the edge's face gains the vertices in its loop, new
+    /// edges join them and the long edge goes. Returns how many edges were split and the
+    /// faces changed.
+    fn mend_tjunctions(&mut self, tol: f64) -> (usize, BTreeSet<FaceId>) {
+        let counts = side_counts(self);
+        let mut open: BTreeSet<VertexId> = BTreeSet::new();
+        let mut long: Vec<(EdgeId, VertexId, VertexId)> = Vec::new();
+        for (id, e) in self.edges() {
+            let [a, b] = e.v;
+            if users(&counts, a, b) == 1 {
+                open.extend([a, b]);
+                long.push((id, a, b));
+            }
+        }
+        // Along the axis the open vertices spread most, so an edge looks only at the ones
+        // within its own range of it.
+        let spread = |axis: usize| {
+            let (lo, hi) = open
+                .iter()
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), v| {
+                    let x = self.pos(*v)[axis];
+                    (l.min(x), h.max(x))
+                });
+            hi - lo
+        };
+        let axis = (0..3)
+            .max_by(|a, b| spread(*a).total_cmp(&spread(*b)))
+            .unwrap_or(0);
+        let mut sorted: Vec<(f64, VertexId)> =
+            open.iter().map(|v| (self.pos(*v)[axis], *v)).collect();
+        sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut mended = 0;
+        let mut touched = BTreeSet::new();
+        for (e, a, b) in long {
+            let (pa, pb) = (self.pos(a), self.pos(b));
+            let len = pa.distance(pb);
+            if len <= 2.0 * tol {
+                continue;
+            }
+            let (lo, hi) = (pa[axis].min(pb[axis]) - tol, pa[axis].max(pb[axis]) + tol);
+            let from = sorted.partition_point(|(x, _)| *x < lo);
+            let mut on: Vec<(f64, VertexId)> = Vec::new();
+            for &(x, v) in &sorted[from..] {
+                if x > hi {
+                    break;
+                }
+                if v == a || v == b {
+                    continue;
+                }
+                let (t, off) = crate::geom::project_on_segment(self.pos(v), pa, pb);
+                if off <= tol && t * len > tol && (1.0 - t) * len > tol {
+                    on.push((t, v));
+                }
+            }
+            if on.is_empty() {
+                continue;
+            }
+            on.sort_by(|x, y| x.0.total_cmp(&y.0));
+            let chain: Vec<VertexId> = std::iter::once(a)
+                .chain(on.iter().map(|(_, v)| *v))
+                .chain([b])
+                .collect();
+            let faces = self.faces_on_side(a, b);
+            // A face that already has one of the vertices in a loop cannot take it again.
+            if faces.iter().any(|f| {
+                let face = self.face(*f).expect("listed");
+                std::iter::once(&face.outer)
+                    .chain(&face.holes)
+                    .any(|l| on.iter().any(|(_, v)| l.contains(v)))
+            }) {
+                continue;
+            }
+            let like = self.edge(e).expect("listed").clone();
+            for w in chain.windows(2) {
+                if self.edge_between(w[0], w[1]).is_none() {
+                    self.insert_edge_like(w[0], w[1], &like);
+                }
+            }
+            for f in faces {
+                let mut face = self.face(f).expect("listed").clone();
+                for l in std::iter::once(&mut face.outer).chain(face.holes.iter_mut()) {
+                    let n = l.len();
+                    let Some(i) = (0..n).find(|i| {
+                        let (x, y) = (l[*i], l[(*i + 1) % n]);
+                        (x == a && y == b) || (x == b && y == a)
+                    }) else {
+                        continue;
+                    };
+                    let forward = l[i] == a;
+                    let ins: Vec<VertexId> = if forward {
+                        chain[1..chain.len() - 1].to_vec()
+                    } else {
+                        chain[1..chain.len() - 1].iter().rev().copied().collect()
+                    };
+                    l.splice(i + 1..i + 1, ins);
+                }
+                self.replace_face(f, face);
+                touched.insert(f);
+            }
+            self.remove_edge(e);
+            mended += 1;
+        }
+        (mended, touched)
+    }
+
+    /// Fills the hole `l` (open sides traced into a loop that is not flat) with triangles:
+    /// the ring is projected on the plane through its centroid with its area normal and ear
+    /// clipped. Returns the faces made, or why not.
+    fn patch_hole(&mut self, l: &[VertexId]) -> Result<Vec<FaceId>, String> {
+        let pts: Vec<DVec3> = l.iter().map(|v| self.pos(*v)).collect();
+        let normal = vector_area(&pts).normalize();
+        let centroid = pts.iter().sum::<DVec3>() / pts.len() as f64;
+        let plane = Plane::through(centroid, normal);
+        let mut ring: Vec<DVec2> = pts.iter().map(|p| plane.project(*p)).collect();
+        if crosses(std::slice::from_ref(&ring)) {
+            return Err("crosses itself when flattened".into());
+        }
+        let turned = ring
+            .iter()
+            .zip(ring.iter().cycle().skip(1))
+            .map(|(a, b)| a.perp_dot(*b))
+            .sum::<f64>()
+            < 0.0;
+        if turned {
+            ring.reverse();
+        }
+        let Some(tris) = ear_clip(&ring) else {
+            return Err("cannot be triangulated".into());
+        };
+        let n = l.len();
+        let mut made = Vec::new();
+        for [i, j, k] in tris {
+            // Index into the ring as listed, undoing the turn.
+            let at = |x: usize| if turned { n - 1 - x } else { x };
+            let mut t = [l[at(i)], l[at(j)], l[at(k)]];
+            let p = t.map(|v| self.pos(v));
+            let mut tn = (p[1] - p[0]).cross(p[2] - p[0]).normalize_or_zero();
+            if tn.dot(normal) < 0.0 {
+                t.swap(1, 2);
+                tn = -tn;
+            }
+            for w in 0..3 {
+                if self.edge_between(t[w], t[(w + 1) % 3]).is_none() {
+                    self.insert_edge(t[w], t[(w + 1) % 3]);
+                }
+            }
+            made.push(self.insert_face(Face::new(t.to_vec(), Vec::new(), tn)));
+        }
+        Ok(made)
+    }
+
     /// Fills the holes left by open edges with faces where that is safe (see the module
-    /// notes in `repair`). Returns the faces made and why the other holes were left.
-    fn fill_holes(&mut self) -> (Vec<FaceId>, Vec<String>) {
+    /// notes in `repair`).
+    fn fill_holes(&mut self) -> Filled {
         let counts = side_counts(self);
         // The new faces run each open side the other way round.
         let mut next: BTreeMap<VertexId, Vec<VertexId>> = BTreeMap::new();
@@ -577,6 +801,7 @@ impl Model {
             plane: Plane,
         }
         let mut flat: Vec<Flat> = Vec::new();
+        let mut bent: Vec<Vec<VertexId>> = Vec::new();
         for l in loops {
             let pts: Vec<DVec3> = l.iter().map(|v| self.pos(*v)).collect();
             let edge = name(self, l[0], l[1]);
@@ -590,7 +815,7 @@ impl Model {
                 .iter()
                 .any(|p| (*p - pts[0]).dot(normal).abs() > LENGTH_TOL)
             {
-                reasons.push(format!("the hole at {edge} is not flat"));
+                bent.push(l);
                 continue;
             }
             flat.push(Flat {
@@ -666,7 +891,25 @@ impl Model {
             }
             made.push(self.insert_face(Face::new(flat[i].l.clone(), holes, flat[i].normal)));
         }
-        (made, reasons)
+        let mut holes = made.len();
+        let mut patches = Vec::new();
+        for l in bent {
+            let edge = name(self, l[0], l[1]);
+            match self.patch_hole(&l) {
+                Ok(faces) => {
+                    holes += 1;
+                    made.extend(&faces);
+                    patches.push((edge, faces));
+                }
+                Err(why) => reasons.push(format!("the hole at {edge} {why}")),
+            }
+        }
+        Filled {
+            made,
+            holes,
+            patches,
+            reasons,
+        }
     }
 }
 
@@ -690,6 +933,10 @@ pub fn repair(m: &Model) -> Repaired {
     let (welded, refitted) = c.weld_gaps(&before.gaps);
     r.welded = welded;
     touched.extend(refitted);
+
+    let (mended, split) = c.mend_tjunctions(weld_tolerance(m));
+    r.tjunctions_mended = mended;
+    touched.extend(split);
 
     let counts = side_counts(&c);
     let strays: Vec<EdgeId> = c
@@ -722,8 +969,24 @@ pub fn repair(m: &Model) -> Repaired {
     };
     let (agree, _) = turns(&c);
     turn_over(&mut c, agree);
-    let (made, mut reasons) = c.fill_holes();
+    let Filled {
+        made,
+        holes,
+        patches,
+        mut reasons,
+    } = c.fill_holes();
     let mut cut = false;
+    if !patches.is_empty() {
+        let crossing: BTreeSet<FaceId> = crossing_faces(&c).into_iter().collect();
+        for (edge, faces) in &patches {
+            if faces.iter().any(|f| crossing.contains(f)) {
+                cut = true;
+                reasons.push(format!(
+                    "a patch over the hole at {edge} would cross the part"
+                ));
+            }
+        }
+    }
     for &f in &made {
         if pierced(&c, f) {
             cut = true;
@@ -735,7 +998,7 @@ pub fn repair(m: &Model) -> Repaired {
             ));
         }
     }
-    r.holes_filled = made.len();
+    r.holes_filled = holes;
     r.reasons = reasons;
     touched.extend(made);
     let (outward, conflicts) = turns(&c);
@@ -1065,25 +1328,182 @@ mod tests {
         fixed.validate().unwrap();
     }
 
-    #[test]
-    fn a_hole_that_is_not_flat_is_reported() {
-        // A cube of triangles missing two that meet across the top front edge.
-        let points = corners(DVec3::ZERO, DVec3::ONE);
+    /// The cube of triangles (twelve) on `points` (a box's corners), less the triangles in
+    /// `without`.
+    fn triangle_cube(points: &[DVec3], without: &[Vec<usize>]) -> Model {
         let faces: Vec<Vec<usize>> = sides_of_box(0)
             .iter()
             .flat_map(|q| [vec![q[0], q[1], q[2]], vec![q[0], q[2], q[3]]])
-            .filter(|t| *t != vec![4, 5, 7] && *t != vec![0, 5, 4])
+            .filter(|t| !without.contains(t))
             .collect();
-        assert_eq!(faces.len(), 10);
+        build(points, &faces)
+    }
+
+    #[test]
+    fn a_hole_that_is_not_flat_is_patched() {
+        // A cube of triangles missing two that meet across the top front edge: the hole's
+        // four corners do not lie in one plane.
+        let m = triangle_cube(
+            &corners(DVec3::ZERO, DVec3::ONE),
+            &[vec![4, 5, 7], vec![0, 5, 4]],
+        );
+        let h = check(&m);
+        assert_eq!(h.open_edges.len(), 4, "{h:?}");
+        let r = repair(&m);
+        assert_eq!(r.repair.holes_filled, 1, "{:?}", r.repair);
+        let fixed = r.model.expect("patched");
+        fixed.validate().unwrap();
+        assert!(check(&fixed).is_solid());
+        assert_eq!(fixed.faces().count(), 12);
+        assert!(volume(&fixed) > 0.5);
+    }
+
+    #[test]
+    fn a_bowl_shaped_hole_in_a_sphere_is_patched() {
+        let mut m = Solid::sphere(1.0, 16).unwrap().to_model();
+        let whole = volume(&m);
+        let near: Vec<FaceId> = m
+            .faces()
+            .filter(|(id, _)| {
+                let pts = m.triangulate(*id).unwrap();
+                let c = pts[0].iter().sum::<DVec3>() / 3.0;
+                c.distance(DVec3::X) < 0.7
+            })
+            .map(|(id, _)| id)
+            .collect();
+        assert!(near.len() > 2);
+        for f in near {
+            m.remove_face(f);
+        }
+        m.take_changes();
+        let r = repair(&m);
+        assert_eq!(r.repair.holes_filled, 1, "{:?}", r.repair);
+        let fixed = r.model.expect("patched");
+        fixed.validate().unwrap();
+        let v = volume(&fixed);
+        assert!(v > 0.0 && v < whole);
+    }
+
+    #[test]
+    fn a_patch_that_would_cross_the_part_is_refused() {
+        // The top corner dips below the bottom: the ring's patch would pass through the walls.
+        let mut points = corners(DVec3::ZERO, DVec3::ONE);
+        points[7] = DVec3::new(0.7, 0.6, -0.5);
+        let m = triangle_cube(&points, &[vec![4, 5, 7], vec![4, 7, 6]]);
+        let r = repair(&m);
+        assert!(r.model.is_none(), "{:?}", r.repair);
+        assert!(
+            r.repair.reasons.iter().any(|s| s.contains("cross")),
+            "{:?}",
+            r.repair.reasons
+        );
+    }
+
+    #[test]
+    fn a_hole_whose_flattened_ring_crosses_itself_is_refused() {
+        // A bow-tie hole: the ring's sides cross once seen from above.
+        let points = vec![
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(2.0, 2.0, 0.2),
+            DVec3::new(2.0, 0.0, 0.0),
+            DVec3::new(0.0, 1.0, 0.2),
+            DVec3::new(1.0, 0.7, -1.0),
+        ];
+        let faces = vec![vec![0, 4, 1], vec![1, 4, 2], vec![2, 4, 3], vec![3, 4, 0]];
         let m = build(&points, &faces);
         let r = repair(&m);
         assert!(r.model.is_none());
         assert!(
-            r.repair.reasons.iter().any(|s| s.contains("not flat")),
+            r.repair
+                .reasons
+                .iter()
+                .any(|s| s.contains("crosses itself")),
             "{:?}",
             r.repair.reasons
         );
-        assert!(!r.left.open_edges.is_empty());
+    }
+
+    #[test]
+    fn a_big_bent_hole_is_patched_quickly() {
+        // A sphere of 100 segments less a cap: a rim of a hundred sides or more.
+        let mut m = Solid::sphere(1.0, 100).unwrap().to_model();
+        let cap: Vec<FaceId> = m
+            .faces()
+            .filter(|(id, _)| {
+                let pts = m.triangulate(*id).unwrap();
+                let c = pts[0].iter().sum::<DVec3>() / 3.0;
+                c.x > 0.9 || (c.x > 0.6 && c.y > 0.0 && c.z > 0.0)
+            })
+            .map(|(id, _)| id)
+            .collect();
+        for f in cap {
+            m.remove_face(f);
+        }
+        m.take_changes();
+        let t = std::time::Instant::now();
+        let r = repair(&m);
+        assert!(t.elapsed() < std::time::Duration::from_secs(60));
+        assert!(r.model.is_some(), "{:?}", r.repair);
+    }
+
+    /// The box of triangles on a front face cut into quads at the given x values, with the
+    /// extra corners lying on the long edges of the bottom and top.
+    fn box_with_split_front(cuts: &[f64], off: f64) -> Model {
+        let mut points = corners(DVec3::ZERO, DVec3::ONE);
+        let mut faces: Vec<Vec<usize>> = Vec::new();
+        for q in sides_of_box(0) {
+            if q == [0, 1, 5, 4] {
+                continue;
+            }
+            faces.push(q);
+        }
+        let mut xs = vec![0.0];
+        xs.extend(cuts);
+        xs.push(1.0);
+        let mut bottom: Vec<usize> = vec![0, 1];
+        let mut top: Vec<usize> = vec![4, 5];
+        for x in cuts {
+            points.push(DVec3::new(*x, off, 0.0));
+            bottom.insert(bottom.len() - 1, points.len() - 1);
+            points.push(DVec3::new(*x, 0.0, 1.0));
+            top.insert(top.len() - 1, points.len() - 1);
+        }
+        for k in 0..xs.len() - 1 {
+            faces.push(vec![bottom[k], bottom[k + 1], top[k + 1], top[k]]);
+        }
+        build(&points, &faces)
+    }
+
+    #[test]
+    fn a_vertex_on_a_neighbours_long_edge_is_mended() {
+        let m = box_with_split_front(&[0.5], 0.0);
+        let h = check(&m);
+        assert!(!h.is_solid(), "{h:?}");
+        let r = repair(&m);
+        assert_eq!(r.repair.tjunctions_mended, 2, "{:?}", r.repair);
+        let fixed = r.model.expect("mended");
+        fixed.validate().unwrap();
+        assert!(check(&fixed).is_solid());
+        assert!((volume(&fixed) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn two_vertices_on_one_edge_are_both_taken() {
+        let m = box_with_split_front(&[1.0 / 3.0, 2.0 / 3.0], 0.0);
+        let r = repair(&m);
+        assert_eq!(r.repair.tjunctions_mended, 2, "{:?}", r.repair);
+        let fixed = r.model.expect("mended");
+        fixed.validate().unwrap();
+        assert!((volume(&fixed) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_vertex_off_the_edge_by_more_than_the_tolerance_is_not_mended() {
+        // 1e-4 m from the edge; the tolerance is 1e-5 of the 1.7 m diagonal.
+        let m = box_with_split_front(&[0.5], 1e-4);
+        let r = repair(&m);
+        assert_eq!(r.repair.tjunctions_mended, 1, "{:?}", r.repair);
+        assert!(r.model.is_none());
     }
 
     #[test]

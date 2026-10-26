@@ -1866,6 +1866,9 @@ pub struct MakeSolidEntry {
     pub parts: Vec<EntityId>,
     pub fixed: bool,
     pub welded: usize,
+    /// Open edges split where another edge's vertex lies on them.
+    #[serde(default)]
+    pub tjunctions_mended: usize,
     pub strays_removed: usize,
     pub internal_removed: usize,
     pub holes_filled: usize,
