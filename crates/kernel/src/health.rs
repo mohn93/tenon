@@ -1,6 +1,6 @@
 //! Model health: why a mesh is not a solid, entity by entity, and closing what can be closed
 //! safely: welding tiny gaps, removing stray edges and internal faces, orienting faces and
-//! filling flat holes, on a copy that is only handed back when it is a solid.
+//! filling holes, on a copy that is only handed back when it is a solid.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -10,6 +10,7 @@ use crate::boolean::{interior_point, point_inside, subset};
 use crate::geom::{LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon, vector_area};
 use crate::ids::{EdgeId, FaceId, VertexId};
 use crate::model::{Face, Model};
+use crate::shellcross::crossing_faces;
 use crate::solid::{open_reason, signed_volume};
 
 /// The least volume a solid encloses, as `instance_volume` asks.
@@ -40,6 +41,8 @@ pub struct Health {
     pub gaps: Vec<(VertexId, VertexId)>,
     /// Faces every one of whose edges bounds three or more faces.
     pub internal_faces: Vec<FaceId>,
+    /// Faces of a closed shell that cross another face of it, other than along shared edges.
+    pub self_crossing: Vec<FaceId>,
     /// The mesh is closed but encloses no volume.
     pub no_volume: bool,
     /// The mesh has no faces.
@@ -304,13 +307,17 @@ fn gaps(m: &Model, counts: &BTreeMap<(VertexId, VertexId), [u32; 2]>) -> Vec<(Ve
 
 /// What keeps `m` from being a solid.
 pub fn check(m: &Model) -> Health {
-    let reason = open_reason(m).or_else(|| {
-        (signed_volume(m).abs() <= MIN_VOLUME).then(|| "it encloses no volume".to_string())
-    });
+    let crossing = crossing_faces(m);
+    let reason = open_reason(m)
+        .or_else(|| {
+            (signed_volume(m).abs() <= MIN_VOLUME).then(|| "it encloses no volume".to_string())
+        })
+        .or_else(|| (!crossing.is_empty()).then(|| "its faces cross each other".to_string()));
     let mut h = Health {
         no_faces: m.faces().next().is_none(),
         no_volume: reason.as_deref() == Some("it encloses no volume"),
         reason,
+        self_crossing: crossing,
         ..Health::default()
     };
     if h.is_solid() {
@@ -752,6 +759,10 @@ pub fn repair(m: &Model) -> Repaired {
             .push(format!("face f{} would not be flat or valid", f.0));
     }
     let left = check(&c);
+    if !left.self_crossing.is_empty() {
+        r.reasons
+            .push("faces of the part would cross each other".into());
+    }
     let model = (left.is_solid() && bad.is_empty() && !cut).then_some(c);
     Repaired {
         model,
@@ -1156,5 +1167,91 @@ mod tests {
         assert!((tol(1.0) - 1e-5 * 3f64.sqrt()).abs() < 1e-12);
         assert_eq!(tol(0.01), LENGTH_TOL);
         assert_eq!(tol(1000.0), MAX_WELD);
+    }
+
+    /// The box of triangles from the origin to `hi` with its top corner (index 7) moved to `top`.
+    fn box_with_corner(hi: DVec3, top: DVec3) -> Model {
+        let mut points = corners(DVec3::ZERO, hi);
+        points[7] = top;
+        let triangles: Vec<Vec<usize>> = sides_of_box(0)
+            .iter()
+            .flat_map(|q| [vec![q[0], q[1], q[2]], vec![q[0], q[2], q[3]]])
+            .collect();
+        build(&points, &triangles)
+    }
+
+    #[test]
+    fn valid_shells_are_not_reported_as_crossing() {
+        for m in [
+            cube(),
+            hollow(),
+            Solid::sphere(1.0, 16).unwrap().to_model(),
+            Solid::tube(2.0, 1.0, 3.0, 16).unwrap().to_model(),
+        ] {
+            let h = check(&m);
+            assert!(h.self_crossing.is_empty(), "{h:?}");
+            assert!(h.is_solid());
+        }
+    }
+
+    #[test]
+    fn a_corner_pushed_through_the_opposite_wall_is_reported() {
+        // The corner at (1, 1, 1) pulled down through the bottom face: the shell is closed
+        // with volume, yet it crosses itself.
+        let m = box_with_corner(DVec3::ONE, DVec3::new(0.7, 0.6, -0.5));
+        let h = check(&m);
+        assert!(
+            h.open_edges.is_empty() && h.shared_edges.is_empty(),
+            "{h:?}"
+        );
+        assert!(!h.self_crossing.is_empty(), "{h:?}");
+        assert!(!h.is_solid());
+        assert_eq!(h.reason.as_deref(), Some("its faces cross each other"));
+        let r = repair(&m);
+        assert!(r.model.is_none());
+        assert!(
+            r.repair
+                .reasons
+                .iter()
+                .any(|s| s.contains("cross each other")),
+            "{:?}",
+            r.repair.reasons
+        );
+    }
+
+    #[test]
+    fn two_solids_overlapping_in_one_mesh_are_not_a_crossing_shell() {
+        let mut points = corners(DVec3::ZERO, DVec3::ONE);
+        points.extend(corners(DVec3::splat(0.5), DVec3::splat(1.5)));
+        let mut faces = sides_of_box(0);
+        faces.extend(sides_of_box(8));
+        let m = build(&points, &faces);
+        assert!(check(&m).self_crossing.is_empty());
+    }
+
+    #[test]
+    fn a_face_folded_back_over_its_neighbour_is_reported() {
+        // A box whose top is two triangles; one is turned about its diagonal to lie over the
+        // other half of the top (coplanar, overlapping).
+        let points = corners(DVec3::ZERO, DVec3::ONE);
+        let mut faces: Vec<Vec<usize>> = sides_of_box(0)[..1].to_vec();
+        faces.extend(sides_of_box(0)[2..].iter().cloned());
+        faces.push(vec![4, 5, 7]);
+        faces.push(vec![4, 7, 6]);
+        let ok = build(&points, &faces);
+        assert!(check(&ok).self_crossing.is_empty());
+        // Move vertex 6 onto the far side of the diagonal 5-4... over the first triangle.
+        let mut points = points;
+        points[6] = DVec3::new(0.9, 0.2, 1.0);
+        let folded = build(&points, &faces);
+        assert!(!check(&folded).self_crossing.is_empty());
+    }
+
+    #[test]
+    fn a_big_sphere_is_checked_for_crossings_quickly() {
+        let m = Solid::sphere(1.0, 200).unwrap().to_model();
+        let t = std::time::Instant::now();
+        assert!(check(&m).self_crossing.is_empty());
+        assert!(t.elapsed() < std::time::Duration::from_secs(10));
     }
 }

@@ -45,6 +45,7 @@ mod same;
 mod scene;
 mod section;
 mod section_loops;
+pub mod shellcross;
 mod smooth;
 mod soften;
 pub mod solid;
