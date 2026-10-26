@@ -365,3 +365,297 @@ fn a_mirrored_part_exports_closed_with_positive_volume() {
         assert!((v - 6.0e9).abs() < 1.0, "volume {v}");
     }
 }
+
+/// A 1 x 2 x 3 m box made a component named "Post", copied to `copies` more placements 3 m
+/// apart along x. Returns the ids of the placements.
+fn posts(d: &mut Document, copies: usize) -> Vec<Value> {
+    add_box(d, [1.0, 2.0, 3.0], [0.0, 0.0, 0.0], "Post", None);
+    let q: session::Query = serde_json::from_value(json!({"type": "selection"})).unwrap();
+    let first = serde_json::to_value(d.query(&q).unwrap()).unwrap()["ids"][0].clone();
+    run(
+        d,
+        json!({"type": "make_component", "ids": [first], "name": "Post"}),
+    )
+    .unwrap();
+    let first = serde_json::to_value(d.query(&q).unwrap()).unwrap()["ids"][0].clone();
+    for k in 1..=copies {
+        run(
+            d,
+            json!({"type": "copy", "ids": [first], "offset": [3.0 * k as f64, 0, 0]}),
+        )
+        .unwrap();
+    }
+    let q: session::Query =
+        serde_json::from_value(json!({"type": "entities", "kinds": ["instance"]})).unwrap();
+    let all = serde_json::to_value(d.query(&q).unwrap()).unwrap();
+    let ids: Vec<Value> = all["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["id"].clone())
+        .collect();
+    assert_eq!(ids.len(), copies + 1);
+    ids
+}
+
+fn model(bytes: &[u8]) -> Vec<Element> {
+    elements(&entry(bytes, "3D/3dmodel.model"))
+}
+
+/// Every id used by a reference resolves to a resource or object of the model.
+fn assert_ids_resolve(els: &[Element]) {
+    let ids: std::collections::BTreeSet<&str> = els
+        .iter()
+        .filter(|e| {
+            ["object", "basematerials", "m:texture2d", "m:texture2dgroup"].contains(&e.0.as_str())
+        })
+        .map(|e| attr(e, "id").unwrap())
+        .collect();
+    let ids_count = els
+        .iter()
+        .filter(|e| {
+            ["object", "basematerials", "m:texture2d", "m:texture2dgroup"].contains(&e.0.as_str())
+        })
+        .count();
+    assert_eq!(ids.len(), ids_count, "ids are unique");
+    for e in els {
+        for key in ["objectid", "pid", "texid"] {
+            if let Some(v) = attr(e, key) {
+                assert!(ids.contains(v), "{} {key}={v} resolves in {ids:?}", e.0);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_component_placed_twice_is_one_object_with_two_build_items() {
+    let mut d = doc();
+    posts(&mut d, 1);
+    let (bytes, report) = export(&mut d, "shared.3mf", json!({}));
+    let els = model(&bytes);
+    assert_ids_resolve(&els);
+    assert_eq!(els.iter().filter(|e| e.0 == "object").count(), 1);
+    assert_eq!(els.iter().filter(|e| e.0 == "triangle").count(), 12);
+    let items: Vec<&Element> = els.iter().filter(|e| e.0 == "item").collect();
+    assert_eq!(items.len(), 2);
+    assert_eq!(attr(items[0], "objectid"), attr(items[1], "objectid"));
+    // One placement is at the origin, the other 3 m along x; each says where it is.
+    let moves: Vec<f64> = items
+        .iter()
+        .map(|i| {
+            attr(i, "transform").map_or(0.0, |t| t.split(' ').nth(9).unwrap().parse().unwrap())
+        })
+        .collect();
+    assert!(moves.contains(&0.0) && moves.contains(&3000.0), "{moves:?}");
+    assert_eq!(
+        report["objects"],
+        json!([{"name": "Post", "vertices": 8, "triangles": 12, "closed": true}])
+    );
+}
+
+#[test]
+fn placements_with_different_paint_or_a_mirror_are_not_shared() {
+    let mut d = doc();
+    let ids = posts(&mut d, 2);
+    let red = run(
+        &mut d,
+        json!({"type": "add_material", "name": "Red", "color": [255, 0, 0]}),
+    )
+    .unwrap()["changes"]["materials"][0]
+        .clone();
+    run(
+        &mut d,
+        json!({"type": "paint", "ids": [ids[1]], "material": red}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "flip", "ids": [ids[2]], "axis": "red", "frame": "own"}),
+    )
+    .unwrap();
+    let (bytes, report) = export(&mut d, "unshared.3mf", json!({}));
+    let els = model(&bytes);
+    assert_ids_resolve(&els);
+    // The plain one, the painted one and the mirrored one each stand alone.
+    assert_eq!(els.iter().filter(|e| e.0 == "object").count(), 3);
+    assert!(
+        els.iter()
+            .all(|e| e.0 != "item" || attr(e, "transform").is_none())
+    );
+    assert!(
+        report["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|o| o["closed"] == true)
+    );
+    for v in volumes(&entry(&bytes, "3D/3dmodel.model")) {
+        assert!((v - 6.0e9).abs() < 1.0, "volume {v}");
+    }
+}
+
+#[test]
+fn a_shared_component_inside_a_group_is_referenced_by_a_component_object() {
+    let mut d = doc();
+    let ids = posts(&mut d, 1);
+    run(
+        &mut d,
+        json!({"type": "make_group", "ids": ids, "name": "Pair"}),
+    )
+    .unwrap();
+    let (bytes, report) = export(&mut d, "nested.3mf", json!({}));
+    let els = model(&bytes);
+    assert_ids_resolve(&els);
+    // The post's mesh, and the group placing it twice.
+    assert_eq!(els.iter().filter(|e| e.0 == "object").count(), 2);
+    let components: Vec<&Element> = els.iter().filter(|e| e.0 == "component").collect();
+    assert_eq!(components.len(), 2);
+    assert!(components.iter().all(|c| attr(c, "transform").is_some()));
+    let group = els.iter().filter(|e| e.0 == "object").nth(1).unwrap();
+    assert_eq!(attr(group, "name"), Some("Pair"));
+    assert_eq!(els.iter().filter(|e| e.0 == "item").count(), 1);
+    assert_eq!(report["objects"].as_array().unwrap().len(), 1, "{report}");
+}
+
+/// The text of the package's entry names.
+fn names(bytes: &[u8]) -> Vec<String> {
+    let zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    zip.file_names().map(|n| n.unwrap().into_owned()).collect()
+}
+
+#[test]
+fn a_textured_material_writes_its_image_coordinates_and_package_parts() {
+    let mut d = doc();
+    let ids = posts(&mut d, 1);
+    let png = scratch("tiles.png");
+    image::RgbaImage::from_fn(4, 2, |x, _| image::Rgba([60 * x as u8, 0, 200, 255]))
+        .save(&png)
+        .unwrap();
+    let tiles = run(
+        &mut d,
+        json!({"type": "add_material", "name": "Tiles",
+               "texture": {"path": png.to_str().unwrap(), "width": 2}}),
+    )
+    .unwrap()["changes"]["materials"][0]
+        .clone();
+    run(
+        &mut d,
+        json!({"type": "paint", "ids": [ids[0]], "material": tiles}),
+    )
+    .unwrap();
+    let (bytes, _) = export(&mut d, "textured.3mf", json!({}));
+    let els = model(&bytes);
+    assert_ids_resolve(&els);
+    assert!(
+        attr(&els[0], "xmlns:m")
+            .unwrap()
+            .ends_with("material/2015/02")
+    );
+    let texture = els.iter().find(|e| e.0 == "m:texture2d").unwrap();
+    assert_eq!(attr(texture, "contenttype"), Some("image/png"));
+    let path = attr(texture, "path").unwrap();
+    assert!(path.starts_with("/3D/"), "{path}");
+    // The part is in the zip, byte for byte the stored PNG, with its content type and a
+    // relationship from the model part.
+    assert!(names(&bytes).contains(&path[1..].to_string()));
+    let mut stored = Vec::new();
+    zip::ZipArchive::new(std::io::Cursor::new(&bytes[..]))
+        .unwrap()
+        .by_name(&path[1..])
+        .unwrap()
+        .read_to_end(&mut stored)
+        .unwrap();
+    assert_eq!(stored, std::fs::read(&png).unwrap());
+    let types = elements(&entry(&bytes, "[Content_Types].xml"));
+    assert!(types.iter().any(|e| {
+        attr(e, "Extension") == Some("png") && attr(e, "ContentType") == Some("image/png")
+    }));
+    let rels = elements(&entry(&bytes, "3D/_rels/3dmodel.model.rels"));
+    let rel = rels.iter().find(|e| e.0 == "Relationship").unwrap();
+    assert_eq!(attr(rel, "Target"), Some(path));
+    assert!(attr(rel, "Type").unwrap().ends_with("/3dtexture"));
+    // Triangles of the textured crate point into the group's coordinates; the plain crate's
+    // triangles keep their base colors.
+    let group = els.iter().find(|e| e.0 == "m:texture2dgroup").unwrap();
+    assert_eq!(attr(group, "texid"), attr(texture, "id"));
+    let coords: Vec<(f64, f64)> = els
+        .iter()
+        .filter(|e| e.0 == "m:tex2coord")
+        .map(|e| {
+            (
+                attr(e, "u").unwrap().parse().unwrap(),
+                attr(e, "v").unwrap().parse().unwrap(),
+            )
+        })
+        .collect();
+    let textured: Vec<&Element> = els
+        .iter()
+        .filter(|e| e.0 == "triangle" && attr(e, "pid") == attr(group, "id"))
+        .collect();
+    assert_eq!(textured.len(), 12);
+    for t in &textured {
+        for k in ["p1", "p2", "p3"] {
+            assert!(attr(t, k).unwrap().parse::<usize>().unwrap() < coords.len());
+        }
+    }
+    let plain = els
+        .iter()
+        .filter(|e| e.0 == "triangle" && attr(e, "pid") == Some("1"))
+        .count();
+    assert_eq!(plain, 12);
+    // The 2 x 1 m texture over a 1 m wide wall gives half a repeat across: u spans 0.5.
+    assert!(
+        coords.iter().any(|(u, _)| (u - 0.5).abs() < 1e-9),
+        "{coords:?}"
+    );
+}
+
+#[test]
+fn a_turned_and_stretched_placement_lands_where_the_model_has_it() {
+    let mut d = doc();
+    let ids = posts(&mut d, 1);
+    run(
+        &mut d,
+        json!({"type": "rotate", "ids": [ids[1]], "center": [3, 0, 0], "axis": [0, 0, 1], "angle": 90}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "scale", "ids": [ids[1]], "origin": [0, 0, 0], "factors": [2, 1, 1]}),
+    )
+    .unwrap();
+    let (bytes, _) = export(&mut d, "turned.3mf", json!({}));
+    let els = model(&bytes);
+    assert_eq!(els.iter().filter(|e| e.0 == "object").count(), 1);
+    let vertices: Vec<glam::DVec3> = els
+        .iter()
+        .filter(|e| e.0 == "vertex")
+        .map(|e| glam::DVec3::from(["x", "y", "z"].map(|k| attr(e, k).unwrap().parse().unwrap())))
+        .collect();
+    // 3MF transforms act on row vectors: the first three triples are the images of x, y and
+    // z, the last the translation.
+    let mut boxes: Vec<[i64; 6]> = els
+        .iter()
+        .filter(|e| e.0 == "item")
+        .map(|item| {
+            let m: Vec<f64> = attr(item, "transform")
+                .unwrap_or("1 0 0 0 1 0 0 0 1 0 0 0")
+                .split(' ')
+                .map(|x| x.parse().unwrap())
+                .collect();
+            let row = |k: usize| glam::DVec3::new(m[3 * k], m[3 * k + 1], m[3 * k + 2]);
+            let placed: Vec<glam::DVec3> = vertices
+                .iter()
+                .map(|v| row(0) * v.x + row(1) * v.y + row(2) * v.z + row(3))
+                .collect();
+            let lo = placed.iter().fold(glam::DVec3::MAX, |a, b| a.min(*b));
+            let hi = placed.iter().fold(glam::DVec3::MIN, |a, b| a.max(*b));
+            [lo.x, lo.y, lo.z, hi.x, hi.y, hi.z].map(|x| x.round() as i64)
+        })
+        .collect();
+    boxes.sort();
+    assert_eq!(
+        boxes,
+        [[0, 0, 0, 1000, 2000, 3000], [2000, 0, 0, 6000, 1000, 3000]]
+    );
+}

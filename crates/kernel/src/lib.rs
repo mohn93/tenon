@@ -120,4 +120,4 @@ pub use texture::{
     back_texture_position, normal_angle, texture_axes, texture_position,
 };
 pub use transition::SceneTransition;
-pub use triangles::{Part, Triangle};
+pub use triangles::{PartObject, SharedParts, Triangle};

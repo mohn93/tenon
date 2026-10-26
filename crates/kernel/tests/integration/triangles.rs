@@ -277,3 +277,138 @@ fn faces_that_give_no_triangles_are_counted_once_per_placement() {
     let (_, none) = Scene::from_root(box_model()).triangles_and_skipped();
     assert_eq!(none, 0);
 }
+
+/// The world triangles `parts` builds: each item's object placed by its transform, with the
+/// objects it references placed in turn. Corners rounded to a micrometer, with the front
+/// material, sorted.
+fn built(parts: &kernel::SharedParts) -> Vec<([i64; 9], String)> {
+    fn place(
+        parts: &kernel::SharedParts,
+        i: usize,
+        t: glam::DAffine3,
+        out: &mut Vec<([i64; 9], String)>,
+    ) {
+        let o = &parts.objects[i];
+        for tri in &o.triangles {
+            let c = tri.corners.map(|p| t.transform_point3(p));
+            let k = [c[0], c[1], c[2]].map(|p| p.to_array().map(|x| (x * 1e6).round() as i64));
+            out.push((k.concat().try_into().unwrap(), format!("{:?}", tri.front)));
+        }
+        for (j, r) in &o.refs {
+            assert!(*j < i, "references point back");
+            place(parts, *j, t * *r, out);
+        }
+    }
+    let mut out = Vec::new();
+    for (i, t) in &parts.items {
+        place(parts, *i, *t, &mut out);
+    }
+    out.sort();
+    out
+}
+
+#[test]
+fn shared_parts_build_the_same_triangles_and_never_share_a_mirror() {
+    let mut s = Scene::from_root(box_model());
+    let (red, _) = s.add_material("Red", [255, 0, 0]).unwrap();
+    let edges: Vec<_> = s.root().edges().map(|(id, _)| id).collect();
+    let faces: Vec<_> = s.root().faces().map(|(id, _)| id).collect();
+    let (crate0, _) = s
+        .make_group(
+            MeshId::Root,
+            &edges,
+            &faces,
+            &[],
+            DefinitionKind::Component,
+            "Crate",
+        )
+        .unwrap();
+    s.copy_instances(MeshId::Root, &[crate0], p(3.0, 0.0, 0.0), 4)
+        .unwrap();
+    let crates: Vec<_> = s.root().instances().map(|(id, _)| id).collect();
+    s.paint(
+        MeshId::Root,
+        &[],
+        &[crates[3]],
+        kernel::Side::Front,
+        Some(red),
+    )
+    .unwrap();
+    let (pair, _) = s
+        .make_group(
+            MeshId::Root,
+            &[],
+            &[],
+            &[crates[1], crates[2]],
+            DefinitionKind::Component,
+            "Pair",
+        )
+        .unwrap();
+    s.copy_instances(MeshId::Root, &[pair], p(0.0, 5.0, 0.0), 1)
+        .unwrap();
+    // Inside the pair, one crate is stretched and turned, the other mirrored; at the root one
+    // crate is mirrored.
+    let mut data = s.to_data();
+    let crate_def = data
+        .definitions
+        .iter()
+        .find(|d| d.name == "Crate")
+        .unwrap()
+        .id;
+    let pair_def = data
+        .definitions
+        .iter_mut()
+        .find(|d| d.name == "Pair")
+        .unwrap();
+    pair_def.mesh.instances[0].transform = (glam::DAffine3::from_translation(p(1.0, 2.0, 0.5))
+        * glam::DAffine3::from_rotation_z(0.3)
+        * glam::DAffine3::from_scale(p(2.0, 1.0, 0.5)))
+    .to_cols_array();
+    pair_def.mesh.instances[1].transform =
+        [-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 9.0, 0.0, 0.0];
+    let mirrored = data
+        .root
+        .instances
+        .iter_mut()
+        .filter(|i| i.definition == crate_def)
+        .last()
+        .unwrap();
+    mirrored.transform = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -2.0, 12.0, 0.0, 0.0];
+    let s = Scene::from_data(&data).unwrap();
+
+    let parts = s.shared_parts(None);
+    let mut expected: Vec<([i64; 9], String)> = s
+        .triangles()
+        .iter()
+        .map(|t| {
+            let k = t
+                .corners
+                .map(|p| p.to_array().map(|x| (x * 1e6).round() as i64));
+            (k.concat().try_into().unwrap(), format!("{:?}", t.front))
+        })
+        .collect();
+    expected.sort();
+    assert_eq!(built(&parts), expected);
+    // The pair is shared by its two placements and the plain crate by the root and the pair.
+    let pair_object = parts
+        .objects
+        .iter()
+        .position(|o| !o.refs.is_empty())
+        .unwrap();
+    assert_eq!(
+        parts
+            .items
+            .iter()
+            .filter(|(i, _)| *i == pair_object)
+            .count(),
+        2
+    );
+    for t in parts.items.iter().map(|(_, t)| t).chain(
+        parts
+            .objects
+            .iter()
+            .flat_map(|o| o.refs.iter().map(|(_, t)| t)),
+    ) {
+        assert!(t.matrix3.determinant() > 0.0, "{t:?}");
+    }
+}
