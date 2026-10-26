@@ -43,6 +43,7 @@ if [ -n "${APPIMAGETOOL:-}" ]; then
     cp packaging/linux/AppRun "$appdir/AppRun"
     cp packaging/linux/sketchup-alt.desktop "$appdir/"
     cp packaging/icons/app-256.png "$appdir/sketchup-alt.png"
+    cp THIRD_PARTY_NOTICES.md "$appdir/"
     # No FUSE is needed to run the tool itself (CI has none).
     runtime=()
     if [ -n "${APPIMAGE_RUNTIME:-}" ]; then
