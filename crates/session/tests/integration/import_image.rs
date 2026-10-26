@@ -85,11 +85,11 @@ fn a_picture_is_one_group_with_one_face_of_the_images_proportions() {
     let (points, front, back, normal) = corners(&d, &out);
     assert!((normal - DVec3::Z).length() < 1e-9);
     assert_eq!(points.len(), 4);
-    // Four by two meters, lifted by the default millimeter, lower left corner at the origin.
+    // Four by two meters, flush with its plane by default, lower left corner at the origin.
     let lo = points.iter().fold(DVec3::MAX, |a, p| a.min(*p));
     let hi = points.iter().fold(DVec3::MIN, |a, p| a.max(*p));
-    assert!((lo - DVec3::new(1.0, 2.0, 0.001)).length() < 1e-9, "{lo:?}");
-    assert!((hi - DVec3::new(5.0, 4.0, 0.001)).length() < 1e-9, "{hi:?}");
+    assert!((lo - DVec3::new(1.0, 2.0, 0.0)).length() < 1e-9, "{lo:?}");
+    assert!((hi - DVec3::new(5.0, 4.0, 0.0)).length() < 1e-9, "{hi:?}");
     // The image fills the face: its corners are the face's corners, front and back.
     for ((p, f), b) in points.iter().zip(&front).zip(&back) {
         let at = DVec2::new(p.x - 1.0, p.y - 2.0);
@@ -151,7 +151,7 @@ fn a_picture_on_a_tilted_face_lies_in_its_plane_slightly_in_front() {
         &mut d,
         pic(
             &file,
-            json!({"origin": origin.to_array(), "normal": n.to_array(), "width": 1}),
+            json!({"origin": origin.to_array(), "normal": n.to_array(), "width": 1, "lift": 0.001}),
         ),
     )
     .unwrap();
@@ -223,13 +223,13 @@ fn data_and_name_work_and_one_of_path_or_data_is_needed() {
 #[test]
 fn oversize_and_broken_images_are_refused_naming_the_limit() {
     let mut d = doc();
-    // 8192 pixels wide: refused before decoding.
+    // 8193 pixels wide: refused before decoding.
     let big = scratch("big.png");
-    image::RgbaImage::new(8192, 1).save(&big).unwrap();
+    image::RgbaImage::new(8193, 1).save(&big).unwrap();
     let (kind, message) = run(&mut d, pic(&big, json!({}))).unwrap_err();
     assert_eq!(kind, ErrorKind::File);
     assert!(
-        message.contains("8192") && message.contains("4096"),
+        message.contains("8193") && message.contains("8192"),
         "{message}"
     );
 
@@ -249,7 +249,7 @@ fn oversize_and_broken_images_are_refused_naming_the_limit() {
     )
     .unwrap_err();
     assert_eq!(kind, ErrorKind::InvalidInput);
-    assert!(message.contains("4096"), "{message}");
+    assert!(message.contains("8192"), "{message}");
     let thin = png("thin.png", 4000, 1);
     let (kind, message) = run(&mut d, pic(&thin, json!({"width": 0.001}))).unwrap_err();
     assert_eq!(kind, ErrorKind::InvalidInput);
@@ -381,4 +381,83 @@ fn a_photo_kept_on_its_side_is_placed_upright() {
     let m = &ask(&d, json!({"type": "materials"}))["materials"][0];
     assert_eq!(m["texture"]["pixel_width"], 8, "{m}");
     assert_eq!(m["texture"]["height"], 2.0, "{m}");
+}
+
+/// The PNG file at `path` as base64 text.
+fn encoded(path: &Path) -> String {
+    base64::engine::general_purpose::STANDARD.encode(std::fs::read(path).unwrap())
+}
+
+#[test]
+fn a_picture_8192_pixels_wide_is_placed_and_8193_is_not() {
+    let mut d = doc();
+    // Long and thin so the file stays small; width 100 m keeps its height over the least size.
+    let wide = scratch("wide-8192.png");
+    image::RgbaImage::new(8192, 8).save(&wide).unwrap();
+    let out = run(&mut d, pic(&wide, json!({"width": 100}))).unwrap();
+    assert_eq!(out["placed"].as_array().unwrap().len(), 1);
+    let m = &ask(&d, json!({"type": "materials"}))["materials"][0];
+    assert_eq!(m["texture"]["pixel_width"], 8192);
+    let over = scratch("wide-8193.png");
+    image::RgbaImage::new(8193, 8).save(&over).unwrap();
+    let (_, message) = run(&mut d, pic(&over, json!({"width": 100}))).unwrap_err();
+    assert!(message.contains("8192"), "{message}");
+}
+
+#[test]
+fn base64_with_line_breaks_and_without_padding_is_accepted() {
+    let mut d = doc();
+    let data = encoded(&png("lines.png", 3, 3));
+    // MIME style: 76 characters a line, CRLF, and indentation.
+    let lined: String = data
+        .as_bytes()
+        .chunks(76)
+        .map(|c| format!("  {}\r\n", std::str::from_utf8(c).unwrap()))
+        .collect();
+    let unpadded = data.trim_end_matches('=').to_string();
+    assert_ne!(unpadded, data, "the test image needs padding to drop");
+    for text in [lined, unpadded] {
+        let out = run(
+            &mut d,
+            json!({"type": "import_image", "data": text, "origin": [0, 0, 0], "width": 1}),
+        )
+        .unwrap();
+        assert_eq!(out["placed"].as_array().unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn the_texture_budget_accessor_gives_the_placements_refusal() {
+    let mut d = doc();
+    // The budget is 2^28 pixels.
+    assert!(d.texture_budget_allows(1 << 28).is_ok());
+    let from_accessor = d.texture_budget_allows((1 << 28) + 1).unwrap_err();
+    assert!(from_accessor.contains("too many texture pixels"));
+    // With a picture already held, the same message comes from the placement.
+    let file = png("held.png", 100, 100);
+    run(&mut d, pic(&file, json!({}))).unwrap();
+    let left = (1u64 << 28) - 10_000;
+    assert!(d.texture_budget_allows(left).is_ok());
+    let refused = d.texture_budget_allows(left + 1).unwrap_err();
+    assert!(refused.contains("10000 already"), "{refused}");
+}
+
+#[test]
+fn a_picture_flush_on_a_face_leaves_the_face_as_it_was() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [4, 4, 0]}),
+    )
+    .unwrap();
+    let before = ask(&d, json!({"type": "entities", "kinds": ["face", "edge"]}));
+    let file = png("flush.png", 4, 4);
+    let out = run(&mut d, pic(&file, json!({"origin": [1, 1, 0], "width": 2}))).unwrap();
+    // Its corners lie in the face's plane, and the face below has the same faces and edges.
+    let (points, ..) = corners(&d, &out);
+    assert!(points.iter().all(|p| p.z == 0.0));
+    let after = ask(&d, json!({"type": "entities", "kinds": ["face", "edge"]}));
+    assert_eq!(before["faces"], after["faces"]);
+    assert_eq!(before["edges"], after["edges"]);
+    assert_eq!(out["placed"].as_array().unwrap().len(), 1);
 }

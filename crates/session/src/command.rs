@@ -300,12 +300,12 @@ pub enum Command {
     /// high as the image's proportions make it, painted front and back with a new material of
     /// the same name (made unique) whose texture is the image (turned upright first when its
     /// EXIF orientation says so), fitted to fill the face exactly (the back is not mirrored). Give the image as `path` (a PNG or JPEG file of at most 16
-    /// MiB and 4096 pixels on each side) or `data` (the file's bytes in base64); exactly one.
+    /// MiB and 8192 pixels on each side) or `data` (the file's bytes in base64); exactly one.
     /// `origin` is the picture's lower left corner, in the open context. `normal` (default Z)
     /// is the way the picture faces; `x_axis` (default horizontal in the plane, or X on a level
     /// one, as textures run) the way its width runs, projected into the plane. The picture lies
-    /// `lift` meters (default 0.001, 0 to 1) along `normal` from the plane through `origin`, so
-    /// a picture put on a face does not flicker against it. One undo step; the group is
+    /// `lift` meters (default 0, 0 to 1) along `normal` from the plane through `origin`; the
+    /// renderer draws a picture over the face it lies on, so none is needed there. One undo step; the group is
     /// selected and listed in the outcome's `placed` and `definitions`.
     ImportImage {
         #[serde(default)]
@@ -1723,7 +1723,7 @@ pub struct EdgesPatch {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TextureSource {
-    /// A PNG or JPEG file of at most 16 MiB and 4096 pixels on each side.
+    /// A PNG or JPEG file of at most 16 MiB and 8192 pixels on each side.
     #[serde(default)]
     pub path: Option<String>,
     #[serde(default)]

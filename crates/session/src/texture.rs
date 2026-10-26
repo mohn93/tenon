@@ -9,11 +9,37 @@ use kernel::{ImageFormat, Texture, TextureImage};
 /// The largest texture file read, in bytes.
 pub const MAX_TEXTURE_BYTES: u64 = 16 * 1024 * 1024;
 /// The most pixels along either side of a texture image.
-pub const MAX_TEXTURE_PIXELS: u32 = 4096;
+pub const MAX_TEXTURE_PIXELS: u32 = 8192;
 
 /// The most pixels all of a document's texture images hold together (1 GiB decoded), so a
 /// small file of many large, plain images cannot take all memory when opened.
 pub const MAX_TOTAL_TEXTURE_PIXELS: u64 = 1 << 28;
+
+/// The bytes of base64 `data`, as encoders and people write it: whitespace (line breaks every
+/// 76 characters, indentation) anywhere is ignored and the `=` padding may be left off. Fails,
+/// saying why, when it is not base64 or holds more than [`MAX_TEXTURE_BYTES`] decoded bytes; the
+/// size is counted in decoded bytes, not characters.
+pub fn decode_base64(data: &str) -> Result<Vec<u8>, String> {
+    use base64::Engine;
+    use base64::alphabet::STANDARD;
+    use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
+
+    let engine = GeneralPurpose::new(
+        &STANDARD,
+        GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::Indifferent),
+    );
+    let compact: String = data.split_whitespace().collect();
+    let digits = compact.trim_end_matches('=').len() as u64;
+    // 4 characters hold 3 bytes; a trailing 2 or 3 characters hold 1 or 2.
+    if digits / 4 * 3 + (digits % 4).saturating_sub(1) > MAX_TEXTURE_BYTES {
+        return Err(format!(
+            "file too large: a texture is at most {MAX_TEXTURE_BYTES} bytes"
+        ));
+    }
+    engine
+        .decode(compact)
+        .map_err(|_| "data is not base64".to_string())
+}
 
 /// A PNG or JPEG file's format and size in pixels, read from its header without decoding it.
 /// Fails, saying why, for other formats, broken headers and images more than
@@ -160,6 +186,33 @@ pub fn average_color(image: &TextureImage) -> [u8; 3] {
 mod tests {
     use super::*;
 
+    #[test]
+    fn base64_takes_line_breaks_and_missing_padding() {
+        // "hello" is aGVsbG8= padded.
+        for text in ["aGVsbG8=", "aGVsbG8", "aGVs\nbG8=", "  aGVs\r\n  bG8\n"] {
+            assert_eq!(decode_base64(text).unwrap(), b"hello", "{text:?}");
+        }
+        assert!(decode_base64("aGV$bG8=").is_err());
+    }
+
+    #[test]
+    fn base64_size_counts_decoded_bytes_not_characters() {
+        let at_limit = "QUJD".repeat(MAX_TEXTURE_BYTES as usize / 3);
+        // Line breaks every 76 characters make the text longer, not the file.
+        let broken: String = at_limit
+            .as_bytes()
+            .chunks(76)
+            .map(|c| format!("{}\n", std::str::from_utf8(c).unwrap()))
+            .collect();
+        assert!(broken.len() as u64 > MAX_TEXTURE_BYTES / 3 * 4);
+        assert_eq!(
+            decode_base64(&broken).unwrap().len() as u64,
+            MAX_TEXTURE_BYTES / 3 * 3
+        );
+        let over = "QUJD".repeat(MAX_TEXTURE_BYTES as usize / 3 + 1);
+        assert!(decode_base64(&over).unwrap_err().contains("too large"));
+    }
+
     fn png(width: u32, height: u32) -> Vec<u8> {
         let mut bytes = Vec::new();
         image::RgbaImage::from_pixel(width, height, image::Rgba([10, 20, 30, 255]))
@@ -198,8 +251,8 @@ mod tests {
         let mut broken = png(3, 2);
         broken.truncate(40);
         assert!(decode(broken).is_err());
-        let err = decode(png(4097, 1)).unwrap_err();
-        assert!(err.contains("at most 4096"), "{err}");
+        let err = decode(png(8193, 1)).unwrap_err();
+        assert!(err.contains("at most 8192"), "{err}");
         let err = decode(vec![0; MAX_TEXTURE_BYTES as usize + 1]).unwrap_err();
         assert!(err.contains("file too large"), "{err}");
     }

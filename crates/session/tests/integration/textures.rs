@@ -176,11 +176,11 @@ fn bad_textures_are_refused() {
         "not a PNG or JPEG image",
     );
     let wide = scratch("wide.png");
-    image::RgbaImage::new(4097, 1).save(&wide).unwrap();
+    image::RgbaImage::new(8193, 1).save(&wide).unwrap();
     fails(
         json!({"type": "add_material", "texture": {"path": wide.to_str().unwrap()}}),
         ErrorKind::File,
-        "at most 4096",
+        "at most 8192",
     );
     let big = scratch("big.png");
     let mut f = std::fs::File::create(&big).unwrap();

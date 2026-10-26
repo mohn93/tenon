@@ -283,7 +283,7 @@ fn materials_and_textures_are_imported() {
     );
 
     // An image over the pixel limit leaves the material its colour, with a warning.
-    let path = write("too-wide.skp", &textured_cupboard(&png(4097, 1)));
+    let path = write("too-wide.skp", &textured_cupboard(&png(8193, 1)));
     let mut d = doc();
     let r = run(&mut d, json!({"type": "import", "path": path})).unwrap();
     d.scene().validate().unwrap();
@@ -297,7 +297,7 @@ fn materials_and_textures_are_imported() {
     let warnings = warnings(&r["import"]);
     assert!(
         warnings.contains(
-            &"1 texture was not imported (the image is over 16 MiB or 4096 pixels a side); \
+            &"1 texture was not imported (the image is over 16 MiB or 8192 pixels a side); \
               its material keeps its colour"
                 .into()
         ),

@@ -1270,7 +1270,7 @@ fn page_view(
 
 /// Why a texture was not imported, as the warnings say it.
 const MISSING: &str = "the image is missing from the file";
-const OVERSIZE: &str = "the image is over 16 MiB or 4096 pixels a side";
+const OVERSIZE: &str = "the image is over 16 MiB or 8192 pixels a side";
 const UNREADABLE: &str = "the image is not a PNG or JPEG that can be read";
 const TOO_MANY_PIXELS: &str = "all textures together would hold too many pixels";
 const MODEL_LIMIT: &str = "the model holds at most 256 textures";

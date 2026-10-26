@@ -186,6 +186,13 @@ impl Document {
             .map_err(|e| material_error(e, material))
     }
 
+    /// Fails, saying why, when one more texture image of `pixels` would take the document's
+    /// textures over the pixel budget; the refusal `import_image` gives. For callers that
+    /// check before they start (the Image tool).
+    pub fn texture_budget_allows(&self, pixels: u64) -> Result<(), String> {
+        check_total_pixels(self.texture_pixels_besides(None), pixels)
+    }
+
     /// The pixels the texture images of materials other than `except` hold, each image counted
     /// once however many materials share it.
     pub(crate) fn texture_pixels_besides(&self, except: Option<MaterialId>) -> u64 {

@@ -2734,11 +2734,26 @@ fn place_image_takes_a_typed_width_and_escape_cancels() {
 }
 
 #[test]
+fn place_image_takes_base64_with_line_breaks_and_without_padding() {
+    let data = picture_data();
+    let lined: String = data
+        .as_bytes()
+        .chunks(60)
+        .map(|c| format!("{}\r\n", std::str::from_utf8(c).unwrap()))
+        .collect();
+    for text in [lined, data.trim_end_matches('=').to_string()] {
+        let mut e = editor();
+        let r = exec(&mut e, json!({"type": "place_image", "data": text}));
+        assert_eq!(r["editor"]["phase"], "active", "{r}");
+    }
+}
+
+#[test]
 fn place_image_refuses_oversize_and_broken_images_before_the_tool_comes_out() {
     use base64::Engine;
     let mut e = editor();
     let mut big = Vec::new();
-    image::RgbaImage::new(8192, 1)
+    image::RgbaImage::new(8193, 1)
         .write_to(&mut std::io::Cursor::new(&mut big), image::ImageFormat::Png)
         .unwrap();
     // A whole header but a cut-off body is caught too.
