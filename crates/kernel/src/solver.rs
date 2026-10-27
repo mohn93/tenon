@@ -26,7 +26,10 @@
 //! the same way gets a residual per value (and slide), its value less its value at the start
 //! of the step. Without it, joints in series (an arm's shoulder, elbow and wrist) are free
 //! together and the least motion of the parts shares the driven turn among them. A joint on a
-//! loop (a crank's rod and piston) stays free, as the loop must move.
+//! loop (a crank's rod and piston) stays free, as the loop must move, and so does a ball
+//! joint, which has no value to hold. Values are measured from where the parts stand when the
+//! drive starts (a part placed by hand keeps its place), and a coupling not met then (an
+//! offset set since) frees its joints so the drive meets it.
 //!
 //! A cam follower in the assembly (its joint's part is reached from the cam, or through its
 //! own joints) is met in a second pass of each step: once the other residuals are met with
@@ -811,6 +814,23 @@ impl Scene {
                 (j.value, j.slide)
             })
             .collect();
+        // Parts placed by hand since the values were stored stand at other values: the drive
+        // starts from where they stand, and holds the joints there.
+        system.measure(
+            &mut values,
+            Target {
+                value: driven.value,
+                slide: driven.slide,
+            },
+        );
+        system.near.clone_from(&values);
+        let current = |b: Body| system.pose(b);
+        let unmet: Vec<bool> = system
+            .bonds
+            .iter()
+            .map(|b| system.bond_residual(b, &current).abs() > DRIVE_TOLERANCE)
+            .collect();
+        system.holds = held_links(&system.links, &system.bonds, &unmet, &system.riders);
         let steps =
             drive_steps(&driven, value, slide).max(system.coupled_steps(value - driven.value));
         if steps > MAX_DRIVE_STEPS {
@@ -1141,7 +1161,6 @@ impl Scene {
                 })
             })
             .collect();
-        let holds = held_links(&links, &bonds, &riders);
         let near = links
             .iter()
             .map(|l| {
@@ -1167,7 +1186,7 @@ impl Scene {
         System {
             links,
             bonds,
-            holds,
+            holds: Vec::new(),
             riders,
             riding: false,
             near,
@@ -1180,8 +1199,9 @@ impl Scene {
 
 /// The links a drive holds at their values: each on no closed loop of joints (the held parts
 /// and the ground are one node), with a value, not driven and not following a cam, and every
-/// link coupled to it the same.
-fn held_links(links: &[Link], bonds: &[Bond], riders: &[Rider]) -> Vec<usize> {
+/// link coupled to it the same. The joints of a coupling `unmet` at the start (an offset the
+/// parts do not stand at yet) are free, so the drive meets it.
+fn held_links(links: &[Link], bonds: &[Bond], unmet: &[bool], riders: &[Rider]) -> Vec<usize> {
     let node = |b: Body| match b {
         Body::Held(_) => 0,
         Body::Part(i) => i + 1,
@@ -1215,13 +1235,17 @@ fn held_links(links: &[Link], bonds: &[Bond], riders: &[Rider]) -> Vec<usize> {
         }
         false
     };
-    let free: Vec<bool> = links
+    let mut free: Vec<bool> = links
         .iter()
         .enumerate()
         .map(|(k, l)| {
             l.driven || !l.kind.has_value() || riders.iter().any(|r| r.link == k) || on_loop(k)
         })
         .collect();
+    for (b, _) in bonds.iter().zip(unmet).filter(|(_, u)| **u) {
+        free[b.driver] = true;
+        free[b.driven] = true;
+    }
     // A coupled group is held only whole.
     let mut group: Vec<usize> = (0..links.len()).collect();
     fn root(group: &mut [usize], mut k: usize) -> usize {

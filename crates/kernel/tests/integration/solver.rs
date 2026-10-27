@@ -899,3 +899,153 @@ fn coupled_fingers_on_an_arm_hold_while_the_arm_turns() {
         assert!((value(&s, j) - want).abs() < 1e-9, "{}", value(&s, j));
     }
 }
+
+#[test]
+fn a_coupling_not_yet_met_is_met_by_a_drive_elsewhere() {
+    // Ground -> A; A -> B and A -> C, B and C coupled with an offset they do not stand at yet.
+    let (mut s, ids) = parts(3);
+    let [a, b, c] = [ids[0], ids[1], ids[2]];
+    let ja = join(
+        &mut s,
+        JointKind::Revolute,
+        None,
+        a,
+        DVec3::ZERO,
+        DVec3::Z,
+        DVec3::X,
+    );
+    let jb = join(
+        &mut s,
+        JointKind::Revolute,
+        Some(a),
+        b,
+        p(0.3, 0.0, 0.0),
+        DVec3::Z,
+        DVec3::X,
+    );
+    let jc = join(
+        &mut s,
+        JointKind::Revolute,
+        Some(a),
+        c,
+        p(0.0, 0.3, 0.0),
+        DVec3::Z,
+        DVec3::X,
+    );
+    s.add_coupling(kernel::Coupling {
+        driver: jb,
+        driven: jc,
+        ratio: 1.0,
+        offset: 0.3,
+    })
+    .unwrap();
+    s.drive_joint(ja, 0.5, None).unwrap();
+    assert!((value(&s, jc) - value(&s, jb) - 0.3).abs() < 1e-9);
+}
+
+#[test]
+fn a_part_placed_by_hand_keeps_its_place_when_another_joint_is_driven() {
+    let (mut s, ids) = parts(3);
+    let j0 = join(
+        &mut s,
+        JointKind::Revolute,
+        None,
+        ids[0],
+        DVec3::ZERO,
+        DVec3::Z,
+        DVec3::X,
+    );
+    join(
+        &mut s,
+        JointKind::Revolute,
+        Some(ids[0]),
+        ids[1],
+        p(0.3, 0.0, 0.0),
+        DVec3::Z,
+        DVec3::X,
+    );
+    let j2 = join(
+        &mut s,
+        JointKind::Revolute,
+        Some(ids[1]),
+        ids[2],
+        p(0.6, 0.0, 0.0),
+        DVec3::Z,
+        DVec3::X,
+    );
+    // Turn the last part about its joint by its transform: its stored value stays 0.
+    let pivot = p(0.6, 0.0, 0.0);
+    let turn = DAffine3::from_translation(pivot)
+        * DAffine3::from_quat(DQuat::from_rotation_z(0.4))
+        * DAffine3::from_translation(-pivot);
+    let placed = turn * transform(&s, ids[2]);
+    s.set_instance_transform(MeshId::Root, ids[2], placed)
+        .unwrap();
+    let relative = transform(&s, ids[1]).inverse() * placed;
+    s.drive_joint(j0, 0.7, None).unwrap();
+    assert!((value(&s, j2) - 0.4).abs() < 1e-9, "{}", value(&s, j2));
+    let now = transform(&s, ids[1]).inverse() * transform(&s, ids[2]);
+    assert!(now.abs_diff_eq(relative, 1e-9));
+}
+
+#[test]
+fn a_floating_arm_driven_in_the_middle_holds_its_other_joints() {
+    let (mut s, ids) = parts(4);
+    let at = |k: usize| p(0.3 * k as f64, 0.0, 0.0);
+    let js: Vec<JointId> = (1..4)
+        .map(|k| {
+            join(
+                &mut s,
+                JointKind::Revolute,
+                Some(ids[k - 1]),
+                ids[k],
+                at(k),
+                DVec3::Z,
+                DVec3::X,
+            )
+        })
+        .collect();
+    s.drive_joint(js[0], 0.3, None).unwrap();
+    s.drive_joint(js[2], -0.5, None).unwrap();
+    let held = transform(&s, ids[0]);
+    s.drive_joint(js[1], 0.9, None).unwrap();
+    assert!((value(&s, js[0]) - 0.3).abs() < 1e-9);
+    assert!((value(&s, js[2]) + 0.5).abs() < 1e-9);
+    assert_eq!(transform(&s, ids[0]), held);
+}
+
+#[test]
+fn a_cylindrical_joint_in_series_keeps_its_slide() {
+    let (mut s, ids) = parts(3);
+    let j0 = join(
+        &mut s,
+        JointKind::Revolute,
+        None,
+        ids[0],
+        DVec3::ZERO,
+        DVec3::Z,
+        DVec3::X,
+    );
+    let j1 = join(
+        &mut s,
+        JointKind::Cylindrical,
+        Some(ids[0]),
+        ids[1],
+        p(0.3, 0.0, 0.0),
+        DVec3::X,
+        DVec3::Z,
+    );
+    join(
+        &mut s,
+        JointKind::Revolute,
+        Some(ids[1]),
+        ids[2],
+        p(0.6, 0.0, 0.0),
+        DVec3::Z,
+        DVec3::X,
+    );
+    s.drive_joint(j1, 0.4, Some(0.05)).unwrap();
+    s.drive_joint(j0, 1.2, None).unwrap();
+    let j = s.joint(j1).unwrap();
+    assert!((j.value - 0.4).abs() < 1e-9 && (j.slide - 0.05).abs() < 1e-9);
+}
