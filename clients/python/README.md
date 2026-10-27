@@ -119,6 +119,32 @@ images (the tests use it).
   and where they occur). About 90 s against a release app, most of it the sweep.
 - `examples/city.py`: a city grid from the air, built in a few large batches (`--size N`
   blocks a side). Writes `city.png`.
+- `examples/villa.py`: a contemporary villa on a terraced slope: a double-height stone and
+  glass living pavilion, a bedroom volume cantilevered 5.5 m over the veranda and pool, a roof
+  terrace with a slatted pergola, coursed ashlar walls, timber fins, glass balustrades, an
+  infinity pool, a fire pit, a carport with a car, a furnished interior (floating stair,
+  kitchen, dining, bedroom) and planting as varied components. Glowing pendants, coves, pool
+  lights, bollards and uplights light the night view. Writes `villa.png` (golden hour),
+  `villa-dusk.png`, `villa-section.png`, `villa-plan.png` and `villa.tnn`.
+- `examples/barn.py`: a pegged oak timber-frame barn, 8 m x 12 m on four bents: mortises and
+  peg holes by `solid_subtract`, tenons by `solid_union`, chamfered timbers, rafters, purlins,
+  board-and-batten cladding, standing-seam roof, a sliding door and a workbench. Writes
+  `barn.png` (sun shadows), `barn-joint.png` (an exploded post, plate, tie beam and brace joint),
+  `barn-section.png` (a section through a bent), `barn-sketch.png` and `barn-cutlist.txt` (a
+  timber schedule from `cut_list` with mass from `mass_properties`).
+- `examples/gearbox.py`: a two-stage planetary reducer, cut away: involute teeth generated and
+  extruded, a ring with internal teeth, ball and needle bearings, keys, seals and circlips, a
+  finned housing. Rigged with joints and couplings from the tooth counts (overall ratio 13,
+  checked by driving the input). Writes `gearbox.png`, `gearbox-exploded.png`,
+  `gearbox-mesh.png` (a section square to the axis), `gearbox-motion.gif`,
+  `gearbox-motion-cutaway.gif` and `gearbox-report.txt` (ratios, masses, interference and mesh
+  clearances).
+- `examples/robot_cell.py`: a six-axis industrial robot palletising cartons in a fenced cell:
+  filleted cast housings, finned servos, cable packs swept with `follow_me`, a coupled parallel
+  gripper, a roller conveyor, mesh fencing and a light curtain. A pick and place by closed-form
+  inverse kinematics, checked for collisions with `interference` and `clearance`. Writes
+  `robot.png`, `robot-detail.png`, `robot-section.png`, `robot-motion.gif` and
+  `robot-report.txt` (joint limits, measured reach, masses, clearances).
 
 ```
 cargo build --release -p app
