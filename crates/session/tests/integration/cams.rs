@@ -350,7 +350,7 @@ fn followers_save_at_schema_28_and_read_back() {
     let r = valve(&mut d);
     follow(&mut d, &r, json!({"roller_radius": 0.002}));
     let listing = followers(&d);
-    let path = scratch("cams.skr");
+    let path = scratch("cams.tnn");
     ok(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),

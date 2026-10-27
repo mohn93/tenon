@@ -128,7 +128,7 @@ fn fit_surface(width: u32, height: u32, max: u32) -> (u32, u32) {
 /// shown, so `resumed` shows it once the adapter exists.
 fn window_attributes() -> WindowAttributes {
     Window::default_attributes()
-        .with_title("tenon")
+        .with_title("Tenon")
         .with_inner_size(LogicalSize::new(1280.0, 800.0))
         .with_min_inner_size(MIN_WINDOW)
         .with_visible(false)
@@ -162,7 +162,7 @@ pub enum AppEvent {
     Error(String),
     /// A check for updates finished.
     Update(crate::update::Outcome),
-    /// The system asked to open these files (macOS: a `.skr` double-clicked in Finder or
+    /// The system asked to open these files (macOS: a `.tnn` double-clicked in Finder or
     /// dropped on the Dock icon, see `open_files`).
     OpenFiles(Vec<PathBuf>),
     /// The viewer was asked to open another shared model (a kept one from the Recent list).
@@ -2837,7 +2837,7 @@ impl State {
         // Where files have no path, the name the model was opened from or saved under.
         let kept = self.flows.kept_name().map(Path::new);
         let title = if self.features.read_only {
-            format!("{} - tenon", self.model_name)
+            format!("{} - Tenon", self.model_name)
         } else {
             window_title(
                 doc.path()
@@ -3660,9 +3660,9 @@ fn view_input_reaches_editor(flying: bool, pointer_in_view: bool, sheet_open: bo
     !sheet_open && (flying || pointer_in_view)
 }
 
-/// A file dialog for `.skr` models.
+/// A file dialog for `.tnn` models.
 /// The window title: the file name alone on macOS, where the close button shows unsaved
-/// changes; elsewhere "house.skr* - tenon". A model opened from a SketchUp file and
+/// changes; elsewhere "house.tnn* - Tenon". A model opened from a SketchUp file and
 /// not saved yet is "desk.skp (imported)"; one opened from the Recover Models window
 /// (`recovered`: its name) "house (recovered)".
 fn window_title(
@@ -3681,7 +3681,7 @@ fn window_title(
         return name;
     }
     let star = if modified { "*" } else { "" };
-    format!("{name}{star} - tenon")
+    format!("{name}{star} - Tenon")
 }
 
 /// The editor key for a key press. Characters from non-ASCII layouts (e.g. Arabic) fall back to
@@ -3761,8 +3761,8 @@ fn physical_char(key: PhysicalKey) -> Option<char> {
 const MOUSE_TOUCH: u64 = u64::MAX;
 
 /// The file name a shared model is opened under: the shared name is only for the bar (a model
-/// called "Plan.skp" is still a `.skr`).
-const SHARED_FILE: &str = "shared.skr";
+/// called "Plan.skp" is still a `.tnn`).
+const SHARED_FILE: &str = "shared.tnn";
 
 /// Opens a shared model in `editor`, and only when that works makes `name` its name for the bar.
 fn open_shared_model(editor: &mut Editor, name: &mut String, model: SharedModel) -> bool {
@@ -3829,7 +3829,7 @@ fn map_button(button: MouseButton) -> Button {
 pub struct SharedModel {
     /// The name the viewer's top bar shows.
     pub name: String,
-    /// A `.skr` file's bytes.
+    /// A `.tnn` file's bytes.
     pub bytes: Vec<u8>,
 }
 
@@ -4629,13 +4629,13 @@ mod tests {
         let a = api::Activity {
             at: now - Duration::from_secs(12),
             connection: 3,
-            request: "execute save /a/house.skr".into(),
+            request: "execute save /a/house.tnn".into(),
             error: None,
             repeats: 1,
         };
         assert_eq!(
             activity_line(&a, now),
-            "12 s ago  #3  execute save /a/house.skr  ok"
+            "12 s ago  #3  execute save /a/house.tnn  ok"
         );
         let b = api::Activity {
             error: Some("no".into()),
@@ -4645,7 +4645,7 @@ mod tests {
         };
         assert_eq!(
             activity_line(&b, now),
-            "0 s ago  #3  execute save /a/house.skr  error: no  (x4)"
+            "0 s ago  #3  execute save /a/house.tnn  error: no  (x4)"
         );
         let c = api::Activity {
             at: now - Duration::from_secs(3 * 60 + 5),
@@ -4659,11 +4659,11 @@ mod tests {
         assert!(!activity_line(&d, now).contains(char::is_control));
         // Bidi overrides, isolates and other format characters cannot reorder the line.
         let e = api::Activity {
-            request: "execute save /a/\u{202e}piz.skr\u{2066}x\u{2028}y\u{200b}".into(),
+            request: "execute save /a/\u{202e}piz.tnn\u{2066}x\u{2028}y\u{200b}".into(),
             ..d
         };
         let line = activity_line(&e, now);
-        assert!(line.contains("/a/ piz.skr x y "), "{line}");
+        assert!(line.contains("/a/ piz.tnn x y "), "{line}");
     }
 
     use super::*;
@@ -5095,7 +5095,7 @@ mod tests {
     fn only_the_sheets_own_actions_and_quit_pass_a_sheet() {
         for dropped in [
             UiAction::OpenFile,
-            UiAction::OpenRecent(PathBuf::from("/tmp/a.skr")),
+            UiAction::OpenRecent(PathBuf::from("/tmp/a.tnn")),
             UiAction::Tool(tools::ToolKind::Line),
             UiAction::MakeComponent,
             UiAction::NewModel,
@@ -5105,8 +5105,8 @@ mod tests {
             UiAction::ShowSettings(true),
             UiAction::ExportPdf,
             UiAction::Print,
-            UiAction::LibraryUse("/lib/a.skr".into()),
-            UiAction::LibraryDelete("/lib/a.skr".into()),
+            UiAction::LibraryUse("/lib/a.tnn".into()),
+            UiAction::LibraryDelete("/lib/a.tnn".into()),
             UiAction::SaveToLibrary(LibrarySave::Model),
             UiAction::ChooseLibraryFolder,
         ] {
@@ -5193,8 +5193,7 @@ mod tests {
         );
         assert!(sheet_applies(&sheet, &origin, &e).is_err());
         // An agent opens a file.
-        let path =
-            std::env::temp_dir().join(format!("tenon-app-{}-sheet.skr", std::process::id()));
+        let path = std::env::temp_dir().join(format!("tenon-app-{}-sheet.tnn", std::process::id()));
         e.execute(session::Command::Save {
             path: Some(path.display().to_string()),
             overwrite: true,
@@ -5250,18 +5249,18 @@ mod tests {
 
     #[test]
     fn dropped_actions_do_not_count_and_thumbnail_requests_pass_a_sheet() {
-        let wanted = UiAction::ThumbnailsWanted(vec!["/lib/a.skr".into()]);
+        let wanted = UiAction::ThumbnailsWanted(vec!["/lib/a.tnn".into()]);
         assert!(
             action_applies(true, &wanted),
             "thumbnails render under a sheet"
         );
         assert!(action_applies(
             false,
-            &UiAction::LibraryUse("/lib/a.skr".into())
+            &UiAction::LibraryUse("/lib/a.tnn".into())
         ));
         assert!(!action_applies(
             true,
-            &UiAction::LibraryUse("/lib/a.skr".into())
+            &UiAction::LibraryUse("/lib/a.tnn".into())
         ));
         assert!(action_applies(true, &UiAction::CloseSheet));
     }
@@ -5278,7 +5277,7 @@ mod tests {
         let gone = Sheet::OverwriteLibrary {
             save: LibrarySave::Component(InstanceId(999)),
             name: "x".into(),
-            file: "x.skr".into(),
+            file: "x.tnn".into(),
         };
         assert!(sheet_applies(&gone, &origin, &e).is_err());
         let model = Sheet::SaveToLibrary {
@@ -5288,7 +5287,7 @@ mod tests {
         assert!(sheet_applies(&model, &origin, &e).is_ok());
         // Deleting a library file does not depend on the model: it survives a new one.
         let delete = Sheet::DeleteLibraryItem {
-            path: "/lib/a.skr".into(),
+            path: "/lib/a.tnn".into(),
             name: "a".into(),
         };
         e.new_model();
@@ -5474,18 +5473,18 @@ mod tests {
 
     #[test]
     fn titles_name_the_file_and_mark_unsaved_changes() {
-        let house = Some(Path::new("/m/house.skr"));
+        let house = Some(Path::new("/m/house.tnn"));
         assert_eq!(
             window_title(None, None, None, false, false),
-            "Untitled.skr - tenon"
+            "Untitled.tnn - Tenon"
         );
         assert_eq!(
             window_title(house, None, None, true, false),
-            "house.skr* - tenon"
+            "house.tnn* - Tenon"
         );
         // macOS: the close button's dot shows unsaved changes.
-        assert_eq!(window_title(house, None, None, true, true), "house.skr");
-        assert_eq!(window_title(None, None, None, true, true), "Untitled.skr");
+        assert_eq!(window_title(house, None, None, true, true), "house.tnn");
+        assert_eq!(window_title(None, None, None, true, true), "Untitled.tnn");
     }
 
     #[test]
@@ -5497,15 +5496,15 @@ mod tests {
         );
         assert_eq!(
             window_title(None, desk, None, true, false),
-            "desk.skp (imported)* - tenon"
+            "desk.skp (imported)* - Tenon"
         );
         // Saving gives it a path of its own (and the document forgets the SketchUp file).
-        let saved = Some(Path::new("/m/desk.skr"));
-        assert_eq!(window_title(saved, None, None, false, true), "desk.skr");
-        // The save dialog suggests a .skr beside it, never the .skp.
-        assert_eq!(save_name(None, desk, None), "desk.skr");
-        assert_eq!(save_name(saved, None, None), "desk.skr");
-        assert_eq!(save_name(None, None, None), "Untitled.skr");
+        let saved = Some(Path::new("/m/desk.tnn"));
+        assert_eq!(window_title(saved, None, None, false, true), "desk.tnn");
+        // The save dialog suggests a .tnn beside it, never the .skp.
+        assert_eq!(save_name(None, desk, None), "desk.tnn");
+        assert_eq!(save_name(saved, None, None), "desk.tnn");
+        assert_eq!(save_name(None, None, None), "Untitled.tnn");
     }
 
     #[test]
@@ -5812,10 +5811,8 @@ mod tests {
 
     /// A fresh recovery folder for one test.
     fn recovery_folder(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "tenon-app-recovery-{}-{name}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("tenon-app-recovery-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }
@@ -5826,7 +5823,7 @@ mod tests {
             .unwrap()
             .flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n.ends_with(".skr"))
+            .filter(|n| n.ends_with(".tnn"))
             .collect();
         names.sort();
         names
@@ -5909,22 +5906,22 @@ mod tests {
 
     #[test]
     fn files_the_system_opens_before_the_window_wait_for_it() {
-        let mut at_start = Some(PathBuf::from("/m/argument.skr"));
+        let mut at_start = Some(PathBuf::from("/m/argument.tnn"));
         let opened = route_opened_files(
-            vec![PathBuf::from("/m/a b.skr"), PathBuf::from("/m/second.skr")],
+            vec![PathBuf::from("/m/a b.tnn"), PathBuf::from("/m/second.tnn")],
             false,
             &mut at_start,
         );
         assert_eq!(opened, None);
         assert_eq!(
             at_start,
-            Some(PathBuf::from("/m/a b.skr")),
+            Some(PathBuf::from("/m/a b.tnn")),
             "the first, kept"
         );
         assert_eq!(route_opened_files(Vec::new(), false, &mut at_start), None);
         assert_eq!(
             at_start,
-            Some(PathBuf::from("/m/a b.skr")),
+            Some(PathBuf::from("/m/a b.tnn")),
             "nothing replaces it"
         );
     }
@@ -5934,11 +5931,11 @@ mod tests {
         let mut at_start = None;
         assert_eq!(
             route_opened_files(
-                vec![PathBuf::from("/m/a.skr"), PathBuf::from("/m/b.skr")],
+                vec![PathBuf::from("/m/a.tnn"), PathBuf::from("/m/b.tnn")],
                 true,
                 &mut at_start
             ),
-            Some(PathBuf::from("/m/a.skr"))
+            Some(PathBuf::from("/m/a.tnn"))
         );
         assert_eq!(at_start, None);
         assert_eq!(route_opened_files(Vec::new(), true, &mut at_start), None);
@@ -6033,7 +6030,7 @@ mod tests {
             name: "house".into(),
             original: None,
             saved: SystemTime::UNIX_EPOCH,
-            model: PathBuf::from("/r/house-1-2.autosave.skr"),
+            model: PathBuf::from("/r/house-1-2.autosave.tnn"),
             error: None,
         };
         assert!(!opens_recover_at_start(&[]));
@@ -6058,9 +6055,9 @@ mod tests {
             recovery::Entry {
                 kind: recovery::Kind::Autosave,
                 name: "house".into(),
-                original: Some(PathBuf::from("/m/house.skr")),
+                original: Some(PathBuf::from("/m/house.tnn")),
                 saved: now - Duration::from_secs(600),
-                model: PathBuf::from("/r/house-1-2.autosave.skr"),
+                model: PathBuf::from("/r/house-1-2.autosave.tnn"),
                 error: None,
             },
             recovery::Entry {
@@ -6068,21 +6065,21 @@ mod tests {
                 name: "Untitled".into(),
                 original: None,
                 saved: now,
-                model: PathBuf::from("/r/untitled-3.skr"),
+                model: PathBuf::from("/r/untitled-3.tnn"),
                 error: Some("the model file cannot be used".into()),
             },
         ];
         let rows = recover_rows(&entries, now);
         assert_eq!(rows[0].saved, "10 min ago");
         assert!(!rows[0].discarded);
-        assert_eq!(rows[0].original.as_deref(), Some(Path::new("/m/house.skr")));
+        assert_eq!(rows[0].original.as_deref(), Some(Path::new("/m/house.tnn")));
         assert!(rows[1].discarded);
         assert!(rows[1].error.is_some());
         // Discard asks about one; Discard All about every one listed.
         assert_eq!(
-            discard_sheet(&entries, Some(Path::new("/r/untitled-3.skr"))),
+            discard_sheet(&entries, Some(Path::new("/r/untitled-3.tnn"))),
             Some(Sheet::DiscardRecovered {
-                models: vec![PathBuf::from("/r/untitled-3.skr")],
+                models: vec![PathBuf::from("/r/untitled-3.tnn")],
                 names: vec!["Untitled".into()],
             })
         );
@@ -6091,7 +6088,7 @@ mod tests {
         };
         assert_eq!(models.len(), 2);
         assert_eq!(
-            discard_sheet(&entries, Some(Path::new("/r/gone.skr"))),
+            discard_sheet(&entries, Some(Path::new("/r/gone.tnn"))),
             None
         );
         assert_eq!(discard_sheet(&[], None), None);
@@ -6105,15 +6102,15 @@ mod tests {
         );
         assert_eq!(
             window_title(None, None, Some("Untitled"), true, false),
-            "Untitled (recovered)* - tenon"
+            "Untitled (recovered)* - Tenon"
         );
-        let saved = Some(Path::new("/m/house.skr"));
+        let saved = Some(Path::new("/m/house.tnn"));
         assert_eq!(
             window_title(saved, None, Some("house"), false, true),
-            "house.skr"
+            "house.tnn"
         );
-        assert_eq!(save_name(None, None, Some("house")), "house.skr");
-        assert_eq!(save_name(saved, None, Some("house")), "house.skr");
+        assert_eq!(save_name(None, None, Some("house")), "house.tnn");
+        assert_eq!(save_name(saved, None, Some("house")), "house.tnn");
     }
 
     #[test]
@@ -6121,7 +6118,7 @@ mod tests {
         let mut e = Editor::new(DVec2::new(800.0, 600.0), 1.0);
         let origin = SheetOrigin::of(&e);
         let sheet = Sheet::DiscardRecovered {
-            models: vec![PathBuf::from("/r/a.skr")],
+            models: vec![PathBuf::from("/r/a.tnn")],
             names: vec!["a".into()],
         };
         e.execute(session::Command::New { discard: true }).unwrap();
@@ -6207,14 +6204,14 @@ mod tests {
             &session,
             &mut e,
             5,
-            Some(Path::new("/m/house.skr")),
+            Some(Path::new("/m/house.tnn")),
         );
         let models = models_in(&dir);
         assert_eq!(models.len(), 1);
         assert!(models[0].starts_with("house-"), "{models:?}");
         // Saving makes it clean: the window clears the autosave, and the next change is
         // autosaved again.
-        let saved = dir.with_extension("saved.skr");
+        let saved = dir.with_extension("saved.tnn");
         assert!(e.save_file(Some(&saved)));
         session.clear_autosave();
         assert_eq!(a.tick(t + 31 * min, &session, &mut e, 5, None), None);
@@ -6326,11 +6323,11 @@ mod shared_tests {
         fn p(s: &str) -> Option<&Path> {
             Some(Path::new(s))
         }
-        assert_eq!(share_name(p("/a/house.skr"), None, None), "house");
+        assert_eq!(share_name(p("/a/house.tnn"), None, None), "house");
         assert_eq!(share_name(None, p("/a/desk.skp"), None), "desk");
-        assert_eq!(share_name(None, None, Some("shed.skr")), "shed");
+        assert_eq!(share_name(None, None, Some("shed.tnn")), "shed");
         assert_eq!(
-            share_name(p("/a/house.skr"), p("/b/old.skp"), None),
+            share_name(p("/a/house.tnn"), p("/b/old.skp"), None),
             "house"
         );
         assert_eq!(share_name(None, None, None), "Untitled");

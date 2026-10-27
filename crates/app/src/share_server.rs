@@ -752,7 +752,7 @@ pub struct Sharing {
 }
 
 impl Sharing {
-    /// Seals `model` (the bytes of a `.skr` file) and its `name` and serves it from `dir`, advertised at `ip`.
+    /// Seals `model` (the bytes of a `.tnn` file) and its `name` and serves it from `dir`, advertised at `ip`.
     /// `taken_at` is what the model was taken from, for [`Sharing::stale`]. Err: what the sheet
     /// says.
     pub fn begin(

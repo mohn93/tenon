@@ -61,7 +61,7 @@ fn scratch(name: &str) -> PathBuf {
     path
 }
 
-/// The `document.json` saved in a `.skr` file.
+/// The `document.json` saved in a `.tnn` file.
 fn stored(path: &PathBuf) -> Value {
     let mut zip = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
     serde_json::from_reader(zip.by_name("document.json").unwrap()).unwrap()
@@ -296,7 +296,7 @@ fn texture_positions_are_saved_as_version_9_and_older_files_open_without_them() 
                "rotation_deg": 30, "scale": [2, 3]}),
     )
     .unwrap();
-    let path = scratch("positioned.skr");
+    let path = scratch("positioned.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -327,7 +327,7 @@ fn texture_positions_are_saved_as_version_9_and_older_files_open_without_them() 
         .as_object_mut()
         .unwrap()
         .remove("texture_position");
-    let old_path = scratch("old.skr");
+    let old_path = scratch("old.tnn");
     let mut zip = zip::ZipWriter::new(std::fs::File::create(&old_path).unwrap());
     zip.start_file("document.json", zip::write::SimpleFileOptions::default())
         .unwrap();

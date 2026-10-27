@@ -170,10 +170,7 @@ pub fn check() -> Outcome {
     let response = agent
         .get(LATEST_URL)
         .header("Accept", "application/vnd.github+json")
-        .header(
-            "User-Agent",
-            concat!("tenon/", env!("CARGO_PKG_VERSION")),
-        )
+        .header("User-Agent", concat!("tenon/", env!("CARGO_PKG_VERSION")))
         .call();
     let mut response = match response {
         Ok(r) => r,

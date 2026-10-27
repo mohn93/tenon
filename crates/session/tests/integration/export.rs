@@ -252,10 +252,10 @@ fn obj_has_no_negative_zero() {
 }
 
 #[test]
-fn skr_paths_and_the_open_models_file_are_refused() {
+fn tnn_paths_and_the_open_models_file_are_refused() {
     let mut d = doc();
     two_boxes(&mut d);
-    let model = scratch("model.skr");
+    let model = scratch("model.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": model.to_str().unwrap()}),
@@ -263,7 +263,7 @@ fn skr_paths_and_the_open_models_file_are_refused() {
     .unwrap();
     let saved = std::fs::read(&model).unwrap();
     let before = ask(&d, json!({"type": "file"}));
-    for path in [model.clone(), scratch("other.SKR")] {
+    for path in [model.clone(), scratch("other.TNN")] {
         let (kind, message) = run(
             &mut d,
             json!({"type": "export", "path": path.to_str().unwrap(), "format": "obj"}),
@@ -276,7 +276,7 @@ fn skr_paths_and_the_open_models_file_are_refused() {
 }
 
 #[test]
-fn the_open_models_file_is_refused_even_without_the_skr_extension() {
+fn the_open_models_file_is_refused_even_without_the_tnn_extension() {
     let mut d = doc();
     two_boxes(&mut d);
     let model = scratch("model.dat");
@@ -510,14 +510,14 @@ fn the_outcome_counts_triangles_and_faces_left_out() {
         },
         "definitions": []
     });
-    let skr = scratch("empty-face.skr");
+    let tnn = scratch("empty-face.tnn");
     let document = json!({
-        "format": "tenon",
+        "format": "sketchup-alt",
         "schema_version": session::file::SCHEMA_VERSION,
         "camera": {"eye": [5, -5, 5], "target": [0, 0, 0], "fov_y_deg": 45},
         "model": model
     });
-    let mut zip = zip::ZipWriter::new(std::fs::File::create(&skr).unwrap());
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&tnn).unwrap());
     zip.start_file("document.json", zip::write::SimpleFileOptions::default())
         .unwrap();
     std::io::Write::write_all(&mut zip, &serde_json::to_vec(&document).unwrap()).unwrap();
@@ -525,7 +525,7 @@ fn the_outcome_counts_triangles_and_faces_left_out() {
     let mut d = doc();
     run(
         &mut d,
-        json!({"type": "open", "path": skr.to_str().unwrap()}),
+        json!({"type": "open", "path": tnn.to_str().unwrap()}),
     )
     .unwrap();
     let path = scratch("left-out.obj");
@@ -559,14 +559,14 @@ fn a_model_whose_every_face_fails_to_triangulate_says_so() {
         },
         "definitions": []
     });
-    let skr = scratch("all-left-out.skr");
+    let tnn = scratch("all-left-out.tnn");
     let document = json!({
-        "format": "tenon",
+        "format": "sketchup-alt",
         "schema_version": session::file::SCHEMA_VERSION,
         "camera": {"eye": [5, -5, 5], "target": [0, 0, 0], "fov_y_deg": 45},
         "model": model
     });
-    let mut zip = zip::ZipWriter::new(std::fs::File::create(&skr).unwrap());
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&tnn).unwrap());
     zip.start_file("document.json", zip::write::SimpleFileOptions::default())
         .unwrap();
     std::io::Write::write_all(&mut zip, document.to_string().as_bytes()).unwrap();
@@ -574,7 +574,7 @@ fn a_model_whose_every_face_fails_to_triangulate_says_so() {
     let mut d = doc();
     run(
         &mut d,
-        json!({"type": "open", "path": skr.to_str().unwrap()}),
+        json!({"type": "open", "path": tnn.to_str().unwrap()}),
     )
     .unwrap();
     let path = scratch("all-left-out.obj");

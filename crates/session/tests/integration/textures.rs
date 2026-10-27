@@ -226,7 +226,7 @@ fn textures_are_saved_inside_the_file() {
     let png = red_blue_png("saved.png");
     let mut d = doc();
     let id = add_textured(&mut d, &png, 2.0);
-    let path = scratch("textured.skr");
+    let path = scratch("textured.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -269,7 +269,7 @@ fn files_with_missing_or_broken_textures_do_not_open() {
     let png = red_blue_png("broken.png");
     let mut d = doc();
     add_textured(&mut d, &png, 1.0);
-    let path = scratch("good.skr");
+    let path = scratch("good.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -297,9 +297,9 @@ fn files_with_missing_or_broken_textures_do_not_open() {
         out
     };
     for (out, expected) in [
-        (rewrite("no-image.skr", None), "is missing"),
+        (rewrite("no-image.tnn", None), "is missing"),
         (
-            rewrite("garbled.skr", Some(b"garbled")),
+            rewrite("garbled.tnn", Some(b"garbled")),
             "not a PNG or JPEG",
         ),
     ] {
@@ -343,7 +343,7 @@ fn a_file_with_too_many_textured_materials_does_not_open() {
     let png = red_blue_png("many.png");
     let mut d = doc();
     let id = add_textured(&mut d, &png, 1.0);
-    let path = scratch("many-good.skr");
+    let path = scratch("many-good.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -365,7 +365,7 @@ fn a_file_with_too_many_textured_materials_does_not_open() {
         })
         .collect::<Vec<_>>();
     document["model"]["materials"] = json!(materials);
-    let out = scratch("many.skr");
+    let out = scratch("many.tnn");
     let mut w = zip::ZipWriter::new(std::fs::File::create(&out).unwrap());
     w.start_file("document.json", zip::write::SimpleFileOptions::default())
         .unwrap();
@@ -427,7 +427,7 @@ fn a_file_whose_textures_hold_too_many_pixels_does_not_open() {
     let png = red_blue_png("budget.png");
     let mut d = doc();
     add_textured(&mut d, &png, 1.0);
-    let path = scratch("budget-good.skr");
+    let path = scratch("budget-good.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -447,7 +447,7 @@ fn a_file_whose_textures_hold_too_many_pixels_does_not_open() {
         })
         .collect::<Vec<_>>();
     document["model"]["materials"] = json!(materials);
-    let out = scratch("budget.skr");
+    let out = scratch("budget.tnn");
     let mut w = zip::ZipWriter::new(std::fs::File::create(&out).unwrap());
     w.start_file("document.json", zip::write::SimpleFileOptions::default())
         .unwrap();
@@ -479,7 +479,7 @@ fn materials_sharing_an_image_save_it_once() {
     let png = red_blue_png("shared.png");
     let mut d = doc();
     add_textured(&mut d, &png, 1.0);
-    let path = scratch("shared-one.skr");
+    let path = scratch("shared-one.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -502,7 +502,7 @@ fn materials_sharing_an_image_save_it_once() {
         .as_array_mut()
         .unwrap()
         .push(second);
-    let shared = scratch("shared.skr");
+    let shared = scratch("shared.tnn");
     let mut w = zip::ZipWriter::new(std::fs::File::create(&shared).unwrap());
     w.start_file("document.json", zip::write::SimpleFileOptions::default())
         .unwrap();
@@ -520,7 +520,7 @@ fn materials_sharing_an_image_save_it_once() {
     )
     .unwrap();
     assert_eq!(materials(&e).len(), 2);
-    let saved = scratch("shared-saved.skr");
+    let saved = scratch("shared-saved.tnn");
     run(
         &mut e,
         json!({"type": "save", "path": saved.to_str().unwrap()}),

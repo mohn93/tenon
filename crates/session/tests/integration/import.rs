@@ -314,7 +314,7 @@ fn bad_requests_and_bad_files_change_nothing() {
     let ok = write("ok.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
     check(
         &mut d,
-        json!({"type": "import", "path": write("m.skr", "")}),
+        json!({"type": "import", "path": write("m.tnn", "")}),
         ErrorKind::InvalidInput,
         "use open",
     );

@@ -783,7 +783,7 @@ fn primitive_definitions_survive_save_and_open() {
     let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("session-primitives-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("solids.skr");
+    let path = dir.join("solids.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),

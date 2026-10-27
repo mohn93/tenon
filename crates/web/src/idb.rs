@@ -23,7 +23,7 @@ use crate::recent::{DB_NAME, INFO_STORE, Info, Record, STORE, Storage};
 
 /// The keys of the kept models are never logged.
 fn log(text: &str) {
-    web_sys::console::error_1(&format!("tenon viewer storage: {text}").into());
+    web_sys::console::error_1(&format!("Tenon viewer storage: {text}").into());
 }
 
 type Infos = Rc<RefCell<Vec<Info>>>;

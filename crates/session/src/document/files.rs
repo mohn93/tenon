@@ -26,7 +26,7 @@ pub struct ExportedBytes {
 }
 
 impl Document {
-    /// Writes the model, view and lighting as a `.skr` file at `path`, leaving the document's
+    /// Writes the model, view and lighting as a `.tnn` file at `path`, leaving the document's
     /// own file and its unsaved state as they are (a recovery copy). Only the user may read
     /// the copy (0600).
     pub fn write_copy(&self, path: &Path) -> Result<(), CommandError> {
@@ -149,7 +149,7 @@ impl Document {
         in_view && (max - min).max_element() >= view.y / 12.0
     }
 
-    /// Replaces the model, view, lighting and units with those of an opened `.skr` file. A view
+    /// Replaces the model, view, lighting and units with those of an opened `.tnn` file. A view
     /// that cannot be used opens as the default view. The file's path is for the caller to set.
     fn apply_opened(&mut self, opened: file::Opened) {
         let c = opened.camera;
@@ -180,7 +180,7 @@ impl Document {
     }
 
     /// Opens a file given as bytes, as `open` does a path (this is the web's open, where there
-    /// are no paths): a `.skr` file replaces the model, view, lighting and units, a SketchUp
+    /// are no paths): a `.tnn` file replaces the model, view, lighting and units, a SketchUp
     /// file (by its extension or its header) opens as a new model never saved, with its import
     /// report. `name` is the file's name, for messages and the extension. Refuses with
     /// `unsaved_changes` unless `discard`. The model has no path afterwards: save it with
@@ -215,7 +215,7 @@ impl Document {
         Ok(None)
     }
 
-    /// The model, view, lighting and units as the bytes of a `.skr` file, as `save` writes
+    /// The model, view, lighting and units as the bytes of a `.tnn` file, as `save` writes
     /// them, and marks the model as saved (no unsaved changes). The model's own path, if any,
     /// is left as it is: the caller decides where the bytes go.
     pub fn save_bytes(&mut self) -> Result<Vec<u8>, CommandError> {
@@ -243,7 +243,7 @@ impl Document {
         self.clean_revision = self.revision;
     }
 
-    /// Replaces the model, view and lighting with those of the `.skr` copy at `path` (a
+    /// Replaces the model, view and lighting with those of the `.tnn` copy at `path` (a
     /// recovery file), as a model never saved: it has no file of its own and counts as
     /// modified until it is saved. Nothing changes on failure.
     pub fn open_recovered(&mut self, path: &Path) -> Result<(), CommandError> {
@@ -260,7 +260,7 @@ impl Document {
 
     /// Replaces the model with a SketchUp file's: its root geometry and instances go into the
     /// root (no wrapper), the view zooms to them, lit by day, and the model has no file (so
-    /// saving asks for a `.skr` path). Nothing changes on failure.
+    /// saving asks for a `.tnn` path). Nothing changes on failure.
     fn open_skp(&mut self, path: &str) -> Result<ImportReport, CommandError> {
         let bytes = super::import::read_limited(Path::new(path), MAX_IMPORT_BYTES)
             .map_err(|e| file_error(path, e))?;
@@ -316,8 +316,8 @@ impl Document {
                 )
             })?;
         check_nul(&target)?;
-        if !overwrite && !sniff::replaceable(&target, Kind::Skr) {
-            return Err(sniff::refusal(&target, Kind::Skr));
+        if !overwrite && !sniff::replaceable(&target, Kind::Tnn) {
+            return Err(sniff::refusal(&target, Kind::Tnn));
         }
         file::write(
             &target,
@@ -363,11 +363,11 @@ impl Document {
         check_nul(target)?;
         if target
             .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("skr"))
+            .is_some_and(|e| e.to_str().is_some_and(crate::file::is_model_extension))
         {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "a .skr path is a model file: use save, not export",
+                "a .tnn path is a model file: use save, not export",
             ));
         }
         let own = |p: &Path| self.path.as_deref().is_some_and(|own| same_file(own, p));
@@ -660,7 +660,7 @@ impl Document {
         }
     }
 
-    /// Checks that `path` may be written with a PDF the way an export is: not a `.skr`, not the
+    /// Checks that `path` may be written with a PDF the way an export is: not a `.tnn`, not the
     /// open model's own file, no link under `refuse_links`, and nothing but a PDF (or nothing)
     /// there unless `overwrite`. Returns the path to write.
     pub fn check_pdf_target(
@@ -673,11 +673,11 @@ impl Document {
         check_nul(target)?;
         if target
             .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("skr"))
+            .is_some_and(|e| e.to_str().is_some_and(crate::file::is_model_extension))
         {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "a .skr path is a model file: use save, not export_pdf",
+                "a .tnn path is a model file: use save, not export_pdf",
             ));
         }
         if self

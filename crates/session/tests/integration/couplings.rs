@@ -310,7 +310,7 @@ fn couplings_save_at_schema_27_and_read_back() {
     let (_, j) = shafts(&mut d, 2);
     couple(&mut d, &j[0], &j[1], 0.5);
     let listing = couplings(&d);
-    let path = scratch("couplings.skr");
+    let path = scratch("couplings.tnn");
     ok(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -334,7 +334,7 @@ fn couplings_save_at_schema_27_and_read_back() {
     near(value(&e, &j[1]), 360.0);
 
     // A coupling naming a joint the file does not have is refused.
-    let broken = scratch("broken.skr");
+    let broken = scratch("broken.tnn");
     std::fs::copy(&path, &broken).unwrap();
     edit_file(&broken, |doc| {
         doc["model"]["couplings"][0]["driven"] = json!(987654)

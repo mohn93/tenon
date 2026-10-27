@@ -20,7 +20,7 @@ pub const THUMBS_PER_FRAME: usize = 2;
 const MAX_STEM: usize = 100;
 const MAX_STEM_BYTES: usize = 200;
 
-/// The file name (with `.skr`) an item named `name` is saved under: characters a file name may
+/// The file name (with `.tnn`) an item named `name` is saved under: characters a file name may
 /// not hold become `_`, surrounding spaces and dots go, a name Windows reserves gets a `_`
 /// after it. None when nothing is left.
 pub fn file_name_for(name: &str) -> Option<String> {
@@ -54,19 +54,19 @@ pub fn file_name_for(name: &str) -> Option<String> {
                 .is_some_and(|n| matches!(n.as_bytes(), [b'1'..=b'9']))
         });
     Some(if reserved {
-        format!("{stem}_.skr")
+        format!("{stem}_.tnn")
     } else {
-        format!("{stem}.skr")
+        format!("{stem}.tnn")
     })
 }
 
-/// Deletes the library item at `path`, only when it is a regular `.skr` file directly in
+/// Deletes the library item at `path`, only when it is a regular `.tnn` (or legacy `.skr`) file directly in
 /// `folder` and not a link (what a listing shows, and nothing it follows elsewhere).
 pub fn delete_item(folder: &Path, path: &Path) -> Result<(), String> {
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
-        .filter(|n| n.to_lowercase().ends_with(".skr"))
+        .filter(|n| n.to_lowercase().ends_with(".tnn") || n.to_lowercase().ends_with(".skr"))
         .ok_or("it is not a library file")?;
     let parent = path.parent().ok_or("it is not in the library folder")?;
     let inside = match (std::fs::canonicalize(parent), std::fs::canonicalize(folder)) {
@@ -270,7 +270,7 @@ mod tests {
 
     fn key(name: &str, modified: u64) -> ThumbKey {
         ThumbKey {
-            path: PathBuf::from(format!("/lib/{name}.skr")),
+            path: PathBuf::from(format!("/lib/{name}.tnn")),
             stamp: (modified, 10),
         }
     }
@@ -278,11 +278,11 @@ mod tests {
     #[test]
     fn a_file_name_stem_is_at_most_100_characters_and_200_bytes() {
         let long = file_name_for(&"a".repeat(300)).unwrap();
-        assert_eq!(long.len(), 100 + ".skr".len());
+        assert_eq!(long.len(), 100 + ".tnn".len());
         let wide = file_name_for(&"\u{1F600}".repeat(100)).unwrap();
-        assert_eq!(wide.len(), 200 + ".skr".len());
+        assert_eq!(wide.len(), 200 + ".tnn".len());
         let kana = file_name_for(&"\u{3042}".repeat(100)).unwrap();
-        assert_eq!(kana.len(), 66 * 3 + ".skr".len());
+        assert_eq!(kana.len(), 66 * 3 + ".tnn".len());
     }
 
     #[test]
@@ -306,25 +306,25 @@ mod tests {
         t.store(key("a", 1), Ok(7u32));
         t.store(key("b", 1), Err(Some("too deep".into())));
         assert_eq!(
-            t.get(Path::new("/lib/a.skr"), (1, 10)),
+            t.get(Path::new("/lib/a.tnn"), (1, 10)),
             Some(&Slot::Ready(7))
         );
         assert_eq!(
-            t.get(Path::new("/lib/b.skr"), (1, 10)),
+            t.get(Path::new("/lib/b.tnn"), (1, 10)),
             Some(&Slot::Failed(Some("too deep".into())))
         );
         // Held ones are not asked for again; a file written since is.
         t.want(key("a", 1));
         t.want(key("b", 1));
         assert!(!t.pending());
-        assert_eq!(t.get(Path::new("/lib/a.skr"), (2, 10)), None);
+        assert_eq!(t.get(Path::new("/lib/a.tnn"), (2, 10)), None);
         t.want(key("a", 2));
         assert_eq!(t.next_batch(), [key("a", 2)]);
         // The newer one replaces the old.
         t.store(key("a", 2), Ok(8));
-        assert_eq!(t.get(Path::new("/lib/a.skr"), (1, 10)), None);
+        assert_eq!(t.get(Path::new("/lib/a.tnn"), (1, 10)), None);
         assert_eq!(
-            t.get(Path::new("/lib/a.skr"), (2, 10)),
+            t.get(Path::new("/lib/a.tnn"), (2, 10)),
             Some(&Slot::Ready(8))
         );
     }
@@ -350,14 +350,14 @@ mod tests {
         t.want(key("c", 1));
         t.want(key("d", 1));
         t.keep_only(&[
-            (PathBuf::from("/lib/a.skr"), (1, 10)),
-            (PathBuf::from("/lib/d.skr"), (1, 10)),
+            (PathBuf::from("/lib/a.tnn"), (1, 10)),
+            (PathBuf::from("/lib/d.tnn"), (1, 10)),
         ]);
-        assert!(t.get(Path::new("/lib/a.skr"), (1, 10)).is_some());
-        assert!(t.get(Path::new("/lib/b.skr"), (1, 10)).is_none());
+        assert!(t.get(Path::new("/lib/a.tnn"), (1, 10)).is_some());
+        assert!(t.get(Path::new("/lib/b.tnn"), (1, 10)).is_none());
         assert_eq!(t.next_batch(), [key("d", 1)]);
         t.clear();
-        assert!(t.get(Path::new("/lib/a.skr"), (1, 10)).is_none());
+        assert!(t.get(Path::new("/lib/a.tnn"), (1, 10)).is_none());
     }
 
     #[test]
@@ -397,13 +397,13 @@ mod tests {
 
     #[test]
     fn names_become_safe_file_names() {
-        assert_eq!(file_name_for("Chair").as_deref(), Some("Chair.skr"));
-        assert_eq!(file_name_for("  a/b:c*d  ").as_deref(), Some("a_b_c_d.skr"));
-        assert_eq!(file_name_for("..sneaky..").as_deref(), Some("sneaky.skr"));
-        assert_eq!(file_name_for("../../x").as_deref(), Some("_.._x.skr"));
-        assert_eq!(file_name_for("con").as_deref(), Some("con_.skr"));
-        assert_eq!(file_name_for("LPT3").as_deref(), Some("LPT3_.skr"));
-        assert_eq!(file_name_for("COM10").as_deref(), Some("COM10.skr"));
+        assert_eq!(file_name_for("Chair").as_deref(), Some("Chair.tnn"));
+        assert_eq!(file_name_for("  a/b:c*d  ").as_deref(), Some("a_b_c_d.tnn"));
+        assert_eq!(file_name_for("..sneaky..").as_deref(), Some("sneaky.tnn"));
+        assert_eq!(file_name_for("../../x").as_deref(), Some("_.._x.tnn"));
+        assert_eq!(file_name_for("con").as_deref(), Some("con_.tnn"));
+        assert_eq!(file_name_for("LPT3").as_deref(), Some("LPT3_.tnn"));
+        assert_eq!(file_name_for("COM10").as_deref(), Some("COM10.tnn"));
         assert_eq!(file_name_for("  . "), None);
         assert_eq!(file_name_for(""), None);
         let long = "x".repeat(300);
@@ -411,42 +411,39 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "tenon-library-{name}-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("tenon-library-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
 
     #[test]
-    fn delete_removes_only_a_regular_skr_file_in_the_folder() {
+    fn delete_removes_only_a_regular_tnn_file_in_the_folder() {
         let dir = scratch("delete");
         let folder = dir.join("lib");
         let other = dir.join("other");
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::create_dir_all(&other).unwrap();
-        let item = folder.join("a.skr");
+        let item = folder.join("a.tnn");
         std::fs::write(&item, b"x").unwrap();
-        let outside = other.join("b.skr");
+        let outside = other.join("b.tnn");
         std::fs::write(&outside, b"x").unwrap();
         let text = folder.join("note.txt");
         std::fs::write(&text, b"x").unwrap();
         // Not in the folder, not an item, not even there.
         assert!(delete_item(&folder, &outside).is_err());
         assert!(delete_item(&folder, &text).is_err());
-        assert!(delete_item(&folder, &folder.join("gone.skr")).is_err());
-        assert!(delete_item(&folder, &folder.join("..").join("other").join("b.skr")).is_err());
+        assert!(delete_item(&folder, &folder.join("gone.tnn")).is_err());
+        assert!(delete_item(&folder, &folder.join("..").join("other").join("b.tnn")).is_err());
         assert!(outside.exists() && text.exists() && item.exists());
         // A folder named like an item.
-        let dir_item = folder.join("d.skr");
+        let dir_item = folder.join("d.tnn");
         std::fs::create_dir_all(&dir_item).unwrap();
         assert!(delete_item(&folder, &dir_item).is_err());
         assert!(dir_item.exists());
         #[cfg(unix)]
         {
-            let link = folder.join("link.skr");
+            let link = folder.join("link.tnn");
             std::os::unix::fs::symlink(&outside, &link).unwrap();
             assert!(delete_item(&folder, &link).is_err());
             assert!(link.exists() && outside.exists());

@@ -1,8 +1,9 @@
 [Desktop Entry]
 Type=Application
-Name=tenon
+Name=Tenon
 Comment=3D modeling
 Exec=app %f
+MimeType=application/x-tenon;
 Icon=tenon
 Terminal=false
 Categories=Graphics;3DGraphics;

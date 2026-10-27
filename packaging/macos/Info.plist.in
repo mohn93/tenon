@@ -13,9 +13,9 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>tenon</string>
+	<string>Tenon</string>
 	<key>CFBundleDisplayName</key>
-	<string>tenon</string>
+	<string>Tenon</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -34,10 +34,15 @@
 	<array>
 		<dict>
 			<key>CFBundleTypeName</key>
-			<string>tenon model</string>
+			<string>Tenon model</string>
 			<key>CFBundleTypeExtensions</key>
 			<array>
+				<string>tnn</string>
 				<string>skr</string>
+			</array>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>io.github.mohn93.tenon.model</string>
 			</array>
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
@@ -45,6 +50,27 @@
 			<string>Owner</string>
 			<key>CFBundleTypeIconFile</key>
 			<string>app</string>
+		</dict>
+	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>io.github.mohn93.tenon.model</string>
+			<key>UTTypeDescription</key>
+			<string>Tenon model</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>tnn</string>
+					<string>skr</string>
+				</array>
+			</dict>
 		</dict>
 	</array>
 </dict>

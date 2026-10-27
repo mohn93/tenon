@@ -15,7 +15,7 @@ pub const USAGE: &str =
        app --headless [--socket NAME] [--api-root DIR]... [FILE]  no window, agent API on a local socket
        app --mcp [--api-root DIR]... [FILE]                MCP server on stdin/stdout with its own model
        app --mcp --live NAME                               MCP server driving the app listening on NAME
-FILE is a .skr model to open at start, or a SketchUp .skp file to open as a new model.
+FILE is a .tnn model to open at start, or a SketchUp .skp file to open as a new model.
 NAME is a Unix socket path, or on Windows a named pipe (\\\\.\\pipe\\ is added to a bare name).
 --api-root DIR (repeatable) keeps every file the API reads or writes inside DIR.";
 
@@ -311,31 +311,31 @@ mod tests {
     #[test]
     fn a_file_to_open_can_follow_the_options() {
         assert_eq!(
-            parse(args("--headless --stdio house.skr")).unwrap(),
+            parse(args("--headless --stdio house.tnn")).unwrap(),
             Mode::Headless {
                 transport: Transport::Stdio,
-                file: Some("house.skr".into()),
+                file: Some("house.tnn".into()),
                 api_roots: vec![]
             }
         );
         assert_eq!(
-            parse(args("house.skr --socket /tmp/c.sock")).unwrap(),
+            parse(args("house.tnn --socket /tmp/c.sock")).unwrap(),
             Mode::Window {
                 socket: Endpoint::from_arg("/tmp/c.sock"),
-                file: Some("house.skr".into()),
+                file: Some("house.tnn".into()),
                 api_roots: vec![]
             }
         );
-        assert!(parse(args("a.skr b.skr")).unwrap_err().contains("b.skr"));
+        assert!(parse(args("a.tnn b.tnn")).unwrap_err().contains("b.tnn"));
     }
 
     #[test]
     fn api_roots_repeat() {
         assert_eq!(
-            parse(args("--headless --stdio --api-root /a --api-root b f.skr")).unwrap(),
+            parse(args("--headless --stdio --api-root /a --api-root b f.tnn")).unwrap(),
             Mode::Headless {
                 transport: Transport::Stdio,
-                file: Some("f.skr".into()),
+                file: Some("f.tnn".into()),
                 api_roots: vec!["/a".into(), "b".into()],
             }
         );
@@ -357,10 +357,10 @@ mod tests {
             }
         );
         assert_eq!(
-            parse(args("--mcp --api-root /a f.skr")).unwrap(),
+            parse(args("--mcp --api-root /a f.tnn")).unwrap(),
             Mode::Mcp {
                 live: None,
-                file: Some("f.skr".into()),
+                file: Some("f.tnn".into()),
                 api_roots: vec!["/a".into()]
             }
         );
@@ -377,7 +377,7 @@ mod tests {
                 .unwrap_err()
                 .contains("--mcp")
         );
-        assert!(parse(args("--mcp --live /tmp/w.sock f.skr")).is_err());
+        assert!(parse(args("--mcp --live /tmp/w.sock f.tnn")).is_err());
         assert!(parse(args("--mcp --live /tmp/w.sock --api-root /a")).is_err());
         assert!(parse(args("--mcp --headless")).is_err());
         assert!(parse(args("--mcp --socket /tmp/x.sock")).is_err());
@@ -385,8 +385,8 @@ mod tests {
 
     #[test]
     fn arguments_that_are_not_unicode_are_refused() {
-        let ok = unicode_args(["--headless".into(), "ü.skr".into()]);
-        assert_eq!(ok.unwrap(), ["--headless", "ü.skr"]);
+        let ok = unicode_args(["--headless".into(), "ü.tnn".into()]);
+        assert_eq!(ok.unwrap(), ["--headless", "ü.tnn"]);
         #[cfg(unix)]
         let bad = <OsString as std::os::unix::ffi::OsStringExt>::from_vec(vec![b'a', 0xff]);
         #[cfg(windows)]

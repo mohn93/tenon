@@ -94,9 +94,9 @@ impl Document {
         super::files::check_nul(file)?;
         if file
             .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("skr"))
+            .is_some_and(|e| e.to_str().is_some_and(crate::file::is_model_extension))
         {
-            return Err(invalid("a .skr file is a model: use open, not import"));
+            return Err(invalid("a .tnn file is a model: use open, not import"));
         }
         let from_bytes = matches!(source, Source::Bytes(_));
         let sniffed = match &source {

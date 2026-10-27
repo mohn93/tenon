@@ -74,7 +74,7 @@ Paths are resolved to the names on disk and then compared exactly (a request in 
 still matches once resolved; a case-sensitive folder's sibling differing only in case does not),
 verbatim paths (`\\?\C:\...`) are judged as their
 plain form, junctions count as links, and drive-relative paths (`C:foo`), paths without a drive
-(`\foo`), alternate data streams (`a.skr:x`) and reserved device names (`CON`, `NUL.txt`, ...)
+(`\foo`), alternate data streams (`a.tnn:x`) and reserved device names (`CON`, `NUL.txt`, ...)
 are refused. A UNC root (`\\server\share\...`) must be given with the server and share names in the
 case requests use, and a share and the same folder by drive letter are different roots. A root on
 a mapped or `subst` drive is compared as the drive path it was given as, so requests must use

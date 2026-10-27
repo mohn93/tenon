@@ -92,17 +92,17 @@ fn with_recent(paths: &[&str]) -> Fixture {
 
 #[test]
 fn open_recent_lists_the_recent_files_and_clears() {
-    let f = || with_recent(&["/a/house.skr", "/b/shed.skr"]);
+    let f = || with_recent(&["/a/house.tnn", "/b/shed.tnn"]);
     let mut h = harness(f());
     click(&mut h, "File");
     click(&mut h, OPEN_RECENT);
     assert!(
-        rect_of(&h, "house.skr").min.y < rect_of(&h, "shed.skr").min.y,
+        rect_of(&h, "house.tnn").min.y < rect_of(&h, "shed.tnn").min.y,
         "newest first"
     );
     assert_eq!(
-        click_menu(&mut harness(f()), &["File", OPEN_RECENT, "shed.skr"]),
-        [UiAction::OpenRecent("/b/shed.skr".into())]
+        click_menu(&mut harness(f()), &["File", OPEN_RECENT, "shed.tnn"]),
+        [UiAction::OpenRecent("/b/shed.tnn".into())]
     );
     assert_eq!(
         click_menu(&mut harness(f()), &["File", OPEN_RECENT, "Clear Menu"]),
@@ -131,19 +131,19 @@ fn open_recent_lists_the_recent_files_and_clears() {
 fn recent_labels_tell_same_names_apart() {
     use crate::menus::recent_label;
     let twins = [
-        PathBuf::from("/a/Old/house.skr"),
-        PathBuf::from("/a/New/house.skr"),
+        PathBuf::from("/a/Old/house.tnn"),
+        PathBuf::from("/a/New/house.tnn"),
     ];
-    assert_eq!(recent_label(&twins[0], &twins), "house.skr \u{2014} Old");
-    assert_eq!(recent_label(&twins[1], &twins), "house.skr \u{2014} New");
-    let alone = [PathBuf::from("/a/shed.skr")];
-    assert_eq!(recent_label(&alone[0], &alone), "shed.skr");
+    assert_eq!(recent_label(&twins[0], &twins), "house.tnn \u{2014} Old");
+    assert_eq!(recent_label(&twins[1], &twins), "house.tnn \u{2014} New");
+    let alone = [PathBuf::from("/a/shed.tnn")];
+    assert_eq!(recent_label(&alone[0], &alone), "shed.tnn");
 }
 
 #[test]
 fn recent_paths_reads_the_submenu() {
     use crate::menus::{menu_bar, recent_paths};
-    let f = with_recent(&["/a/house.skr", "/b/shed.skr"]);
+    let f = with_recent(&["/a/house.tnn", "/b/shed.tnn"]);
     assert_eq!(recent_paths(&menu_bar(&f.view(), true)), f.recent);
     let empty = Fixture::default();
     assert_eq!(
@@ -193,14 +193,14 @@ fn the_view_menu_and_the_indicator_open_agent_activity() {
     // The window lists the log and the recovery files, and closes.
     let mut h = harness(Fixture {
         connected: 2,
-        log: Some(vec!["5 s ago  #1  execute save /a.skr  ok".into()]),
-        recovered: vec![PathBuf::from("/r/untitled-1.skr")],
+        log: Some(vec!["5 s ago  #1  execute save /a.tnn  ok".into()]),
+        recovered: vec![PathBuf::from("/r/untitled-1.tnn")],
         ..Default::default()
     });
     for want in [
         "2 agents connected",
-        "5 s ago  #1  execute save /a.skr  ok",
-        "/r/untitled-1.skr",
+        "5 s ago  #1  execute save /a.tnn  ok",
+        "/r/untitled-1.tnn",
     ] {
         h.get_by_label(want);
     }
@@ -763,7 +763,7 @@ fn quit_ends_the_file_menu_off_macos_and_leads_the_app_menu_on_it() {
     assert_eq!(quits, 1);
     assert!(
         matches!(native[0].entries.as_slice(), [Entry::Item(s), Entry::Item(q)]
-        if s.label == "Settings..." && q.action == UiAction::Quit && q.label == "Quit tenon")
+        if s.label == "Settings..." && q.action == UiAction::Quit && q.label == "Quit Tenon")
     );
     assert_eq!(
         click_menu(&mut harness(Fixture::default()), &["File", "Quit"]),
@@ -786,7 +786,7 @@ fn settings_is_in_the_app_menu_or_ends_edit() {
             _ => None,
         })
         .collect();
-    assert_eq!(labels, ["Settings...", "Quit tenon"]);
+    assert_eq!(labels, ["Settings...", "Quit Tenon"]);
     let settings_items = |bar: &[crate::menus::Menu]| {
         crate::menus::items(bar)
             .iter()
@@ -851,7 +851,7 @@ fn the_app_menu_reads_about_settings_then_quit() {
             "HideOthers",
             "ShowAll",
             "-",
-            "Quit tenon"
+            "Quit Tenon"
         ]
     );
 }
@@ -883,7 +883,7 @@ fn the_menu_bar_has_the_same_items_in_every_state() {
             fill: false,
             ..Default::default()
         },
-        recent: vec!["/a/house.skr".into(), "/b/shed.skr".into()],
+        recent: vec!["/a/house.tnn".into(), "/b/shed.tnn".into()],
         ..super::styles::styles_tab(Some(kernel::StyleId(2)))
     };
     assert_eq!(
@@ -1179,7 +1179,7 @@ fn only_quit_works_while_a_sheet_is_open() {
     let f = Fixture {
         undo: Some("paint".into()),
         has_selection: true,
-        recent: vec!["/a/house.skr".into()],
+        recent: vec!["/a/house.tnn".into()],
         ..Default::default()
     };
     let bar = menu_bar(&f.view(), true);

@@ -1,6 +1,6 @@
 # Web build
 
-tenon runs in a browser tab: the `web` crate is the same window app (`app::App`) drawing
+Tenon runs in a browser tab: the `web` crate is the same window app (`app::App`) drawing
 to a canvas through WebGPU, or WebGL2 where WebGPU is missing.
 
 ## Build
@@ -37,15 +37,15 @@ tested by hand (open, draw, save, reopen).
 
 - The whole editor: drawing and editing tools, groups and components, materials, tags, scenes,
   sections, text, dimensions, the dock panels, undo and redo, fly mode.
-- Open: File > Open takes a `.skr`, or a `.skp` (opened as a new, unsaved model). Where the
+- Open: File > Open takes a `.tnn`, or a `.skp` (opened as a new, unsaved model). Where the
   browser has the File System Access API (Chrome, Edge) the file is picked with its picker and
-  Save writes back to the same `.skr`; elsewhere an `<input type=file>` is shown.
+  Save writes back to the same `.tnn`; elsewhere an `<input type=file>` is shown.
 - Save writes back to the file the model was opened from or last saved to, when the browser
   gave a handle for it (File System Access API) and the model is still that file: New, opening
   a `.skp`, Import, texture picks and Export never change which file Save writes to, and after
   New Save asks again. With no such file, Save and Save As ask with the browser's save picker
-  when it has one (and keep the handle), else download `<name>.skr`. A `.skp` opened or
-  imported is saved as `<name>.skr`.
+  when it has one (and keep the handle), else download `<name>.tnn`. A `.skp` opened or
+  imported is saved as `<name>.tnn`.
 - Import (OBJ, STL, SketchUp). Export opens a sheet to choose the format (OBJ, STL, glTF
   binary, glTF, SketchUp 2017, SVG; the one used last is first), then the save picker or a
   download offers only that format. An OBJ with materials downloads its `.mtl` and textures

@@ -246,12 +246,12 @@ mod tests {
             base: DVec3::ZERO,
             segments: vec![[DVec3::ZERO, DVec3::X]],
         };
-        let mut t = PasteTool::library("/lib/a.skr".into(), &outline);
+        let mut t = PasteTool::library("/lib/a.tnn".into(), &outline);
         let out = send(&mut t, ToolEvent::Click(at(DVec3::new(2.0, 3.0, 0.0))));
         assert_eq!(
             out.commands,
             vec![Command::InsertLibraryItem {
-                path: "/lib/a.skr".into(),
+                path: "/lib/a.tnn".into(),
                 at: Some([2.0, 3.0, 0.0]),
             }]
         );

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>tenon</title>
+  <title>Tenon</title>
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #202124; color: #e8eaed;
                  font-family: system-ui, sans-serif; }
@@ -17,9 +17,9 @@
 </head>
 <body>
   <canvas id="tenon" tabindex="0"></canvas>
-  <div id="loading">Loading tenon...</div>
+  <div id="loading">Loading Tenon...</div>
   <div id="problem" hidden></div>
-  <noscript>tenon needs JavaScript.</noscript>
+  <noscript>Tenon needs JavaScript.</noscript>
   <script type="module">
     // A share link holds its key in the fragment: take it out of the address bar and the
     // history entry now, before the (large) module downloads, and hand it to the module through
@@ -31,7 +31,7 @@
     import init from "./web.js";
     init().catch((e) => {
       const problem = document.getElementById("problem");
-      problem.textContent = "tenon could not start: " + e;
+      problem.textContent = "Tenon could not start: " + e;
       problem.hidden = false;
     });
   </script>

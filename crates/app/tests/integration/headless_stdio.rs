@@ -92,7 +92,7 @@ fn headless_stdio_session() {
 #[test]
 fn headless_opens_the_file_it_is_given() {
     let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-    let path = dir.join(format!("headless-open-{}.skr", std::process::id()));
+    let path = dir.join(format!("headless-open-{}.tnn", std::process::id()));
     let _ = std::fs::remove_file(&path);
     let path_text = path.to_str().unwrap();
     let save = [
@@ -111,7 +111,7 @@ fn headless_opens_the_file_it_is_given() {
     assert_eq!(messages[0]["result"]["faces"], 1);
     assert_eq!(messages[1]["result"]["path"], json!(path_text));
 
-    let missing = dir.join("headless-missing.skr");
+    let missing = dir.join("headless-missing.tnn");
     let (status, messages) = session(&[missing.to_str().unwrap()], &ask);
     assert_eq!(
         status.code(),

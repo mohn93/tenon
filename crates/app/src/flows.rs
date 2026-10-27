@@ -107,15 +107,15 @@ fn remember(env: &Env) -> Effect {
     Effect::RememberFile(env.editor.doc().path().map(Path::to_path_buf))
 }
 
-fn skr_filters() -> Vec<Filter> {
-    vec![Filter::new("Tenon model", &["skr"])]
+fn tnn_filters() -> Vec<Filter> {
+    vec![Filter::new("Tenon model", &["tnn"])]
 }
 
-/// The File > Open filters: `.skr` models, and SketchUp files (opened as new models).
+/// The File > Open filters: `.tnn` models, and SketchUp files (opened as new models).
 fn open_filters() -> Vec<Filter> {
     vec![
-        Filter::new("Tenon or SketchUp model", &["skr", "skp"]),
-        Filter::new("Tenon model", &["skr"]),
+        Filter::new("Tenon or SketchUp model", &["tnn", "skr", "skp"]),
+        Filter::new("Tenon model", &["tnn", "skr"]),
         Filter::new("SketchUp model", &["skp"]),
     ]
 }
@@ -137,30 +137,30 @@ fn import_filters() -> Vec<Filter> {
     ]
 }
 
-/// The name the save dialog suggests: the file's, else the SketchUp file's stem with `.skr`
-/// (never the SketchUp file itself), else "Untitled.skr".
-/// A recovered model never saved (`recovered`: its name) suggests "<name>.skr".
+/// The name the save dialog suggests: the file's, else the SketchUp file's stem with `.tnn`
+/// (never the SketchUp file itself), else "Untitled.tnn".
+/// A recovered model never saved (`recovered`: its name) suggests "<name>.tnn".
 pub fn save_name(
     path: Option<&Path>,
     imported_from: Option<&Path>,
     recovered: Option<&str>,
 ) -> String {
     match (path, imported_from.and_then(|p| p.file_stem()), recovered) {
-        (None, Some(stem), _) => format!("{}.skr", stem.to_string_lossy()),
-        (None, None, Some(name)) => format!("{name}.skr"),
+        (None, Some(stem), _) => format!("{}.tnn", stem.to_string_lossy()),
+        (None, None, Some(name)) => format!("{name}.tnn"),
         _ => file_name(path),
     }
 }
 
-/// The file's name, or "Untitled.skr" for a model never saved.
+/// The file's name, or "Untitled.tnn" for a model never saved.
 pub fn file_name(path: Option<&Path>) -> String {
     path.and_then(|p| p.file_name()).map_or_else(
-        || "Untitled.skr".into(),
+        || "Untitled.tnn".into(),
         |n| n.to_string_lossy().into_owned(),
     )
 }
 
-/// `Do you want to save changes to "house.skr"?`
+/// `Do you want to save changes to "house.tnn"?`
 pub fn unsaved_question(path: Option<&Path>) -> String {
     question_for(&file_name(path))
 }
@@ -169,11 +169,11 @@ fn question_for(name: &str) -> String {
     format!("Do you want to save changes to \"{name}\"?")
 }
 
-/// The `.skr` name of a file kept under `name`: a SketchUp file's stem gets the extension.
-fn skr_name(name: &str) -> String {
+/// The `.tnn` name of a file kept under `name`: a SketchUp file's stem gets the extension.
+fn tnn_name(name: &str) -> String {
     match name.rsplit_once('.') {
         Some((stem, ext)) if ext.eq_ignore_ascii_case("skp") && !stem.is_empty() => {
-            format!("{stem}.skr")
+            format!("{stem}.tnn")
         }
         _ => name.to_string(),
     }
@@ -306,7 +306,7 @@ impl Flows {
                 if env.editor.open_bytes(&name, &bytes) {
                     env.platform.file_opened(&name);
                     self.bound = true;
-                    self.kept_name = Some(skr_name(&name));
+                    self.kept_name = Some(tnn_name(&name));
                     vec![Effect::ClearAutosave, remember(env)]
                 } else {
                     Vec::new()
@@ -342,7 +342,7 @@ impl Flows {
                 return self.saved_to(env, None, then);
             }
             let request = SaveRequest {
-                filters: skr_filters(),
+                filters: tnn_filters(),
                 name,
                 ask: true,
                 write_back: false,
@@ -363,7 +363,7 @@ impl Flows {
             return Vec::new();
         };
         let request = SaveRequest {
-            filters: skr_filters(),
+            filters: tnn_filters(),
             name: name.clone(),
             ask: choose,
             write_back: !choose && self.bound,
@@ -488,9 +488,9 @@ impl Flows {
     /// its extension.
     fn export_stem(&self, env: &Env) -> String {
         let stem = file_name(env.editor.doc().path());
-        let stem = stem.strip_suffix(".skr").unwrap_or(&stem).to_string();
+        let stem = stem.strip_suffix(".tnn").unwrap_or(&stem).to_string();
         match (&self.kept_name, env.editor.doc().path()) {
-            (Some(kept), None) => kept.strip_suffix(".skr").unwrap_or(kept).to_string(),
+            (Some(kept), None) => kept.strip_suffix(".tnn").unwrap_or(kept).to_string(),
             _ => stem,
         }
     }
@@ -627,7 +627,7 @@ impl Flows {
             return Vec::new();
         }
         let stem = file_name(env.editor.doc().path());
-        let stem = stem.strip_suffix(".skr").unwrap_or(&stem);
+        let stem = stem.strip_suffix(".tnn").unwrap_or(&stem);
         let request = SaveRequest {
             filters: vec![Filter::new("PDF", &["pdf"])],
             name: format!("{stem}.pdf"),
@@ -759,6 +759,21 @@ mod tests {
     use session::{Command, Document};
 
     use super::*;
+
+    #[test]
+    fn the_open_filters_accept_the_legacy_skr_extension() {
+        for f in open_filters() {
+            assert!(
+                f.extensions.contains(&"skr") || f.name == "SketchUp model",
+                "{}",
+                f.name
+            );
+        }
+        assert!(
+            !tnn_filters()[0].extensions.contains(&"skr"),
+            "saving writes .tnn only"
+        );
+    }
     use crate::clipboard::{Clipboard, MemoryClipboard};
     use crate::platform::Features;
 
@@ -902,8 +917,8 @@ mod tests {
         step(flows, &mut env)
     }
 
-    /// The bytes of a `.skr` file of a model with one edge.
-    fn skr_bytes() -> Vec<u8> {
+    /// The bytes of a `.tnn` file of a model with one edge.
+    fn tnn_bytes() -> Vec<u8> {
         let mut doc = Document::new(DVec2::new(800.0, 600.0));
         doc.execute(Command::AddEdge {
             start: [0.0, 0.0, 0.0],
@@ -957,7 +972,7 @@ mod tests {
         let [Effect::AskUnsaved(prompt)] = &fx[..] else {
             panic!("expected the question, got {fx:?}");
         };
-        assert!(prompt.question.contains("Untitled.skr"));
+        assert!(prompt.question.contains("Untitled.tnn"));
         assert_eq!(platform.asks.get(), 0);
         // The model is kept until the answer comes; a second request is ignored meanwhile.
         assert!(editor.doc().is_modified());
@@ -988,7 +1003,7 @@ mod tests {
         assert!(editor.doc().is_modified());
         assert_eq!(
             platform.asked.borrow()[0].question,
-            "Do you want to save changes to \"Untitled.skr\"?"
+            "Do you want to save changes to \"Untitled.tnn\"?"
         );
     }
 
@@ -1017,12 +1032,12 @@ mod tests {
         });
         assert!(fx.is_empty());
         assert!(editor.doc().is_modified());
-        assert_eq!(platform.path_requests.borrow()[0].name, "Untitled.skr");
+        assert_eq!(platform.path_requests.borrow()[0].name, "Untitled.tnn");
 
         // Saved to the path chosen: the quit goes on.
         let dir = std::env::temp_dir().join(format!("tenon-flows-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("house.skr");
+        let path = dir.join("house.tnn");
         platform
             .unsaved
             .borrow_mut()
@@ -1050,10 +1065,9 @@ mod tests {
     #[test]
     fn a_model_saved_from_the_prompt_is_remembered_before_the_new_one_replaces_it() {
         let platform = desktop();
-        let dir =
-            std::env::temp_dir().join(format!("tenon-flows-rem-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tenon-flows-rem-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("house.skr");
+        let path = dir.join("house.tnn");
         platform
             .unsaved
             .borrow_mut()
@@ -1108,8 +1122,8 @@ mod tests {
         let fx = run(&mut f, &mut editor, &platform, |f, env| f.open(env));
         assert!(fx.is_empty(), "the picker has not answered");
         let picked = Picked {
-            name: "house.skr".into(),
-            source: Source::Bytes(skr_bytes()),
+            name: "house.tnn".into(),
+            source: Source::Bytes(tnn_bytes()),
         };
         let fx = run(&mut f, &mut editor, &platform, |f, env| {
             f.answered(env, PlatformReply::Picked(Some(picked)))
@@ -1117,7 +1131,7 @@ mod tests {
         assert_eq!(fx, [Effect::ClearAutosave, Effect::RememberFile(None)]);
         assert!(!editor.doc().is_modified());
         assert_eq!(editor.doc().scene().root().edges().count(), 1);
-        assert_eq!(f.kept_name(), Some("house.skr"));
+        assert_eq!(f.kept_name(), Some("house.tnn"));
     }
 
     #[test]
@@ -1127,7 +1141,7 @@ mod tests {
             .opens
             .borrow_mut()
             .push_back(Answer::Ready(Some(Picked {
-                name: "bad.skr".into(),
+                name: "bad.tnn".into(),
                 source: Source::Bytes(b"not a model".to_vec()),
             })));
         let mut editor = editor();
@@ -1144,7 +1158,7 @@ mod tests {
         platform
             .saves
             .borrow_mut()
-            .push_back(Answer::Ready(Ok(Some("mine.skr".into()))));
+            .push_back(Answer::Ready(Ok(Some("mine.tnn".into()))));
         let mut editor = edited();
         let mut f = flows();
         let fx = run(&mut f, &mut editor, &platform, |f, env| {
@@ -1152,15 +1166,15 @@ mod tests {
         });
         assert_eq!(fx, [Effect::ClearAutosave]);
         assert!(!editor.doc().is_modified());
-        assert_eq!(f.kept_name(), Some("mine.skr"));
+        assert_eq!(f.kept_name(), Some("mine.tnn"));
         let saved = platform.saved.borrow();
         let (request, files) = &saved[0];
-        assert_eq!(request.name, "Untitled.skr");
+        assert_eq!(request.name, "Untitled.tnn");
         assert!(!request.ask, "Save does not insist on asking");
         assert_eq!(files.len(), 1);
         // The bytes reopen as the model that was saved.
         let mut other = Document::new(DVec2::new(800.0, 600.0));
-        other.open_bytes("x.skr", &files[0].bytes, true).unwrap();
+        other.open_bytes("x.tnn", &files[0].bytes, true).unwrap();
         assert_eq!(other.scene().root().edges().count(), 1);
         drop(saved);
 
@@ -1173,7 +1187,7 @@ mod tests {
             f.save(env, true, None)
         });
         let saved = platform.saved.borrow();
-        assert_eq!(saved[1].0.name, "mine.skr");
+        assert_eq!(saved[1].0.name, "mine.tnn");
         assert!(saved[1].0.ask);
     }
 
@@ -1386,8 +1400,7 @@ mod tests {
         let platform = desktop();
         let mut editor = in_cabinet();
         let mut f = flows();
-        let dir =
-            std::env::temp_dir().join(format!("tenon-flows-cut-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tenon-flows-cut-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("cabinet.csv");
         platform
@@ -1409,28 +1422,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    fn opened_skr(name: &str) -> Answer<Option<Picked>> {
+    fn opened_tnn(name: &str) -> Answer<Option<Picked>> {
         Answer::Ready(Some(Picked {
             name: name.into(),
-            source: Source::Bytes(skr_bytes()),
+            source: Source::Bytes(tnn_bytes()),
         }))
     }
 
     #[test]
     fn a_save_may_write_back_only_while_the_model_is_the_kept_file() {
         let platform = web();
-        platform.opens.borrow_mut().push_back(opened_skr("a.skr"));
+        platform.opens.borrow_mut().push_back(opened_tnn("a.tnn"));
         let mut editor = editor();
         let mut f = flows();
         run(&mut f, &mut editor, &platform, |f, env| f.open(env));
-        assert_eq!(*platform.opened.borrow(), ["a.skr"]);
+        assert_eq!(*platform.opened.borrow(), ["a.tnn"]);
         assert_eq!(*platform.kinds.borrow(), [OpenKind::Model]);
 
         let save = |f: &mut Flows, editor: &mut Editor, choose: bool| {
             platform
                 .saves
                 .borrow_mut()
-                .push_back(Answer::Ready(Ok(Some("x.skr".into()))));
+                .push_back(Answer::Ready(Ok(Some("x.tnn".into()))));
             run(f, editor, &platform, |f, env| f.save(env, choose, None));
             platform.saved.borrow().last().unwrap().0.clone()
         };
@@ -1460,7 +1473,7 @@ mod tests {
             .opens
             .borrow_mut()
             .push_back(Answer::Ready(Some(Picked {
-                name: "bad.skr".into(),
+                name: "bad.tnn".into(),
                 source: Source::Bytes(b"not a model".to_vec()),
             })));
         let mut editor = editor();
@@ -1473,7 +1486,7 @@ mod tests {
     #[test]
     fn import_texture_and_export_leave_the_kept_file_alone() {
         let platform = web();
-        platform.opens.borrow_mut().push_back(opened_skr("a.skr"));
+        platform.opens.borrow_mut().push_back(opened_tnn("a.tnn"));
         let mut editor = editor();
         let mut f = flows();
         run(&mut f, &mut editor, &platform, |f, env| f.open(env));
@@ -1518,7 +1531,7 @@ mod tests {
         platform
             .saves
             .borrow_mut()
-            .push_back(Answer::Ready(Ok(Some("a.skr".into()))));
+            .push_back(Answer::Ready(Ok(Some("a.tnn".into()))));
         run(&mut f, &mut editor, &platform, |f, env| {
             f.save(env, false, None)
         });
@@ -1542,18 +1555,18 @@ mod tests {
     #[test]
     fn the_unsaved_question_names_the_file() {
         assert_eq!(
-            unsaved_question(Some(Path::new("/m/house.skr"))),
-            "Do you want to save changes to \"house.skr\"?"
+            unsaved_question(Some(Path::new("/m/house.tnn"))),
+            "Do you want to save changes to \"house.tnn\"?"
         );
         assert_eq!(
             unsaved_question(None),
-            "Do you want to save changes to \"Untitled.skr\"?"
+            "Do you want to save changes to \"Untitled.tnn\"?"
         );
     }
 
     #[test]
-    fn a_sketchup_file_kept_by_name_is_saved_as_skr() {
-        assert_eq!(skr_name("desk.skp"), "desk.skr");
-        assert_eq!(skr_name("house.skr"), "house.skr");
+    fn a_sketchup_file_kept_by_name_is_saved_as_tnn() {
+        assert_eq!(tnn_name("desk.skp"), "desk.tnn");
+        assert_eq!(tnn_name("house.tnn"), "house.tnn");
     }
 }

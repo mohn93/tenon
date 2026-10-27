@@ -301,7 +301,7 @@ fn new_starts_with_the_defaults() {
 fn files_without_either_are_unchanged() {
     let mut d = doc();
     square(&mut d);
-    let path = scratch("plain.skr");
+    let path = scratch("plain.tnn");
     save(&mut d, &path);
     let document = stored(&path);
     assert_eq!(document["schema_version"], 5);
@@ -327,7 +327,7 @@ fn the_axes_schema_stays_15_without_either() {
         &mut d,
         json!({"type": "set_axes", "origin": [1, 0, 0], "x_axis": [1, 0, 0], "y_axis": [0, 1, 0]}),
     );
-    let path = scratch("axes.skr");
+    let path = scratch("axes.tnn");
     save(&mut d, &path);
     assert_eq!(stored(&path)["schema_version"], 15);
     assert_eq!(session::file::SHADOWS_SCHEMA_VERSION, 16);
@@ -342,7 +342,7 @@ fn shadow_settings_are_saved_with_the_camera_at_schema_16() {
         json!({"type": "set_shadows", "on": true, "date": "2027-06-21", "time": "16:45",
                "light": 70, "dark": 30, "on_ground": false}),
     );
-    let path = scratch("shadows.skr");
+    let path = scratch("shadows.tnn");
     save(&mut d, &path);
     let document = stored(&path);
     assert_eq!(document["schema_version"], 16);
@@ -372,7 +372,7 @@ fn the_location_is_saved_with_the_model_at_schema_16() {
         json!({"type": "set_location", "latitude": -33.87, "longitude": 151.21,
                "north_angle": -20.0, "utc_offset": 10.5}),
     );
-    let path = scratch("location.skr");
+    let path = scratch("location.tnn");
     save(&mut d, &path);
     let document = stored(&path);
     assert_eq!(document["schema_version"], 16);
@@ -392,7 +392,7 @@ fn a_file_with_a_bad_location_or_shadow_date_does_not_open() {
     square(&mut d);
     ok(&mut d, json!({"type": "set_location", "latitude": 10.0}));
     ok(&mut d, json!({"type": "set_shadows", "on": true}));
-    let path = scratch("good.skr");
+    let path = scratch("good.tnn");
     save(&mut d, &path);
     let rewrite = |name: &str, edit: &dyn Fn(&mut Value)| {
         let mut document = stored(&path);
@@ -410,17 +410,17 @@ fn a_file_with_a_bad_location_or_shadow_date_does_not_open() {
         run(&mut e, json!({"type": "open", "path": p.to_str().unwrap()})).is_ok()
     };
     assert!(opens(&path));
-    assert!(!opens(&rewrite("lat.skr", &|v| {
+    assert!(!opens(&rewrite("lat.tnn", &|v| {
         v["model"]["location"]["latitude"] = json!(95.0)
     })));
-    assert!(!opens(&rewrite("offset.skr", &|v| {
+    assert!(!opens(&rewrite("offset.tnn", &|v| {
         v["model"]["location"]["utc_offset"] = json!(5.1)
     })));
-    assert!(!opens(&rewrite("date.skr", &|v| {
+    assert!(!opens(&rewrite("date.tnn", &|v| {
         v["camera"]["shadows"]["month"] = json!(2);
         v["camera"]["shadows"]["day"] = json!(31);
     })));
-    assert!(!opens(&rewrite("light.skr", &|v| {
+    assert!(!opens(&rewrite("light.tnn", &|v| {
         v["camera"]["shadows"]["light"] = json!(101)
     })));
 }
@@ -457,7 +457,7 @@ fn a_scene_stores_the_shadow_settings_and_going_to_it_restores_them() {
         json!({"type": "set_shadows", "on": false, "time": "13:30", "light": 80,
                       "dark": 45, "on_ground": true, "date": "2026-11-08"}),
     );
-    let path = scratch("scene.skr");
+    let path = scratch("scene.tnn");
     save(&mut d, &path);
     assert_eq!(stored(&path)["schema_version"], 16);
     let opened = open(&path);
@@ -472,7 +472,7 @@ fn a_scene_with_default_shadows_is_not_schema_16() {
     let mut d = doc();
     square(&mut d);
     ok(&mut d, json!({"type": "add_scene", "name": "Plain"}));
-    let path = scratch("scene-plain.skr");
+    let path = scratch("scene-plain.tnn");
     save(&mut d, &path);
     let document = stored(&path);
     assert_eq!(document["schema_version"], 11);

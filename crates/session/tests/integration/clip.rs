@@ -141,7 +141,7 @@ fn clip_text_is_a_header_and_an_archive_with_the_model_and_the_base_point() {
     let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(names, ["model.json", "clip.json"]);
     let model: Value = serde_json::from_slice(&entries[0].1).unwrap();
-    assert_eq!(model["format"], "tenon");
+    assert_eq!(model["format"], "sketchup-alt");
     assert_eq!(model["model"]["root"]["edges"].as_array().unwrap().len(), 4);
     let info: Value = serde_json::from_slice(&entries[1].1).unwrap();
     assert_eq!(info["base"], json!([2.0, 3.0, 0.0]));
@@ -408,7 +408,7 @@ fn pasting_into_the_source_after_its_definitions_were_purged_shares_the_new_ones
 #[test]
 fn opening_a_file_gives_the_document_a_new_token_and_saving_keeps_it() {
     let dir = TempDir::new("clip-token");
-    let path = dir.0.join("m.skr");
+    let path = dir.0.join("m.tnn");
     let mut d = doc();
     let outer = nested_component(&mut d);
     let id: EntityId = serde_json::from_value(json!(outer)).unwrap();
@@ -566,7 +566,7 @@ fn text_that_is_not_a_good_clip_is_refused_and_changes_nothing() {
             ("document.json".into(), model.clone()),
             ("clip.json".into(), info.clone()),
         ]),
-        "a .skr archive",
+        "a .tnn archive",
     );
     refuses(
         &mut d,

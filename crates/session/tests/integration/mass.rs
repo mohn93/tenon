@@ -117,7 +117,7 @@ fn density_is_set_listed_cleared_and_validated() {
 fn a_density_is_saved_as_the_new_schema_and_read_back_only_when_used() {
     let mut d = doc();
     let steel = material(&mut d, Some(7850.0));
-    let path = scratch("steel.skr");
+    let path = scratch("steel.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),

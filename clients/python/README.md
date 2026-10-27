@@ -1,4 +1,4 @@
-# tenon Python client
+# Tenon Python client
 
 A small client for the agent API (see `docs/agent-api.md`). Python 3.9+, standard library only.
 

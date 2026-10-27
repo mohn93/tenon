@@ -1587,7 +1587,7 @@ fn opening_a_skp_makes_a_new_untitled_model() {
     let err = run(&mut d, json!({"type": "save"})).unwrap_err();
     assert_eq!(err.0, ErrorKind::InvalidInput, "{}", err.1);
     assert!(err.1.contains("give a path"), "{}", err.1);
-    let saved = scratch("opened-cupboard.skr");
+    let saved = scratch("opened-cupboard.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": saved.to_str().unwrap()}),

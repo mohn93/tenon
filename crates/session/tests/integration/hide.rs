@@ -209,7 +209,7 @@ fn unhide_last_forgets_on_new_and_open() {
     let mut d = doc();
     let (face, _) = square(&mut d);
     run(&mut d, json!({"type": "hide", "ids": [face]})).unwrap();
-    let path = scratch("last.skr");
+    let path = scratch("last.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -320,10 +320,10 @@ fn guides_and_the_outliner_report_hidden() {
 }
 
 #[test]
-fn the_skr_round_trips_hidden_and_schema_14_is_only_written_when_needed() {
+fn the_tnn_round_trips_hidden_and_schema_14_is_only_written_when_needed() {
     let mut d = doc();
     let (face, edges) = square(&mut d);
-    let plain = scratch("plain.skr");
+    let plain = scratch("plain.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": plain.to_str().unwrap()}),
@@ -333,7 +333,7 @@ fn the_skr_round_trips_hidden_and_schema_14_is_only_written_when_needed() {
     assert!(!raw(&plain).contains("hidden"));
 
     run(&mut d, json!({"type": "hide", "ids": [face, edges[2]]})).unwrap();
-    let path = scratch("hidden.skr");
+    let path = scratch("hidden.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -378,7 +378,7 @@ fn schema_13_is_written_as_before_when_nothing_is_hidden() {
         json!({"type": "add_section_plane", "point": [1, 1, 0], "normal": [1, 0, 0]}),
     )
     .unwrap();
-    let path = scratch("sectioned.skr");
+    let path = scratch("sectioned.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),

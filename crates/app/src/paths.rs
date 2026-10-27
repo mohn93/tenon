@@ -19,6 +19,11 @@ pub const FALLBACK_DIR: &str = ".tenon";
 /// The app's folder name under the XDG base folders and the Windows application data folders.
 const XDG_DIR: &str = "tenon";
 
+/// The folder names the app used before it was renamed Tenon: the preferences in them are read
+/// once when the new ones do not exist yet.
+const OLD_FALLBACK_DIR: &str = ".sketchup-alt";
+const OLD_XDG_DIR: &str = "sketchup-alt";
+
 /// Unix socket paths are limited to about 104 bytes on macOS (108 on Linux).
 pub const MAX_SOCKET_PATH: usize = 100;
 
@@ -84,7 +89,7 @@ fn resolve_as(os: Os, env: Env, temp: &Path, pid: u32, uid: Option<u32>) -> Opti
                 prefs: config.join(XDG_DIR).join("prefs.json"),
                 recovery: state.join(XDG_DIR).join("recovery"),
                 socket_dir,
-                legacy_prefs: Some(fallback.join("prefs.json")),
+                legacy_prefs: Some(config.join(OLD_XDG_DIR).join("prefs.json")),
             }
         }
         // Windows was resolved above, without HOME.
@@ -92,7 +97,7 @@ fn resolve_as(os: Os, env: Env, temp: &Path, pid: u32, uid: Option<u32>) -> Opti
             prefs: fallback.join("prefs.json"),
             recovery: fallback.join("recovery"),
             socket_dir,
-            legacy_prefs: None,
+            legacy_prefs: Some(home.join(OLD_FALLBACK_DIR).join("prefs.json")),
         },
     })
 }
@@ -114,7 +119,7 @@ fn windows_paths(env: Env, temp: &Path) -> Option<Paths> {
         prefs: windows_join(&roaming, &[XDG_DIR, "prefs.json"]),
         recovery: windows_join(&local, &[XDG_DIR, "recovery"]),
         socket_dir: temp.to_path_buf(),
-        legacy_prefs: None,
+        legacy_prefs: Some(windows_join(&roaming, &[OLD_XDG_DIR, "prefs.json"])),
     })
 }
 
@@ -281,13 +286,15 @@ mod tests {
             Path::new(abs("/Users/me/.tenon/recovery").as_str())
         );
         assert_eq!(p.socket_dir, tmp, "the per-user temp folder");
-        assert_eq!(p.legacy_prefs, None);
+        assert_eq!(
+            p.legacy_prefs.as_deref(),
+            Some(Path::new(
+                abs("/Users/me/.sketchup-alt/prefs.json").as_str()
+            ))
+        );
         let long = PathBuf::from(abs(&format!("/{}", "x".repeat(100))));
         let p = resolve_as(Os::MacOs, &e, &long, 7, Some(0)).unwrap();
-        assert_eq!(
-            p.socket_dir,
-            Path::new(abs("/Users/me/.tenon").as_str())
-        );
+        assert_eq!(p.socket_dir, Path::new(abs("/Users/me/.tenon").as_str()));
         // The shared-/tmp rule compares the literal path, so pass it as is on every host.
         let p = resolve_as(Os::Other, &e, Path::new("/tmp"), 7, Some(0)).unwrap();
         assert_eq!(
@@ -329,7 +336,12 @@ mod tests {
             r"C:\Users\me\AppData\Roaming\tenon\prefs.json"
         );
         assert_eq!(p.recovery.as_os_str(), r"D:\local\tenon\recovery");
-        assert_eq!(p.legacy_prefs, None);
+        assert_eq!(
+            p.legacy_prefs.as_deref(),
+            Some(Path::new(
+                r"C:\Users\me\AppData\Roaming\sketchup-alt\prefs.json"
+            ))
+        );
         // Relative, drive-relative, rooted without a drive or empty: ignored for USERPROFILE.
         for bad in ["", "AppData", r"C:AppData", r"\AppData", r"\\.\C:\AppData"] {
             let p = at(&[
@@ -375,7 +387,9 @@ mod tests {
         );
         assert_eq!(
             p.legacy_prefs.as_deref(),
-            Some(Path::new(abs("/home/me/.tenon/prefs.json").as_str()))
+            Some(Path::new(
+                abs("/home/me/.config/sketchup-alt/prefs.json").as_str()
+            ))
         );
         let e = env(&[
             ("HOME", abs("/home/me").as_str()),
@@ -383,14 +397,8 @@ mod tests {
             ("XDG_STATE_HOME", abs("/st").as_str()),
         ]);
         let p = resolve_as(Os::Linux, &e, Path::new(abs("/tmp").as_str()), 7, None).unwrap();
-        assert_eq!(
-            p.prefs,
-            Path::new(abs("/cfg/tenon/prefs.json").as_str())
-        );
-        assert_eq!(
-            p.recovery,
-            Path::new(abs("/st/tenon/recovery").as_str())
-        );
+        assert_eq!(p.prefs, Path::new(abs("/cfg/tenon/prefs.json").as_str()));
+        assert_eq!(p.recovery, Path::new(abs("/st/tenon/recovery").as_str()));
     }
 
     #[cfg(unix)]
@@ -405,10 +413,7 @@ mod tests {
                 ("XDG_RUNTIME_DIR", bad),
             ]);
             let p = resolve_as(Os::Linux, &e, Path::new("/tmp"), 7, Some(my_uid(&run))).unwrap();
-            assert_eq!(
-                p.prefs,
-                Path::new("/home/me/.config/tenon/prefs.json")
-            );
+            assert_eq!(p.prefs, Path::new("/home/me/.config/tenon/prefs.json"));
             assert_eq!(
                 p.recovery,
                 Path::new("/home/me/.local/state/tenon/recovery")

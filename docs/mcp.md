@@ -39,7 +39,7 @@ The binary is `target/release/app`. Use its absolute path below.
 
 ## Headless setup
 
-The server keeps its own model, which starts empty or with a `.skr` file given as the last
+The server keeps its own model, which starts empty or with a `.tnn` file given as the last
 argument (a SketchUp `.skp` file opens as a new model, not saved anywhere). Pass `--api-root DIR` (repeatable) to keep every file the agent opens, saves, imports or
 exports inside those folders.
 

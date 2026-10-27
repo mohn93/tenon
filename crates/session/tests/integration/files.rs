@@ -75,7 +75,7 @@ fn model(d: &mut Document) -> String {
 
 #[test]
 fn a_saved_model_opens_as_it_was() {
-    let path = scratch("round-trip.skr");
+    let path = scratch("round-trip.tnn");
     let mut d = doc();
     model(&mut d);
     let entities = ask(&d, json!({"type": "entities"}));
@@ -119,8 +119,36 @@ fn a_saved_model_opens_as_it_was() {
 }
 
 #[test]
+fn a_skr_file_saved_before_the_rename_still_opens() {
+    let path = scratch("legacy.tnn");
+    let mut d = doc();
+    model(&mut d);
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let legacy = scratch("legacy.skr");
+    std::fs::rename(&path, &legacy).unwrap();
+    let mut e = doc();
+    run(
+        &mut e,
+        json!({"type": "open", "path": legacy.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(
+        ask(&e, json!({"type": "file"}))["path"],
+        json!(legacy.to_str().unwrap())
+    );
+    assert_eq!(
+        ask(&e, json!({"type": "entities"}))["edges"],
+        ask(&d, json!({"type": "entities"}))["edges"]
+    );
+}
+
+#[test]
 fn opening_starts_over() {
-    let path = scratch("starts-over.skr");
+    let path = scratch("starts-over.tnn");
     let mut d = doc();
     let crate_ = model(&mut d);
     run(
@@ -152,7 +180,7 @@ fn opening_starts_over() {
 
 #[test]
 fn new_starts_an_empty_untitled_model() {
-    let path = scratch("before-new.skr");
+    let path = scratch("before-new.tnn");
     let mut d = doc();
     model(&mut d);
     run(
@@ -180,16 +208,16 @@ fn files_that_cannot_be_opened_leave_the_model_alone() {
     let mut d = doc();
     model(&mut d);
     let entities = ask(&d, json!({"type": "entities"}));
-    let missing = scratch("missing.skr");
+    let missing = scratch("missing.tnn");
     let (kind, message) = run(
         &mut d,
         json!({"type": "open", "path": missing.to_str().unwrap(), "discard": true}),
     )
     .unwrap_err();
     assert_eq!(kind, ErrorKind::File);
-    assert!(message.contains("missing.skr"), "{message}");
+    assert!(message.contains("missing.tnn"), "{message}");
 
-    let garbage = scratch("garbage.skr");
+    let garbage = scratch("garbage.tnn");
     std::fs::write(&garbage, b"not a zip").unwrap();
     let (kind, message) = run(
         &mut d,
@@ -197,13 +225,13 @@ fn files_that_cannot_be_opened_leave_the_model_alone() {
     )
     .unwrap_err();
     assert_eq!(kind, ErrorKind::File);
-    assert!(message.contains("not a tenon file"), "{message}");
+    assert!(message.contains("not a Tenon file"), "{message}");
 
-    let newer = scratch("newer.skr");
+    let newer = scratch("newer.tnn");
     let mut zip = zip::ZipWriter::new(std::fs::File::create(&newer).unwrap());
     zip.start_file("document.json", zip::write::SimpleFileOptions::default())
         .unwrap();
-    zip.write_all(br#"{"format": "tenon", "schema_version": 99}"#)
+    zip.write_all(br#"{"format": "sketchup-alt", "schema_version": 99}"#)
         .unwrap();
     zip.finish().unwrap();
     let (kind, message) = run(
@@ -219,7 +247,7 @@ fn files_that_cannot_be_opened_leave_the_model_alone() {
 
 #[test]
 fn a_file_is_a_zip_with_a_versioned_document() {
-    let path = scratch("layout.skr");
+    let path = scratch("layout.tnn");
     let mut d = doc();
     model(&mut d);
     run(
@@ -303,7 +331,7 @@ fn renaming_and_purging_are_undo_steps() {
 fn a_failed_save_leaves_no_partial_file_and_the_model_modified() {
     let folder = scratch("failed-save");
     let _ = std::fs::remove_dir_all(&folder);
-    let dir = folder.join("a-directory.skr");
+    let dir = folder.join("a-directory.tnn");
     std::fs::create_dir_all(&dir).unwrap();
     let mut d = doc();
     model(&mut d);
@@ -313,12 +341,12 @@ fn a_failed_save_leaves_no_partial_file_and_the_model_modified() {
     )
     .unwrap_err();
     assert_eq!(kind, ErrorKind::InvalidInput);
-    assert!(message.contains("a-directory.skr"), "{message}");
+    assert!(message.contains("a-directory.tnn"), "{message}");
     let left: Vec<_> = std::fs::read_dir(&folder)
         .unwrap()
         .map(|e| e.unwrap().file_name())
         .collect();
-    assert_eq!(left, ["a-directory.skr"], "the partial file is gone");
+    assert_eq!(left, ["a-directory.tnn"], "the partial file is gone");
     assert!(dir.is_dir(), "the target is untouched");
     let file = ask(&d, json!({"type": "file"}));
     assert_eq!(file["modified"], true);
@@ -362,42 +390,42 @@ fn open_fails(path: &Path, expected: &str) {
 
 #[test]
 fn files_with_out_of_range_numbers_or_versions_do_not_open() {
-    let far = edited_file("far-vertex-x.skr", |d| {
+    let far = edited_file("far-vertex-x.tnn", |d| {
         d["model"]["definitions"][0]["mesh"]["vertices"][0]["position"][0] = json!(2.0e6);
     });
     open_fails(&far, "beyond");
-    let far = edited_file("far-vertex-z.skr", |d| {
+    let far = edited_file("far-vertex-z.tnn", |d| {
         d["model"]["definitions"][0]["mesh"]["vertices"][1]["position"][2] = json!(-2.0e6);
     });
     open_fails(&far, "beyond");
-    let far = edited_file("far-instance.skr", |d| {
+    let far = edited_file("far-instance.tnn", |d| {
         d["model"]["root"]["instances"][0]["transform"][9] = json!(5.0e6);
     });
     open_fails(&far, "beyond");
-    let flat = edited_file("flat-instance.skr", |d| {
+    let flat = edited_file("flat-instance.tnn", |d| {
         d["model"]["root"]["instances"][0]["transform"] = Value::from(vec![0.0; 12]);
     });
     open_fails(&flat, "not invertible");
-    let unversioned = edited_file("unversioned.skr", |d| {
+    let unversioned = edited_file("unversioned.tnn", |d| {
         d.as_object_mut().unwrap().remove("schema_version");
     });
     open_fails(&unversioned, "schema version");
-    let zero = edited_file("version-zero.skr", |d| d["schema_version"] = json!(0));
+    let zero = edited_file("version-zero.tnn", |d| d["schema_version"] = json!(0));
     open_fails(&zero, "schema version");
 }
 
 #[test]
 fn a_header_is_read_from_a_document_object_only() {
     // The header's two values in an array are no header.
-    let listed = edited_file("listed.skr", |d| {
+    let listed = edited_file("listed.tnn", |d| {
         *d = json!([d["format"].clone(), d["schema_version"].clone()]);
     });
-    open_fails(&listed, "not a tenon file");
-    let unnamed = edited_file("format-null.skr", |d| d["format"] = Value::Null);
-    open_fails(&unnamed, "not a tenon file");
-    let unversioned = edited_file("version-null.skr", |d| d["schema_version"] = Value::Null);
+    open_fails(&listed, "not a Tenon file");
+    let unnamed = edited_file("format-null.tnn", |d| d["format"] = Value::Null);
+    open_fails(&unnamed, "not a Tenon file");
+    let unversioned = edited_file("version-null.tnn", |d| d["schema_version"] = Value::Null);
     open_fails(&unversioned, "schema version");
-    let newer = edited_file("version-newer.skr", |d| {
+    let newer = edited_file("version-newer.tnn", |d| {
         d["schema_version"] = json!(1_000_000)
     });
     open_fails(&newer, "newer than this app");
@@ -405,7 +433,7 @@ fn a_header_is_read_from_a_document_object_only() {
 
 #[test]
 fn new_and_open_refuse_to_drop_unsaved_changes_unless_told_to() {
-    let path = scratch("unsaved.skr");
+    let path = scratch("unsaved.tnn");
     let mut d = doc();
     model(&mut d);
     run(
@@ -456,7 +484,7 @@ fn new_and_open_refuse_to_drop_unsaved_changes_unless_told_to() {
 
 #[test]
 fn coordinates_and_the_view_reopen_bit_for_bit() {
-    let path = scratch("bits.skr");
+    let path = scratch("bits.tnn");
     let mut d = doc();
     // serde_json reads these back one unit in the last place off without float_roundtrip.
     let start = [180.17933438838418, -930.0397635799367, 474.47532350305437];
@@ -503,7 +531,7 @@ fn coordinates_and_the_view_reopen_bit_for_bit() {
 
 #[test]
 fn a_model_that_has_used_up_its_ids_is_not_saved() {
-    let path = edited_file("last-ids.skr", |d| {
+    let path = edited_file("last-ids.tnn", |d| {
         d["model"]["next_id"] = json!(kernel::MAX_ID);
     });
     let mut d = doc();
@@ -557,8 +585,8 @@ fn a_link_at_the_partial_name_is_not_written_through() {
     .unwrap();
     let victim = scratch("partial-victim.txt");
     std::fs::write(&victim, "keep me").unwrap();
-    let target = scratch("partial-target.skr");
-    let partial = scratch("partial-target.skr.partial");
+    let target = scratch("partial-target.tnn");
+    let partial = scratch("partial-target.tnn.partial");
     std::os::unix::fs::symlink(&victim, &partial).unwrap();
     run(&mut d, json!({"type": "save", "path": target})).unwrap();
     assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep me");
@@ -570,8 +598,8 @@ fn a_link_at_the_partial_name_is_not_written_through() {
     run(&mut opened, json!({"type": "open", "path": target})).unwrap();
 }
 
-/// A `.skr` archive holding `document.json` with `json` as its text.
-fn skr_with(path: &Path, json: &str) {
+/// A `.tnn` archive holding `document.json` with `json` as its text.
+fn tnn_with(path: &Path, json: &str) {
     let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
     zip.start_file("document.json", zip::write::SimpleFileOptions::default())
         .unwrap();
@@ -581,14 +609,14 @@ fn skr_with(path: &Path, json: &str) {
 
 #[test]
 fn open_errors_do_not_quote_the_file() {
-    let path = scratch("secret.skr");
+    let path = scratch("secret.tnn");
     let cases = [
-        r#"{"format": "tenon", "schema_version": 9, "camera": "hunter2-SECRET"}"#,
-        r#"{"format": "tenon", "schema_version": 9, "hunter2-SECRET": 1}"#,
-        r#"{"format": "tenon", "schema_version": 9, "camera": {"eye": [hunter2-SECRET"#,
+        r#"{"format": "sketchup-alt", "schema_version": 9, "camera": "hunter2-SECRET"}"#,
+        r#"{"format": "sketchup-alt", "schema_version": 9, "hunter2-SECRET": 1}"#,
+        r#"{"format": "sketchup-alt", "schema_version": 9, "camera": {"eye": [hunter2-SECRET"#,
     ];
     for json in cases {
-        skr_with(&path, json);
+        tnn_with(&path, json);
         let (kind, message) = run(&mut doc(), json!({"type": "open", "path": path})).unwrap_err();
         assert_eq!(kind, ErrorKind::File);
         assert!(!message.contains("hunter2"), "{message}");
@@ -611,11 +639,11 @@ fn save_does_not_overwrite_another_kind_of_file_unless_told() {
     assert!(message.contains("\"overwrite\": true"), "{message}");
     assert_eq!(std::fs::read_to_string(&victim).unwrap(), "notes");
     // A model file, an empty file and a missing one are fine.
-    let model = scratch("model.skr");
+    let model = scratch("model.tnn");
     run(&mut d, json!({"type": "save", "path": model})).unwrap();
     run(&mut d, json!({"type": "save", "path": model})).unwrap();
     run(&mut d, json!({"type": "save"})).unwrap();
-    let empty = scratch("empty.skr");
+    let empty = scratch("empty.tnn");
     std::fs::write(&empty, "").unwrap();
     run(&mut d, json!({"type": "save", "path": empty})).unwrap();
     // A zip that is not a model is another kind of file.
@@ -646,8 +674,8 @@ fn save_refuses_a_folder() {
 fn a_user_file_named_like_a_partial_file_is_kept() {
     let mut d = doc();
     model(&mut d);
-    let target = scratch("notes.skr");
-    let mine = scratch("notes.skr.partial");
+    let target = scratch("notes.tnn");
+    let mine = scratch("notes.tnn.partial");
     std::fs::write(&mine, "my notes").unwrap();
     run(&mut d, json!({"type": "save", "path": target})).unwrap();
     assert_eq!(std::fs::read_to_string(&mine).unwrap(), "my notes");
@@ -661,7 +689,7 @@ fn a_recovery_copy_is_readable_by_the_user_only() {
     use std::os::unix::fs::PermissionsExt;
     let mut d = doc();
     model(&mut d);
-    let copy = scratch("recovery-copy.skr");
+    let copy = scratch("recovery-copy.tnn");
     d.write_copy(&copy).unwrap();
     let mode = std::fs::metadata(&copy).unwrap().permissions().mode();
     assert_eq!(mode & 0o777, 0o600, "{mode:o}");
@@ -672,9 +700,9 @@ fn a_path_with_a_nul_byte_is_invalid_input() {
     let mut d = doc();
     model(&mut d);
     for c in [
-        json!({"type": "save", "path": "a\u{0}b.skr"}),
+        json!({"type": "save", "path": "a\u{0}b.tnn"}),
         json!({"type": "export", "path": "a\u{0}b.stl"}),
-        json!({"type": "open", "path": "a\u{0}b.skr", "discard": true}),
+        json!({"type": "open", "path": "a\u{0}b.tnn", "discard": true}),
         json!({"type": "import", "path": "a\u{0}b.obj"}),
         json!({"type": "add_material", "texture": {"path": "a\u{0}b.png"}}),
     ] {

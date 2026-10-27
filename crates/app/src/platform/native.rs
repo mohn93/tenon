@@ -171,8 +171,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn preferences_are_kept_in_the_file_and_without_one_not_at_all() {
-        let dir =
-            std::env::temp_dir().join(format!("tenon-platform-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tenon-platform-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join(".config")).unwrap();
         let file = PrefsFile {

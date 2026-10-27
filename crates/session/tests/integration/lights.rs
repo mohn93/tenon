@@ -40,7 +40,7 @@ fn scratch(name: &str) -> PathBuf {
     path
 }
 
-/// The `document.json` saved in a `.skr` file.
+/// The `document.json` saved in a `.tnn` file.
 fn stored(path: &PathBuf) -> Value {
     let mut zip = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
     serde_json::from_reader(zip.by_name("document.json").unwrap()).unwrap()
@@ -126,7 +126,7 @@ fn emission_outside_zero_to_ten_is_refused() {
 fn glowing_materials_are_saved_as_version_8() {
     let mut d = doc();
     let lamp = add_lamp(&mut d, 3.0);
-    let path = scratch("glow.skr");
+    let path = scratch("glow.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -199,7 +199,7 @@ fn a_failed_atomic_batch_puts_the_lighting_back() {
 fn night_lighting_is_saved_with_the_camera_as_version_8() {
     let mut d = doc();
     run(&mut d, json!({"type": "set_lighting", "mode": "night"})).unwrap();
-    let path = scratch("night.skr");
+    let path = scratch("night.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -255,7 +255,7 @@ fn studio_lighting_is_set_reported_and_not_an_edit() {
 fn studio_lighting_is_saved_as_version_20_and_only_then() {
     let mut d = doc();
     run(&mut d, json!({"type": "set_lighting", "mode": "studio"})).unwrap();
-    let path = scratch("studio.skr");
+    let path = scratch("studio.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -299,7 +299,7 @@ fn a_scene_stores_studio_lighting_and_the_file_keeps_it() {
 
     // A file whose only studio is in a scene still needs version 20.
     run(&mut d, json!({"type": "set_lighting", "mode": "day"})).unwrap();
-    let path = scratch("studio_scene.skr");
+    let path = scratch("studio_scene.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),

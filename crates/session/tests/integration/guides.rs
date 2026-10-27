@@ -264,7 +264,7 @@ fn edit_file(path: &PathBuf, f: impl FnOnce(&mut Value)) {
 fn guides_are_saved_but_not_exported_and_old_files_still_open() {
     let mut d = doc();
     two_guides(&mut d);
-    let path = scratch("guides.skr");
+    let path = scratch("guides.tnn");
     let path_text = path.to_str().unwrap();
     run(&mut d, json!({"type": "save", "path": path_text})).unwrap();
     let mut e = doc();

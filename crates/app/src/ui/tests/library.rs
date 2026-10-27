@@ -14,7 +14,7 @@ fn library_tab() -> DockLayout {
 
 fn row(name: &str, kind: LibraryKind, thumb: Thumb) -> LibraryRow {
     LibraryRow {
-        path: PathBuf::from(format!("/lib/{name}.skr")),
+        path: PathBuf::from(format!("/lib/{name}.tnn")),
         name: name.into(),
         kind,
         error: None,
@@ -42,7 +42,7 @@ fn library() -> Fixture {
 }
 
 fn path(name: &str) -> PathBuf {
-    PathBuf::from(format!("/lib/{name}.skr"))
+    PathBuf::from(format!("/lib/{name}.tnn"))
 }
 
 fn names_shown(h: &H) -> Vec<&'static str> {
@@ -317,14 +317,14 @@ fn an_existing_name_asks_before_replacing() {
         sheet: Some(Sheet::OverwriteLibrary {
             save: LibrarySave::Model,
             name: "House".into(),
-            file: "House.skr".into(),
+            file: "House.tnn".into(),
         }),
         ..Default::default()
     });
     assert!(
         drawn_texts(&h)
             .iter()
-            .any(|t| t.contains("House.skr") && t.contains("Replace"))
+            .any(|t| t.contains("House.tnn") && t.contains("Replace"))
     );
     assert_eq!(
         click(&mut h, "Replace"),

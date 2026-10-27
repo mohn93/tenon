@@ -137,7 +137,7 @@ fn add_material_update_sets_the_finish_of_an_existing_material() {
 fn a_finished_material_is_saved_as_version_19_and_old_files_load_with_defaults() {
     let mut d = doc();
     let steel = add_steel(&mut d);
-    let path = scratch("steel.skr");
+    let path = scratch("steel.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),

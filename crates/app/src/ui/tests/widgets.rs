@@ -233,7 +233,7 @@ fn the_panels_draw_every_icon_in_the_icon_family() {
         dock: super::dock_on_library(),
         library_folder: Some("/lib".into()),
         library_rows: vec![crate::ui::LibraryRow {
-            path: "/lib/a.skr".into(),
+            path: "/lib/a.tnn".into(),
             name: "A".into(),
             kind: session::LibraryKind::Component,
             error: None,

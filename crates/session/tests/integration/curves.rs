@@ -193,7 +193,7 @@ fn curves_are_saved_and_older_files_still_open() {
         json!({"type": "add_circle", "center": [0, 0, 0], "radius": 1.0, "segments": 6}),
     )
     .unwrap();
-    let path = scratch("circle.skr");
+    let path = scratch("circle.tnn");
     let path_text = path.to_str().unwrap();
     run(&mut d, json!({"type": "save", "path": path_text})).unwrap();
     let mut e = doc();
@@ -235,7 +235,7 @@ fn polygon_sides_in_a_file_read_as_a_polygon() {
         json!({"type": "add_circle", "center": [0, 0, 0], "radius": 1.0, "segments": 6}),
     )
     .unwrap();
-    let path = scratch("polygon.skr");
+    let path = scratch("polygon.tnn");
     let path_text = path.to_str().unwrap();
     run(&mut d, json!({"type": "save", "path": path_text})).unwrap();
     edit_file(&path, |doc| {
@@ -416,7 +416,7 @@ fn pulled_curves_have_soft_sides_that_groups_and_files_keep() {
     assert_eq!((soft(&d), curves(&d)), (10, 2));
     assert_eq!(marks(&d), pulled);
 
-    let path = scratch("cylinder.skr");
+    let path = scratch("cylinder.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -472,7 +472,7 @@ fn groups_and_explode_keep_the_polygon_mark() {
     assert_eq!(edges(&d).len(), 5);
     assert_eq!(kind(&d), "polygon");
 
-    let path = scratch("polygon-group.skr");
+    let path = scratch("polygon-group.tnn");
     let path_text = path.to_str().unwrap();
     run(&mut d, json!({"type": "save", "path": path_text})).unwrap();
     let mut e = doc();

@@ -113,7 +113,7 @@ fn notifications_reach_a_connection_that_closes_right_after() {
 #[test]
 fn opening_a_file_tells_subscribers_to_read_the_model_again() {
     let path = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("hub-open-{}.skr", std::process::id()));
+        .join(format!("hub-open-{}.tnn", std::process::id()));
     let _ = std::fs::remove_file(&path);
     let path = path.to_str().unwrap();
     let mut host = HeadlessHost::new();
@@ -288,7 +288,7 @@ fn the_activity_log_records_requests_folds_repeats_and_keeps_the_last_hundred() 
         request(
             1,
             "execute",
-            json!({"type": "save", "path": "/no/such/dir/a.skr"}),
+            json!({"type": "save", "path": "/no/such/dir/a.tnn"}),
         ),
     );
     inbox.send_line(conn, request(2, "query", json!({"type": "camera"})));
@@ -300,8 +300,8 @@ fn the_activity_log_records_requests_folds_repeats_and_keeps_the_last_hundred() 
     }
     let log: Vec<_> = hub.activity().iter().collect();
     assert_eq!(log[0].request, "connected");
-    assert_eq!(log[1].request, "execute save /no/such/dir/a.skr");
-    assert!(log[1].error.as_deref().unwrap().contains("a.skr"));
+    assert_eq!(log[1].request, "execute save /no/such/dir/a.tnn");
+    assert!(log[1].error.as_deref().unwrap().contains("a.tnn"));
     assert_eq!(log[2].request, "query camera");
     assert_eq!((log[2].repeats, log[2].error.clone()), (2, None));
     assert_eq!(log[3].request, "(not JSON)");

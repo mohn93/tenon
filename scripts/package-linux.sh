@@ -30,7 +30,7 @@ fi
 rm -rf "$out"
 mkdir -p "$out/$name"
 cp "$binary" "$out/$name/app"
-cp packaging/linux/tenon.desktop "$out/$name/"
+cp packaging/linux/tenon.desktop packaging/linux/tenon.xml "$out/$name/"
 cp packaging/icons/app-256.png "$out/$name/tenon.png"
 cp THIRD_PARTY_NOTICES.md docs/linux.md "$out/$name/"
 tar -C "$out" -czf "$out/$name.tar.gz" "$name"
@@ -42,6 +42,8 @@ if [ -n "${APPIMAGETOOL:-}" ]; then
     cp "$binary" "$appdir/usr/bin/app"
     cp packaging/linux/AppRun "$appdir/AppRun"
     cp packaging/linux/tenon.desktop "$appdir/"
+    mkdir -p "$appdir/usr/share/mime/packages"
+    cp packaging/linux/tenon.xml "$appdir/usr/share/mime/packages/tenon.xml"
     cp packaging/icons/app-256.png "$appdir/tenon.png"
     cp THIRD_PARTY_NOTICES.md "$appdir/"
     # No FUSE is needed to run the tool itself (CI has none).

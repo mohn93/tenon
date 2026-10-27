@@ -997,7 +997,7 @@ fn files_keep_annotations_units_frozen_anchors_and_screen_notes() {
     )
     .unwrap();
     let before = ask(&d, json!({"type": "annotations"}));
-    let path = scratch("annotated.skr");
+    let path = scratch("annotated.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -1035,7 +1035,7 @@ fn files_keep_annotations_units_frozen_anchors_and_screen_notes() {
 fn files_without_annotations_keep_their_schema_and_open_with_none() {
     let mut d = doc();
     rectangle(&mut d);
-    let plain = scratch("plain.skr");
+    let plain = scratch("plain.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": plain.to_str().unwrap()}),
@@ -1046,7 +1046,7 @@ fn files_without_annotations_keep_their_schema_and_open_with_none() {
         session::file::OPAQUE_SCHEMA_VERSION
     );
     run(&mut d, json!({"type": "add_scene"})).unwrap();
-    let scenes = scratch("scenes.skr");
+    let scenes = scratch("scenes.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": scenes.to_str().unwrap()}),
@@ -1078,7 +1078,7 @@ fn files_without_annotations_keep_their_schema_and_open_with_none() {
         json!({"type": "set_units", "length": "millimeters"}),
     )
     .unwrap();
-    let units_only = scratch("units-only.skr");
+    let units_only = scratch("units-only.tnn");
     run(
         &mut e,
         json!({"type": "save", "path": units_only.to_str().unwrap()}),
@@ -1110,7 +1110,7 @@ fn files_with_broken_annotations_are_refused_clearly() {
         json!({"type": "add_note", "anchor": [0, 0, 0], "position": [1, 1, 1], "text": "n"}),
     )
     .unwrap();
-    let path = scratch("broken.skr");
+    let path = scratch("broken.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -1125,7 +1125,7 @@ fn files_with_broken_annotations_are_refused_clearly() {
         .unwrap_err()
     };
 
-    let missing = scratch("missing-vertex.skr");
+    let missing = scratch("missing-vertex.tnn");
     std::fs::copy(&path, &missing).unwrap();
     edit_file(&missing, |doc| {
         doc["model"]["root"]["dimensions"][0]["a"] = json!({"vertex": 999});
@@ -1134,7 +1134,7 @@ fn files_with_broken_annotations_are_refused_clearly() {
     assert_eq!(kind, ErrorKind::File);
     assert!(message.contains("v999"), "{message}");
 
-    let far = scratch("far-note.skr");
+    let far = scratch("far-note.tnn");
     std::fs::copy(&path, &far).unwrap();
     edit_file(&far, |doc| {
         doc["model"]["root"]["notes"][0]["position"] = json!([2e6, 0, 0]);
@@ -1146,7 +1146,7 @@ fn files_with_broken_annotations_are_refused_clearly() {
         "{message}"
     );
 
-    let precise = scratch("precise.skr");
+    let precise = scratch("precise.tnn");
     std::fs::copy(&path, &precise).unwrap();
     edit_file(&precise, |doc| {
         doc["units"] = json!({"length": "meters", "precision": 9});
@@ -1156,7 +1156,7 @@ fn files_with_broken_annotations_are_refused_clearly() {
     assert!(message.contains("precision"), "{message}");
 
     // A newer schema is refused as before.
-    let newer = scratch("newer.skr");
+    let newer = scratch("newer.tnn");
     std::fs::copy(&path, &newer).unwrap();
     edit_file(&newer, |doc| doc["schema_version"] = json!(30));
     let (_, message, _) = open(&newer);
@@ -1250,7 +1250,7 @@ fn scaling_a_fixed_circle_past_the_limit_is_refused_and_the_model_still_saves() 
         json!({"type": "scale", "ids": [r], "origin": [0, 0, 0], "factors": [100, 100, 100]}),
     )
     .unwrap();
-    let path = scratch("scaled-circle.skr");
+    let path = scratch("scaled-circle.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -1439,7 +1439,7 @@ fn a_dimension_frozen_near_the_limit_still_saves_and_opens() {
     ids = edges.iter().map(|e| json!(e)).collect();
     run(&mut d, json!({"type": "erase", "ids": ids})).unwrap();
     assert!(entity(&d, &r).get("curve").is_none());
-    let path = scratch("frozen-near-limit.skr");
+    let path = scratch("frozen-near-limit.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -1526,7 +1526,7 @@ fn save_units(d: &mut Document, name: &str) -> PathBuf {
 fn schema_17_is_written_only_for_the_new_unit_settings() {
     let mut d = doc();
     rectangle(&mut d);
-    let plain = save_units(&mut d, "units-plain.skr");
+    let plain = save_units(&mut d, "units-plain.tnn");
     assert_eq!(
         stored(&plain)["schema_version"],
         session::file::OPAQUE_SCHEMA_VERSION
@@ -1538,7 +1538,7 @@ fn schema_17_is_written_only_for_the_new_unit_settings() {
         json!({"type": "set_units", "length": "inches", "precision": 2}),
     )
     .unwrap();
-    let old = save_units(&mut d, "units-old.skr");
+    let old = save_units(&mut d, "units-old.tnn");
     assert_eq!(stored(&old)["schema_version"], 12);
     assert_eq!(
         stored(&old)["units"],
@@ -1571,7 +1571,7 @@ fn schema_17_is_written_only_for_the_new_unit_settings() {
             .unwrap()
             .extend(set.as_object().unwrap().clone());
         run(&mut d, command).unwrap();
-        let path = save_units(&mut d, "units-17.skr");
+        let path = save_units(&mut d, "units-17.tnn");
         let file = stored(&path);
         assert_eq!(file["schema_version"], 17, "{set}");
         let mut expect = expect;
@@ -1598,7 +1598,7 @@ fn files_with_missing_new_unit_fields_open_with_the_defaults_and_bad_ones_are_re
         json!({"type": "set_units", "length": "centimeters", "precision": 1}),
     )
     .unwrap();
-    let path = save_units(&mut d, "units-missing.skr");
+    let path = save_units(&mut d, "units-missing.tnn");
     let mut e = doc();
     run(
         &mut e,

@@ -9,7 +9,7 @@ fn with_card(recent: &[&str]) -> Fixture {
 
 #[test]
 fn the_card_sits_bottom_left_at_its_size() {
-    let h = harness(with_card(&["/m/house.skr"]));
+    let h = harness(with_card(&["/m/house.tnn"]));
     let (view, card) = (h.state().central, rect_of(&h, "Start card"));
     assert!(
         (card.width() - 360.0).abs() < 0.5 && (card.height() - 200.0).abs() < 0.5,
@@ -39,7 +39,7 @@ fn the_card_sits_bottom_left_at_its_size() {
 
 #[test]
 fn the_cards_buttons_report_their_actions() {
-    let mut h = harness(with_card(&["/m/house.skr", "/m/barn.skr"]));
+    let mut h = harness(with_card(&["/m/house.tnn", "/m/barn.tnn"]));
     // Dismiss sits on the New and Open row, at the right; all inside the card.
     let card = rect_of(&h, "Start card");
     let (new, dismiss) = (rect_of(&h, "New"), rect_of(&h, "Dismiss"));
@@ -57,22 +57,22 @@ fn the_cards_buttons_report_their_actions() {
     assert_eq!(click(&mut h, "New"), [UiAction::NewModel]);
     assert_eq!(click(&mut h, "Open..."), [UiAction::OpenFile]);
     assert_eq!(
-        click(&mut h, "barn.skr"),
-        [UiAction::OpenRecent("/m/barn.skr".into())]
+        click(&mut h, "barn.tnn"),
+        [UiAction::OpenRecent("/m/barn.tnn".into())]
     );
     assert_eq!(click(&mut h, "Dismiss"), [UiAction::DismissStart]);
 }
 
 #[test]
 fn the_card_shows_five_recent_files_and_a_one_line_hint() {
-    let names: Vec<String> = (1..=7).map(|i| format!("/m/{i}.skr")).collect();
+    let names: Vec<String> = (1..=7).map(|i| format!("/m/{i}.tnn")).collect();
     // The fixture passes what the app would: at most five.
     let five: Vec<&str> = names.iter().take(5).map(String::as_str).collect();
     let h = harness(with_card(&five));
     let card = rect_of(&h, "Start card");
     for i in 1..=5 {
-        let row = rect_of(&h, &format!("{i}.skr"));
-        assert!(card.contains_rect(row), "{i}.skr inside the card: {row:?}");
+        let row = rect_of(&h, &format!("{i}.tnn"));
+        assert!(card.contains_rect(row), "{i}.tnn inside the card: {row:?}");
         assert!(row.height() <= 18.5, "{row:?}");
     }
     let texts = drawn_text_rects(&h);
@@ -107,7 +107,7 @@ fn no_card_when_hidden_and_presses_on_it_stay_off_the_view() {
 #[test]
 fn the_card_settles_in_one_frame() {
     // As `the_panels_settle_in_one_frame`: after the first frame, no repaint is requested.
-    for recent in [&[][..], &["/m/house.skr", "/m/barn.skr"][..]] {
+    for recent in [&[][..], &["/m/house.tnn", "/m/barn.tnn"][..]] {
         let mut h = harness(with_card(recent));
         assert_eq!(h.try_run().unwrap(), 1);
     }
@@ -115,8 +115,8 @@ fn the_card_settles_in_one_frame() {
 
 #[test]
 fn a_long_recent_name_stays_one_row_inside_the_card() {
-    let long = format!("/m/{}.skr", "a very long model name ".repeat(6));
-    let h = harness(with_card(&[&long, "/m/barn.skr"]));
+    let long = format!("/m/{}.tnn", "a very long model name ".repeat(6));
+    let h = harness(with_card(&[&long, "/m/barn.tnn"]));
     let card = rect_of(&h, "Start card");
     let name = long.trim_start_matches("/m/");
     let row = rect_of(&h, name);

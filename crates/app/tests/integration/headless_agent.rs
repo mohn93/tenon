@@ -251,11 +251,11 @@ fn an_agent_is_kept_inside_its_api_root() {
             "execute",
             json!({"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]}),
         ),
-        request(2, "execute", json!({"type": "save", "path": "inside.skr"})),
+        request(2, "execute", json!({"type": "save", "path": "inside.tnn"})),
         request(
             3,
             "execute",
-            json!({"type": "save", "path": base.join("outside.skr")}),
+            json!({"type": "save", "path": base.join("outside.tnn")}),
         ),
         request(4, "query", json!({"type": "file"})),
     ];
@@ -272,7 +272,7 @@ fn an_agent_is_kept_inside_its_api_root() {
         .collect();
     assert!(replies[&2]["result"].is_object(), "{:?}", replies[&2]);
     assert_eq!(replies[&3]["error"]["data"]["kind"], "invalid_input");
-    assert!(root.join("inside.skr").exists() && !base.join("outside.skr").exists());
+    assert!(root.join("inside.tnn").exists() && !base.join("outside.tnn").exists());
     assert_eq!(
         replies[&4]["result"]["api_roots"],
         json!([session::fspath::canonical(&root).unwrap()])
@@ -317,17 +317,17 @@ fn a_relative_file_argument_saves_where_it_lies_not_in_the_root() {
     writeln!(
         stdin,
         "{}",
-        request(1, "execute", json!({"type": "save", "path": "house.skr"}))
+        request(1, "execute", json!({"type": "save", "path": "house.tnn"}))
     )
     .unwrap();
     drop(stdin);
     assert!(exits(&mut first).success());
-    assert!(work.join("house.skr").exists());
+    assert!(work.join("house.tnn").exists());
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_app"))
         .args(["--headless", "--stdio", "--api-root"])
         .arg(&root)
-        .arg("house.skr")
+        .arg("house.tnn")
         .current_dir(&work)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -345,5 +345,5 @@ fn a_relative_file_argument_saves_where_it_lies_not_in_the_root() {
         .unwrap();
     let reply: Value = serde_json::from_str(&line).unwrap();
     assert_eq!(reply["error"]["data"]["kind"], "invalid_input", "{reply}");
-    assert!(!root.join("house.skr").exists());
+    assert!(!root.join("house.tnn").exists());
 }

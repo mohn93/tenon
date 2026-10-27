@@ -61,8 +61,8 @@ fn windows_resource() {
     println!("cargo:rerun-if-changed=../../packaging/icons/app.ico");
     let mut res = winresource::WindowsResource::new();
     res.set_icon("../../packaging/icons/app.ico");
-    res.set("ProductName", "tenon");
-    res.set("FileDescription", "tenon");
+    res.set("ProductName", "Tenon");
+    res.set("FileDescription", "Tenon");
     res.compile().expect("embedding the Windows resource");
 }
 

@@ -218,13 +218,13 @@ fn time_night_renders() {
     );
 }
 
-/// The same timings for a saved model named by `HOUSE_SKR`, its materials named "Lamp" made
+/// The same timings for a saved model named by `HOUSE_TNN`, its materials named "Lamp" made
 /// to glow at 3, seen from its saved camera at night.
 #[test]
 #[ignore]
 fn time_house_renders() {
-    let Some(path) = std::env::var_os("HOUSE_SKR") else {
-        eprintln!("HOUSE_SKR not set, skipping");
+    let Some(path) = std::env::var_os("HOUSE_TNN") else {
+        eprintln!("HOUSE_TNN not set, skipping");
         return;
     };
     let mut d = Document::new(glam::DVec2::new(1400.0, 900.0));

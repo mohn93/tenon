@@ -1,6 +1,6 @@
 # Packaging
 
-The product is named **tenon**; the program is `app` (`app.exe` on Windows) in every package.
+The product is named **Tenon**; the program is `app` (`app.exe` on Windows) in every package.
 The macOS bundle id is `io.github.mohn93.tenon`. The version is the workspace version in
 `Cargo.toml`; About and Help > Check for Updates show it, with the short git hash of the commit
 the program was built from (`TENON_GIT_HASH` overrides it, for a build without git).
@@ -13,7 +13,7 @@ Windows zip.
 | Artifact | Contents |
 |---|---|
 | `tenon-macos-dmg` | `tenon-<version>-macos-universal.dmg`: `tenon.app` (aarch64 and x86_64, macOS 11 or later, ad-hoc signed) and a link to Applications |
-| `tenon-windows` | `tenon-<version>-windows-x86_64.msi` (per-machine, Start menu shortcut, `.skr` association, icon) and the `.zip` with `app.exe`; both unsigned |
+| `tenon-windows` | `tenon-<version>-windows-x86_64.msi` (per-machine, Start menu shortcut, `.tnn` association, icon) and the `.zip` with `app.exe`; both unsigned |
 | `tenon-linux-x86_64`, `tenon-linux-aarch64` | `tenon-<version>-linux-<arch>.AppImage` and `.tar.gz` (program, `.desktop` file, icon, notices) |
 
 ## Build locally
@@ -66,7 +66,7 @@ releases published yet" (no release exists), or the error. The app makes no requ
 in the background, and never downloads or installs anything. The new HTTP dependency is `ureq`
 (MIT or Apache-2.0) with rustls, used only for this.
 
-## Opening a .skr from the desktop
+## Opening a .tnn from the desktop
 
 Windows (the MSI's association) and Linux (`Exec=app %f`) pass the file as the program's
 argument. macOS never does: Finder (double-click, Open With) and the Dock icon (a file dropped

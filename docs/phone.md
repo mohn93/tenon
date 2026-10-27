@@ -5,7 +5,7 @@ local network. The web build and the phone viewer itself do not have this item.
 
 ## How it works
 
-1. The sheet seals a copy of the open model (the bytes a `.skr` save would write; the model is
+1. The sheet seals a copy of the open model (the bytes a `.tnn` save would write; the model is
    not marked saved) with a random key and id, using ChaCha20-Poly1305 (`session::share`). The
    sealed data is the model's name (the document's file name without its extension, or
    "Untitled"; at most 256 bytes of UTF-8) and the model, so the name is encrypted too.

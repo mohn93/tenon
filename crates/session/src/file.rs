@@ -1,4 +1,4 @@
-//! The native file format (`.skr`): a zip archive holding `document.json`, which records the
+//! The native file format (`.tnn`): a zip archive holding `document.json`, which records the
 //! format name, a schema version, the camera and the model with every id, and the texture
 //! images as the files they were read from (`textures/m<id>.png` or `.jpg`).
 
@@ -21,8 +21,19 @@ use crate::document::{MAX_COORDINATE, SectionDisplay, SectionFillColor};
 use crate::texture::{MAX_TEXTURE_BYTES, check_total_pixels, decode, dimensions};
 use crate::units::{StoredUnits, Units};
 
-/// The `format` every file records.
-pub const FORMAT: &str = "tenon";
+/// The `format` every file records. It keeps the name the project had before it became Tenon,
+/// so files stay readable by every build.
+pub const FORMAT: &str = "sketchup-alt";
+/// The extension of a model file.
+pub const EXTENSION: &str = "tnn";
+/// The extension model files had before the project was renamed Tenon; such files still open.
+pub const LEGACY_EXTENSION: &str = "skr";
+
+/// Whether `ext` (no dot, any case) is the extension of a model file, `tnn` or the legacy `skr`.
+pub fn is_model_extension(ext: &str) -> bool {
+    ext.eq_ignore_ascii_case(EXTENSION) || ext.eq_ignore_ascii_case(LEGACY_EXTENSION)
+}
+
 /// The newest schema version this build reads.
 /// Version 2 added guides, version 3 curves and soft edges, version 4 the camera's up direction
 /// and projection, version 5 materials, version 6 material opacity, version 7 textures,
@@ -211,7 +222,7 @@ pub(crate) fn write(
     replace_file(path, &bytes, access)
 }
 
-/// The bytes [`write`] puts in a file: the `.skr` archive of the model, camera, lighting and
+/// The bytes [`write`] puts in a file: the `.tnn` archive of the model, camera, lighting and
 /// coloring with the `extra` entries. What the web's save hands out as a download.
 pub(crate) fn encode(
     scene: &Scene,
@@ -222,22 +233,22 @@ pub(crate) fn encode(
     write_bytes(scene, camera, look, ENTRY, extra)
 }
 
-/// The most entries a `.skr` file's archive may hold for [`read_entry`] to look into it.
+/// The most entries a `.tnn` file's archive may hold for [`read_entry`] to look into it.
 const MAX_LISTED_ENTRIES: usize = 10_000;
 
-/// The entry `name` of the `.skr` file at `path`, or None when the archive has no such entry
+/// The entry `name` of the `.tnn` file at `path`, or None when the archive has no such entry
 /// or it is over `limit` bytes. Reads the archive's directory and that entry only; fails when
 /// the file is not an archive holding a document, or holds more than 10,000 entries.
 pub(crate) fn read_entry(path: &Path, name: &str, limit: u64) -> Result<Option<Vec<u8>>, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    let mut zip = zip::ZipArchive::new(file).map_err(|_| "not a tenon file".to_string())?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|_| "not a Tenon file".to_string())?;
     if zip.len() > MAX_LISTED_ENTRIES {
         return Err(format!(
             "the file holds more than {MAX_LISTED_ENTRIES} entries"
         ));
     }
     if zip.by_name(ENTRY).is_err() {
-        return Err("not a tenon file".into());
+        return Err("not a Tenon file".into());
     }
     match zip.by_name(name) {
         Ok(entry) if entry.size() <= limit => Ok(read_limited(entry, limit, name).ok()),
@@ -581,11 +592,10 @@ fn read_archive<R: Read + Seek>(
     document: &str,
     extra: &[(&str, u64)],
 ) -> Result<(Opened, Vec<Vec<u8>>), String> {
-    let mut zip =
-        zip::ZipArchive::new(reader).map_err(|_| "not a tenon file".to_string())?;
+    let mut zip = zip::ZipArchive::new(reader).map_err(|_| "not a Tenon file".to_string())?;
     let entry = zip
         .by_name(document)
-        .map_err(|_| "not a tenon file".to_string())?;
+        .map_err(|_| "not a Tenon file".to_string())?;
     let json = read_limited(entry, MAX_DOCUMENT_BYTES, "the document")?;
     // Check the header first, so a newer file gets a clear message rather than a field error.
     // Only its two fields are kept (the rest is skipped, not built); a document that is not
@@ -613,7 +623,7 @@ fn read_archive<R: Read + Seek>(
         }
     };
     if header.format != FORMAT {
-        return Err("not a tenon file".into());
+        return Err("not a Tenon file".into());
     }
     let Some(version) = header.schema_version.as_u64().filter(|v| *v >= 1) else {
         return Err("the file has no valid schema version (a whole number from 1)".into());
@@ -876,7 +886,7 @@ mod tests {
         scene.add_page(page).unwrap();
         let dir = std::env::temp_dir().join(format!("session-file-far-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("far.skr");
+        let path = dir.join("far.tnn");
         let camera = Camera::new(glam::DVec2::new(800.0, 600.0));
         let look = ViewLook {
             lighting: Lighting::Day,

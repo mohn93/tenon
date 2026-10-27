@@ -185,7 +185,7 @@ fn mcp_headless_session() {
 #[test]
 fn mcp_opens_a_file_given() {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-    let path = dir.join(format!("mcp-open-{}.skr", std::process::id()));
+    let path = dir.join(format!("mcp-open-{}.tnn", std::process::id()));
     let _ = std::fs::remove_file(&path);
     let path_text = path.to_str().unwrap();
 
