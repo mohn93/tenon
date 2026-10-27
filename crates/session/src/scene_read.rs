@@ -123,7 +123,7 @@ pub(crate) const IMAGE_REFUSED: &str =
 
 /// Why a texture image was not read: too large on its own, or past what the file's images
 /// may hold together.
-pub(crate) const IMAGE_OVERSIZE: &str = "the image is over 16 MiB or 4096 pixels a side";
+pub(crate) const IMAGE_OVERSIZE: &str = "the image is over 16 MiB or 8192 pixels a side";
 pub(crate) const IMAGES_TOO_LARGE: &str = "the file's images together hold over 128 MiB";
 
 /// Most bytes of images one scene file may bring in, all told: many images naming one large

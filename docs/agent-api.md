@@ -955,14 +955,14 @@ tool used before, as Paste does; meanwhile `editor.status` names the tool "3D Te
 
 | Command | Effect |
 |---|---|
-| `{"type": "import_image", "path": "poster.png", "origin": [1, 2, 0], "width": 3, "normal": [0, 0, 1], "x_axis": [1, 0, 0], "name": "Poster", "lift": 0.001}` | Places a PNG or JPEG as a picture: a new group named `name` (default the file's name without its extension, else "Image") holding one rectangle face `width` meters wide (0.001 to 1000) and as high as the image's proportions make it, painted front and back with a new material of the same name (made unique) whose texture is the image (a photo whose EXIF orientation says it is kept on its side is turned upright first, and re-encoded in its own format). The texture is positioned to fill the face exactly (front texture coordinates (0,0), (1,0), (1,1), (0,1) at the corners; the back shows the image as seen from behind, not mirrored), so Scale on the group resizes the picture and `position_texture` still works on its face. Give the image as `path` (follows the read rules, `--api-root`) or `data` (the file's bytes in base64); exactly one. `origin` is the lower left corner, in the open context; `normal` (default Z) the way the picture faces; `x_axis` (default horizontal in the plane, or X on a level one) the way its width runs, projected into the plane. The picture lies `lift` meters (default 0.001, 0 to 1) along `normal` from the plane through `origin`, so a picture put on a face (origin on its plane, `normal` the face's) does not flicker against it. One undo step; the group is selected, in `placed`, and its definition in `definitions`. |
+| `{"type": "import_image", "path": "poster.png", "origin": [1, 2, 0], "width": 3, "normal": [0, 0, 1], "x_axis": [1, 0, 0], "name": "Poster", "lift": 0.001}` | Places a PNG or JPEG as a picture: a new group named `name` (default the file's name without its extension, else "Image") holding one rectangle face `width` meters wide (0.001 to 1000) and as high as the image's proportions make it, painted front and back with a new material of the same name (made unique) whose texture is the image (a photo whose EXIF orientation says it is kept on its side is turned upright first, and re-encoded in its own format). The texture is positioned to fill the face exactly (front texture coordinates (0,0), (1,0), (1,1), (0,1) at the corners; the back shows the image as seen from behind, not mirrored), so Scale on the group resizes the picture and `position_texture` still works on its face. Give the image as `path` (follows the read rules, `--api-root`) or `data` (the file's bytes in base64, with line breaks or other whitespace anywhere, the `=` padding optional and a leading `data:image/...;base64,` taken off; the 16 MiB limit counts decoded bytes); exactly one. `origin` is the lower left corner, in the open context; `normal` (default Z) the way the picture faces; `x_axis` (default horizontal in the plane, or X on a level one) the way its width runs, projected into the plane. The picture lies `lift` meters (default 0, 0 to 1) along `normal` from the plane through `origin`. A picture put flush on a face (origin on its plane, `normal` the face's) needs no lift: it is its own group, so it neither merges with nor splits the face below, and the renderer draws a picture's face a hair nearer the eye (2^-12 of its distance, 2.4 cm at 100 m, and in a parallel view 2^-12 of the eye-to-target distance; in the window and the web build), so it shows over the coplanar face without flicker. Only pictures are drawn so, that is groups and components holding one textured face (a decal made by hand counts; a picture group given more faces does not); other textured faces are drawn where they lie, and edges stay over pictures; picking and `pick` at that point return the picture. One undo step; the group is selected, in `placed`, and its definition in `definitions`. |
 
-The texture limits apply: at most 16 MiB and 4096 pixels on each side (so an 8192 pixel image is
+The texture limits apply: at most 16 MiB and 8192 pixels on each side (so an 8193 pixel image is
 refused, saying so), and 2^28 pixels over all textures; a file that cannot be read or decoded is a
 `file` error naming the path, bad `data` is `invalid_input`. A height outside 0.001 to 1000 m for
 the given width, a blank `name`, an `x_axis` along the normal, or both or neither of `path` and
 `data` is `invalid_input`. The picture is kept in a saved `.skr` with its image bytes and exported
-as a textured face (glTF, OBJ). In the window, File > Import of a `.png`, `.jpg` or `.jpeg` brings out the Image tool (`place_image`, below): a click sets a corner, moving sizes the picture keeping its proportions, a click or a typed width places it. Scale resizes a placed picture.
+as a textured face (glTF, OBJ). In the window, File > Import of a `.png`, `.jpg` or `.jpeg` brings out the Image tool (`place_image`, below): a click sets a corner, moving sizes the picture keeping its proportions, a click or a typed width places it. Scale resizes a placed picture. `place_image` (`path` or `data`, as `import_image`) refuses before the tool comes out, with the message `import_image` would give, an image that is broken, over the side or file limits, or that would take the model's textures over the pixel budget (`invalid_input` or `file`, status line in the window); the Image tool's `data` takes base64 as `import_image` does.
 
 ### Materials
 
@@ -998,10 +998,10 @@ like any other.
 
 #### Textures
 
-A texture is a PNG or JPEG file of at most 16 MiB and 4096 pixels on each side, read when the
+A texture is a PNG or JPEG file of at most 16 MiB and 8192 pixels on each side, read when the
 command runs; the model keeps its own copy (the file is saved inside `.skr`), so the file may
 change or go away later. A model holds at most 256 textures, and their images together at most
-2^28 pixels (268435456, 1 GiB decoded; an image shared by materials counts once). `texture` is `{"path", "width",
+2^28 pixels (268435456, 1 GiB decoded, four full size 8192 x 8192 images; an image shared by materials counts once). The renderer shows an image from a copy resampled to at most 2048 pixels a side, and to less when the GPU's largest texture is smaller (WebGL2 and some integrated GPUs allow 2048 or 4096); the model and the `.skr` keep the original bytes, and exports use them. `texture` is `{"path", "width",
 "height"}`: `width` and `height` are the meters one copy of the image covers on the model, each
 from 0.001 to 1000 (`invalid_input` otherwise). A new image without `width` is 1 m wide (or as
 wide as the texture it replaces), and without `height` keeps the image's proportions (limited to the same 0.001 to 1000 range).
@@ -2286,12 +2286,12 @@ supported"). What is carried:
 - Edges: every edge, loose ones included; soft and smooth edges become soft edges (an edge
   not between exactly two faces stays an ordinary edge), and hidden edges become hidden edges.
 - Materials used by an imported face or instance: color, opacity, and the texture image (PNG
-  or JPEG, read from the file, under the limits of `add_material`: at most 16 MiB, 4096 pixels a
+  or JPEG, read from the file, under the limits of `add_material`: at most 16 MiB, 8192 pixels a
   side, the pixel budget and 256 textures) with the file's tile size (clamped to 0.001 to
   1000 m, times `scale`). A name the model already has gets a number (`Brick 2`); existing
   materials are never changed. Names longer than 240 characters are cut. A texture that cannot
   be used leaves the material its color, with one warning per reason ("2 textures were not
-  imported (the image is over 16 MiB or 4096 pixels a side); their materials keep their
+  imported (the image is over 16 MiB or 8192 pixels a side); their materials keep their
   colours"). At most 1,024 materials are added (the first, in the file's order, of those
   the faces and instances made use; of a file using more than 4,096, only the first 4,096 in
   order of use are considered); faces and instances with the others are left unpainted, with a
@@ -2366,7 +2366,7 @@ read as a tree of nodes. What is carried:
   as COLLADA writers give it) or `diffuse` texture (through its sampler and surface), and the
   opacity of `transparent` and `transparency` (`A_ONE` or `RGB_ZERO`). A textured material's
   color is its image's average color (glTF: times `baseColorFactor`, in linear); the image is used under `add_material`'s limits (PNG or
-  JPEG, at most 16 MiB and 4096 pixels a side, the pixel budget and 256 textures), else the
+  JPEG, at most 16 MiB and 8192 pixels a side, the pixel budget and 256 textures), else the
   material keeps its color with a warning ("1 texture was not imported (the image file could
   not be read); its material keeps its colour").
 - Texture coordinates: a material's texture size (meters per repeat of the image along its

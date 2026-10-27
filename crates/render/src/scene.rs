@@ -171,10 +171,34 @@ fn tag_colored(scene: &Scene, tag: Option<TagId>, material: Look) -> Look {
     }
 }
 
+/// Added to the texture layers of a picture's face (see `is_picture`): the face shader draws
+/// such a face a hair nearer, so a picture lying flush on a face shows over it, and takes the
+/// mark off before it samples. Far above any layer, and exact in an f32.
+pub const PICTURE_LAYER: f32 = 65536.0;
+
+/// Whether the mesh `id` is a picture: a group or component of one face only (Import Image
+/// makes such a group; a decal drawn by hand or brought in from a file is one too). Its
+/// textured sides are marked with [`PICTURE_LAYER`]; other textured faces are drawn as they lie.
+fn is_picture(id: MeshId, model: &Model) -> bool {
+    matches!(id, MeshId::Definition(_)) && model.faces().nth(1).is_none()
+}
+
 impl Look {
     /// The texture array layer, or -1 without a texture.
     fn layer(&self) -> f32 {
         self.texture.map_or(-1.0, |(layer, _)| layer as f32)
+    }
+
+    /// The layers of a face's two sides as its vertices carry them: marked with
+    /// [`PICTURE_LAYER`] on the textured sides of a picture's face.
+    fn layers_of(front: &Look, back: &Look, picture: bool) -> [f32; 2] {
+        [front.layer(), back.layer()].map(|l| {
+            if picture && l >= 0.0 {
+                l + PICTURE_LAYER
+            } else {
+                l
+            }
+        })
     }
 
     /// The finish as a vertex carries it for two sides (see `BaseFaceVertex::finish`).
@@ -1396,6 +1420,7 @@ impl<'a> Walk<'a> {
         let mirrored = t.matrix3.determinant() < 0.0;
         let front = side_look(self.scene, self.layers, inherited, DEFAULT_FRONT);
         let back = side_look(self.scene, self.layers, inherited, DEFAULT_BACK);
+        let picture = is_picture(id, model);
         let glow_key = (id, inherited, self.ghost);
         let scene = self.scene;
         let color_by_tag = self.color_by_tag;
@@ -1478,7 +1503,7 @@ impl<'a> Walk<'a> {
                 back: drawn_back.color,
                 alpha,
                 uv,
-                layer: [drawn_front.layer(), drawn_back.layer()],
+                layer: Look::layers_of(&drawn_front, &drawn_back, picture),
                 glow: [drawn_front.glow(), drawn_back.glow()],
                 // Ghosted and X-ray faces are matte.
                 finish: if ghost || x_ray {
@@ -3054,6 +3079,59 @@ mod tests {
     }
 
     #[test]
+    fn only_a_picture_s_textured_sides_are_marked() {
+        use kernel::DefinitionKind;
+        let square = |x: f64| {
+            [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].map(|(a, b)| DVec3::new(a + x, b, 0.0))
+        };
+        let mut m = Model::new();
+        m.add_polygon(&square(0.0)).unwrap();
+        let mut s = Scene::from_root(m);
+        let (tiles, _) = s
+            .add_material_with_texture("Tiles", [1, 2, 3], 1.0, Some(texture(1.0, 1.0)))
+            .unwrap();
+        let face = s.root().faces().next().unwrap().0;
+        s.paint(MeshId::Root, &[face], &[], kernel::Side::Front, Some(tiles))
+            .unwrap();
+        // A group of that one face: a picture.
+        let edges: Vec<_> = s.root().edges().map(|(id, _)| id).collect();
+        s.make_group(
+            MeshId::Root,
+            &edges,
+            &[face],
+            &[],
+            DefinitionKind::Group,
+            "",
+        )
+        .unwrap();
+        // A textured face of the root beside it is not.
+        s.edit(MeshId::Root, |m| m.add_polygon(&square(5.0)))
+            .unwrap();
+        let face = s.root().faces().next().unwrap().0;
+        s.paint(MeshId::Root, &[face], &[], kernel::Side::Front, Some(tiles))
+            .unwrap();
+        let g = scene_geometry(&s, &[], &BTreeSet::new());
+        assert_eq!(g.faces.len(), 12);
+        for v in &g.faces {
+            let expected = if v.pos[0] < 2.0 { PICTURE_LAYER } else { 0.0 };
+            assert_eq!(v.layer, [expected, -1.0], "{:?}", v.pos);
+        }
+        assert_eq!(g, single_pass::scene_geometry(&s, &[], &BTreeSet::new()));
+
+        // A group of two faces is not a picture.
+        s.edit(MeshId::Root, |m| m.add_polygon(&square(7.0)))
+            .unwrap();
+        let edges: Vec<_> = s.root().edges().map(|(id, _)| id).collect();
+        let faces: Vec<_> = s.root().faces().map(|(id, _)| id).collect();
+        s.make_group(MeshId::Root, &edges, &faces, &[], DefinitionKind::Group, "")
+            .unwrap();
+        let g = scene_geometry(&s, &[], &BTreeSet::new());
+        for v in g.faces.iter().filter(|v| v.pos[0] > 2.0 && v.pos[0] < 6.5) {
+            assert_eq!(v.layer, [0.0, -1.0], "{:?}", v.pos);
+        }
+    }
+
+    #[test]
     fn placed_textures_turn_and_back_sides_read_unmirrored() {
         // A 1 m wall in the xz plane with the same 1 m texture on both sides, turned a quarter
         // counter-clockwise.
@@ -3218,7 +3296,7 @@ mod tests {
                                 back: back.color,
                                 alpha: [front.alpha, back.alpha],
                                 uv,
-                                layer: [front.layer(), back.layer()],
+                                layer: Look::layers_of(&front, &back, is_picture(id, model)),
                                 glow: [front.glow(), back.glow()],
                                 finish: Look::finish_of(&front, &back),
                             });

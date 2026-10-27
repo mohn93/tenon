@@ -27,9 +27,15 @@ impl Editor {
     /// texture limits (see `import_image`) or a broken file is refused, with why in the status.
     pub fn place_image(&mut self, name: &str, bytes: &[u8]) -> Result<(), CommandError> {
         // Turned upright and decoded once here, so a broken file is refused before the tool
-        // comes out and the outline has the proportions the picture will have.
-        let checked = texture::upright(bytes.to_vec())
-            .and_then(|b| texture::decode(b.clone()).map(|i| (b, i.width, i.height)));
+        // comes out and the outline has the proportions the picture will have. The texture
+        // budget, as the placement will check it, goes by the header, before the decoding.
+        let checked = texture::upright(bytes.to_vec()).and_then(|b| {
+            let (_, wide, high) = texture::dimensions(&b)?;
+            self.doc
+                .texture_budget_allows(u64::from(wide) * u64::from(high))?;
+            texture::decode(b.clone())?;
+            Ok((b, wide, high))
+        });
         let (bytes, wide, high) = match checked {
             Ok(d) => d,
             Err(m) => {
@@ -72,16 +78,10 @@ impl Editor {
                 }
                 self.place_image(path, &bytes)
             }
-            (None, Some(data)) => {
-                let compact: String = data.split_whitespace().collect();
-                match base64::engine::general_purpose::STANDARD.decode(compact) {
-                    Ok(bytes) => self.place_image(DEFAULT_NAME, &bytes),
-                    Err(_) => Err(self.refuse(CommandError::new(
-                        ErrorKind::InvalidInput,
-                        "data is not base64",
-                    ))),
-                }
-            }
+            (None, Some(data)) => match texture::decode_base64(data) {
+                Ok(bytes) => self.place_image(DEFAULT_NAME, &bytes),
+                Err(m) => Err(self.refuse(CommandError::new(ErrorKind::InvalidInput, m))),
+            },
             _ => Err(self.refuse(CommandError::new(
                 ErrorKind::InvalidInput,
                 "give the image as path or data, not both or neither",

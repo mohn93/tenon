@@ -6,8 +6,9 @@ use std::sync::Arc;
 
 use kernel::{MaterialId, Scene, Texture, TextureImage};
 
-/// The largest layer side, in pixels.
-pub const MAX_LAYER_SIDE: u32 = 1024;
+/// The largest layer side, in pixels (2048 is also the least `max_texture_dimension_2d` of
+/// WebGL2 and downlevel devices; a device allowing less gets smaller layers, see `layer_side`).
+pub const MAX_LAYER_SIDE: u32 = 2048;
 /// The most bytes the array may take with its mipmaps; more or bigger textures get smaller
 /// layers.
 pub const MAX_ARRAY_BYTES: u64 = 256 * 1024 * 1024;
@@ -30,15 +31,26 @@ pub fn layers(scene: &Scene) -> HashMap<MaterialId, u32> {
 }
 
 /// The side of the array's square layers for `images`: a power of two, enough for the largest
-/// image but at most [`MAX_LAYER_SIDE`], and small enough that all layers with their mipmaps
-/// fit in [`MAX_ARRAY_BYTES`]. 1 without images.
-pub fn layer_side(images: &[&TextureImage]) -> u32 {
+/// image but at most [`MAX_LAYER_SIDE`] and at most `device_max` (the device's largest 2D
+/// texture side; an image bigger than the layer is drawn from a scaled copy, the document keeps
+/// the original), and small enough that all layers with their mipmaps fit in
+/// [`MAX_ARRAY_BYTES`]. 1 without images.
+pub fn layer_side(images: &[&TextureImage], device_max: u32) -> u32 {
     let largest = images
         .iter()
         .map(|i| i.width.max(i.height))
         .max()
         .unwrap_or(1);
-    let mut side = largest.next_power_of_two().min(MAX_LAYER_SIDE);
+    // The largest power of two the device allows.
+    let device_max = if device_max.is_power_of_two() {
+        device_max
+    } else {
+        (device_max.max(2) / 2).next_power_of_two()
+    };
+    let mut side = largest
+        .next_power_of_two()
+        .min(MAX_LAYER_SIDE)
+        .min(device_max);
     // A full mip chain adds a third.
     let bytes = |side: u32| images.len() as u64 * u64::from(side).pow(2) * 4 * 4 / 3;
     while side > 1 && bytes(side) > MAX_ARRAY_BYTES {
@@ -80,33 +92,32 @@ fn taps(len: u32, out: u32) -> Vec<Vec<(usize, f32)>> {
 }
 
 /// RGBA8 `pixels` of a `width` x `height` image resampled to `side` x `side` (box filtered when
-/// shrinking, linear when growing; both ways separately).
+/// shrinking, linear when growing; both ways separately). One output row at a time, from the
+/// source rows it takes resampled across, so an 8192 pixel image needs no copy of its own size.
 pub fn resample(pixels: &[u8], width: u32, height: u32, side: u32) -> Vec<u8> {
     let (w, s) = (width as usize, side as usize);
     let across = taps(width, side);
     let down = taps(height, side);
-    // Rows first: height rows of `side` pixels.
-    let mut rows = vec![0f32; height as usize * s * 4];
-    for y in 0..height as usize {
-        for (x, taps) in across.iter().enumerate() {
-            for c in 0..4 {
-                rows[(y * s + x) * 4 + c] = taps
-                    .iter()
-                    .map(|&(k, wt)| f32::from(pixels[(y * w + k) * 4 + c]) * wt)
-                    .sum();
+    let mut out = vec![0u8; s * s * 4];
+    let mut row = vec![0f32; s * 4];
+    let mut sum = vec![0f32; s * 4];
+    for (y, rows) in down.iter().enumerate() {
+        sum.fill(0.0);
+        for &(k, weight) in rows {
+            for (x, taps) in across.iter().enumerate() {
+                for c in 0..4 {
+                    row[x * 4 + c] = taps
+                        .iter()
+                        .map(|&(j, wt)| f32::from(pixels[(k * w + j) * 4 + c]) * wt)
+                        .sum();
+                }
+            }
+            for (total, v) in sum.iter_mut().zip(&row) {
+                *total += v * weight;
             }
         }
-    }
-    let mut out = vec![0u8; s * s * 4];
-    for (y, taps) in down.iter().enumerate() {
-        for x in 0..s {
-            for c in 0..4 {
-                let v: f32 = taps
-                    .iter()
-                    .map(|&(k, wt)| rows[(k * s + x) * 4 + c] * wt)
-                    .sum();
-                out[(y * s + x) * 4 + c] = v.round().clamp(0.0, 255.0) as u8;
-            }
+        for (o, v) in out[y * s * 4..(y + 1) * s * 4].iter_mut().zip(&sum) {
+            *o = v.round().clamp(0.0, 255.0) as u8;
         }
     }
     out
@@ -161,7 +172,7 @@ impl TextureArray {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, scene: &Scene) -> Self {
         let textured = textured(scene);
         let images: Vec<&TextureImage> = textured.iter().map(|(_, t)| &*t.image).collect();
-        let side = layer_side(&images);
+        let side = layer_side(&images, device.limits().max_texture_dimension_2d);
         let levels = side.ilog2() + 1;
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("material textures"),
@@ -238,14 +249,27 @@ mod tests {
 
     #[test]
     fn layers_fit_the_largest_image_and_the_memory_budget() {
-        assert_eq!(layer_side(&[]), 1);
-        assert_eq!(layer_side(&[&image(3, 2)]), 4);
-        assert_eq!(layer_side(&[&image(300, 20), &image(64, 64)]), 512);
-        assert_eq!(layer_side(&[&image(4096, 4096)]), MAX_LAYER_SIDE);
+        const DEVICE: u32 = 16384;
+        assert_eq!(layer_side(&[], DEVICE), 1);
+        assert_eq!(layer_side(&[&image(3, 2)], DEVICE), 4);
+        assert_eq!(layer_side(&[&image(300, 20), &image(64, 64)], DEVICE), 512);
+        assert_eq!(layer_side(&[&image(4096, 4096)], DEVICE), MAX_LAYER_SIDE);
         // 256 layers of 1024 would take 1.3 GiB: they shrink to 256.
         let big = image(1024, 1024);
         let many: Vec<&TextureImage> = (0..256).map(|_| &big).collect();
-        assert_eq!(layer_side(&many), 256);
+        assert_eq!(layer_side(&many, DEVICE), 256);
+    }
+
+    #[test]
+    fn a_small_device_gets_layers_it_can_hold() {
+        // A 8192 x 8192 picture on a device with 1024 texels a side (or an odd limit): the
+        // layer is the largest power of two within the limit.
+        let big = image(8192, 8192);
+        assert_eq!(layer_side(&[&big], 1024), 1024);
+        assert_eq!(layer_side(&[&big], 2048), 2048);
+        assert_eq!(layer_side(&[&big], 3000), 2048);
+        assert_eq!(layer_side(&[&image(100, 100)], 1024), 128);
+        assert_eq!(layer_side(&[&big], 0), 1);
     }
 
     #[test]
@@ -261,6 +285,27 @@ mod tests {
         // Same size: unchanged.
         let square: Vec<u8> = (0..16 * 4).map(|k| k as u8).collect();
         assert_eq!(resample(&square, 4, 4, 4), square);
+        // Each output pixel is the weighted sum over its taps both ways.
+        let (w, h) = (37u32, 23u32);
+        let odd: Vec<u8> = (0..w * h * 4).map(|i| (i * 7919 % 251) as u8).collect();
+        for side in [8, 16, 64] {
+            let (across, down) = (taps(w, side), taps(h, side));
+            let out = resample(&odd, w, h, side);
+            for y in 0..side as usize {
+                for x in 0..side as usize {
+                    for c in 0..4 {
+                        let mut v = 0.0f32;
+                        for &(k, wy) in &down[y] {
+                            for &(j, wx) in &across[x] {
+                                v += f32::from(odd[(k * w as usize + j) * 4 + c]) * wx * wy;
+                            }
+                        }
+                        let got = f32::from(out[(y * side as usize + x) * 4 + c]);
+                        assert!((got - v).abs() <= 1.0, "{side}: {x},{y}: {got} vs {v}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -3,7 +3,6 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use base64::Engine;
 use glam::DVec3;
 use kernel::{
     DefinitionKind, EntityId, ImportFace, ImportTree, MAX_TEXTURE_SIZE, MIN_TEXTURE_SIZE, Material,
@@ -14,13 +13,14 @@ use super::import::read_limited;
 use super::{Document, check_coordinates, unit_vector};
 use crate::command::{CommandError, ErrorKind};
 use crate::texture::{
-    MAX_TEXTURE_BYTES, average_color, check_total_pixels, dimensions, texture_from_bytes, upright,
+    MAX_TEXTURE_BYTES, average_color, decode_base64, dimensions, texture_from_bytes, upright,
 };
 
 /// The name of the group and material when the image has none to give.
 const DEFAULT_NAME: &str = "Image";
-/// How far a picture lies in front of its plane unless told otherwise, in meters.
-pub const DEFAULT_LIFT: f64 = 0.001;
+/// How far a picture lies in front of its plane unless told otherwise, in meters: none, the
+/// renderer draws it over a face it lies on.
+pub const DEFAULT_LIFT: f64 = 0.0;
 /// The farthest a picture may lie in front of its plane, in meters.
 const MAX_LIFT: f64 = 1.0;
 
@@ -74,11 +74,8 @@ impl Document {
         let (bytes, stem) = read_image(path, data)?;
         let bytes = upright(bytes).map_err(|e| image_error(path, e))?;
         let (_, pixels_wide, pixels_high) = dimensions(&bytes).map_err(|e| image_error(path, e))?;
-        check_total_pixels(
-            self.texture_pixels_besides(None),
-            u64::from(pixels_wide) * u64::from(pixels_high),
-        )
-        .map_err(|e| image_error(path, e))?;
+        self.texture_budget_allows(u64::from(pixels_wide) * u64::from(pixels_high))
+            .map_err(|e| image_error(path, e))?;
         let height = width * f64::from(pixels_high) / f64::from(pixels_wide);
         if !(MIN_TEXTURE_SIZE..=MAX_TEXTURE_SIZE).contains(&height) {
             return Err(invalid(format!(
@@ -204,19 +201,7 @@ fn read_image(
                 .map(str::to_string);
             Ok((bytes, stem))
         }
-        (None, Some(data)) => {
-            // Refuse before decoding: base64 is 4 characters to 3 bytes.
-            if data.len() as u64 > MAX_TEXTURE_BYTES / 3 * 4 + 4 {
-                return Err(invalid(format!(
-                    "file too large: an image is at most {MAX_TEXTURE_BYTES} bytes"
-                )));
-            }
-            let compact: String = data.split_whitespace().collect();
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(compact)
-                .map_err(|_| invalid("data is not base64"))?;
-            Ok((bytes, None))
-        }
+        (None, Some(data)) => Ok((decode_base64(data).map_err(invalid)?, None)),
         _ => Err(invalid(
             "give the image as path or data, not both or neither",
         )),
