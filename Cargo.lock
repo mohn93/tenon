@@ -1013,6 +1013,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "draco-core"
+version = "2.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17957b93c10365b1392c98c86a091ea342741ea27d75e0a5b30102fa7e6841e9"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
 name = "dyn-clone"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2070,6 +2079,12 @@ checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
 ]
+
+[[package]]
+name = "meshopt-rs"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3e1e0ce77ff0b408e7d8a822cc5181997309a3825b4e9bfe0b6a04fd9c92f05"
 
 [[package]]
 name = "miniz_oxide"
@@ -3316,10 +3331,12 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "chacha20poly1305",
+ "draco-core",
  "getrandom 0.3.4",
  "glam",
  "image",
  "kernel",
+ "meshopt-rs",
  "miniz_oxide 0.8.9",
  "qrcode",
  "quick-xml",

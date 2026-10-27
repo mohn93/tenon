@@ -79,6 +79,8 @@ pub(crate) struct SceneMesh {
     pub normals: Vec<DVec3>,
     /// Parallel to `points`, or empty.
     pub uvs: Vec<DVec2>,
+    /// Parallel to `points`, or empty: the file's vertex colors, linear RGB.
+    pub colors: Vec<[f64; 3]>,
     pub polygons: Vec<ScenePolygon>,
 }
 
@@ -313,6 +315,97 @@ pub(crate) fn tinted(color: [u8; 3], tint: [f64; 3]) -> [u8; 3] {
         }
     };
     [0, 1, 2].map(|i| srgb_byte(linear(color[i]) * tint[i]))
+}
+
+/// A linear component (0 to 1) of an sRGB fraction.
+pub(crate) fn srgb_to_linear(c: f64) -> f64 {
+    let c = c.clamp(0.0, 1.0);
+    if c <= 0.040_45 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Most distinct vertex-color materials made with exact colors; past it each channel snaps
+/// to four levels, so a gradient cannot flood the model with materials.
+const MAX_EXACT_COLORS: usize = 512;
+
+/// Paints each polygon with vertex colors by a copy of its material whose color is the
+/// material's times the mean of the polygon's corner colors (a copy made once per color, named
+/// `<material> #rrggbb`). Polygons whose material has a texture keep it, counted in a warning.
+pub(crate) fn paint_vertex_colors(scene: &mut ReadScene) {
+    let mut made: HashMap<(Option<usize>, [u8; 3]), usize> = HashMap::new();
+    let mut textured = 0usize;
+    for mi in 0..scene.meshes.len() {
+        if scene.meshes[mi].colors.is_empty()
+            || scene.meshes[mi].colors.len() != scene.meshes[mi].points.len()
+        {
+            continue;
+        }
+        for pi in 0..scene.meshes[mi].polygons.len() {
+            let mesh = &scene.meshes[mi];
+            let poly = &mesh.polygons[pi];
+            let base = poly.material.filter(|b| *b < scene.materials.len());
+            if base.is_some_and(|b| scene.materials[b].image.is_some()) {
+                textured += 1;
+                continue;
+            }
+            let mut sum = [0.0f64; 3];
+            let mut n = 0usize;
+            for &c in &poly.corners {
+                if let Some(rgb) = mesh.colors.get(c) {
+                    (0..3).for_each(|i| sum[i] += rgb[i]);
+                    n += 1;
+                }
+            }
+            if n == 0 {
+                continue;
+            }
+            let mean = sum.map(|s| s / n as f64);
+            // glTF's factor is exact in `tint`; a color given as bytes (COLLADA) is read back.
+            let mut rgb = match base.map(|b| &scene.materials[b]) {
+                Some(m) if m.tint != [1.0; 3] => [0, 1, 2].map(|i| srgb_byte(m.tint[i] * mean[i])),
+                Some(m) => tinted(m.color, mean),
+                None => mean.map(srgb_byte),
+            };
+            if made.len() >= MAX_EXACT_COLORS {
+                rgb = rgb.map(|c| ((u16::from(c) * 3 + 127) / 255 * 85) as u8);
+            }
+            let key = (base, rgb);
+            let id = match made.get(&key) {
+                Some(&id) => id,
+                None => {
+                    if scene.materials.len() >= MAX_SCENE_ITEMS {
+                        continue;
+                    }
+                    let hex = format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
+                    let name = match base.map(|b| scene.materials[b].name.trim()) {
+                        Some(n) if !n.is_empty() => format!("{n} {hex}"),
+                        _ => hex,
+                    };
+                    scene.materials.push(SceneMaterial {
+                        name,
+                        color: rgb,
+                        opacity: base.map_or(1.0, |b| scene.materials[b].opacity),
+                        tint: [1.0; 3],
+                        image: None,
+                    });
+                    let id = scene.materials.len() - 1;
+                    made.insert(key, id);
+                    id
+                }
+            };
+            scene.meshes[mi].polygons[pi].material = Some(id);
+        }
+    }
+    if textured > 0 {
+        scene.warnings.push(format!(
+            "the vertex colors of {} with a texture {} not imported",
+            counted(textured, "face", "faces"),
+            if textured == 1 { "was" } else { "were" },
+        ));
+    }
 }
 
 /// A count and a noun as a phrase: "1 animation", "3 animations".

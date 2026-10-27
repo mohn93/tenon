@@ -13,6 +13,7 @@ use crate::import::{MAX_IMPORT_POINTS, MAX_IMPORT_POLYGONS};
 use crate::scene_read::{
     FileUp, IMAGE_MISSING, ImageBudget, MAX_SCENE_DEPTH, MAX_SCENE_ITEMS, MAX_SCENE_NODES,
     ReadScene, SceneMaterial, SceneMesh, SceneNode, ScenePolygon, SideFiles, counted,
+    paint_vertex_colors, srgb_byte, srgb_to_linear,
 };
 
 /// Most XML nodes (elements and text) a COLLADA file may have. Geometry lies in the text of
@@ -113,9 +114,26 @@ pub(crate) fn read_dae(bytes: &[u8], side: &SideFiles) -> Result<ReadScene, Stri
         _ => FileUp::Y,
     };
 
+    // COLLADA names no color space in its schema: sRGB, unless the file's asset says linear
+    // (a `color_space` element) or its authoring tool is one that writes scene-linear values.
+    let linear_colors = asset.is_some_and(|a| {
+        let text = |names: &[&str]| {
+            a.descendants()
+                .find(|n| names.contains(&tag(n)))
+                .and_then(|n| n.text())
+                .map(|t| t.trim().to_ascii_lowercase())
+        };
+        match text(&["color_space", "colorspace", "colour_space"]) {
+            Some(t) if t.contains("linear") => true,
+            Some(t) if t.contains("srgb") => false,
+            _ => text(&["authoring_tool"]).is_some_and(|t| t.starts_with("blender")),
+        }
+    });
     let mut r = Reader {
         by_id,
         side,
+        linear_colors,
+        material_texcoord: HashMap::new(),
         scene: ReadScene {
             meshes: Vec::new(),
             materials: Vec::new(),
@@ -179,15 +197,21 @@ pub(crate) fn read_dae(bytes: &[u8], side: &SideFiles) -> Result<ReadScene, Stri
                 .push(format!("{} not imported", counted(n, one, many)));
         }
     }
+    paint_vertex_colors(&mut r.scene);
     Ok(r.scene)
 }
 
-/// A geometry instance's material binding: each symbol with its scene material, sorted.
-type Binding = Vec<(String, Option<usize>)>;
+/// A geometry instance's material binding: each symbol with its scene material and the
+/// texture coordinate set its texture is bound to (`bind_vertex_input`), sorted.
+type Binding = Vec<(String, Option<usize>, Option<u32>)>;
 
 struct Reader<'a, 'i, 's> {
     by_id: HashMap<&'a str, Node<'a, 'i>>,
     side: &'s SideFiles<'s>,
+    /// True when the file's colors are linear, not sRGB.
+    linear_colors: bool,
+    /// The texture coordinate channel each scene material's diffuse texture names.
+    material_texcoord: HashMap<usize, String>,
     scene: ReadScene,
     /// The scene material made for each `<material>` id.
     material_index: HashMap<&'a str, Option<usize>>,
@@ -288,7 +312,18 @@ impl<'a, 'i> Reader<'a, 'i, '_> {
                     continue;
                 };
                 let m = self.material(target)?;
-                binding.push((symbol.to_string(), m));
+                // The coordinate set the material's texture channel is bound to.
+                let set = m
+                    .and_then(|m| self.material_texcoord.get(&m))
+                    .and_then(|channel| {
+                        children(im, "bind_vertex_input")
+                            .find(|b| {
+                                b.attribute("semantic") == Some(channel.as_str())
+                                    && b.attribute("input_semantic") == Some("TEXCOORD")
+                            })
+                            .and_then(|b| b.attribute("input_set")?.trim().parse().ok())
+                    });
+                binding.push((symbol.to_string(), m, set));
             }
         }
         binding.sort();
@@ -332,6 +367,10 @@ impl<'a, 'i> Reader<'a, 'i, '_> {
             Some(e) => self.effect(e),
             None => ([204, 204, 204], 1.0, None),
         };
+        if let Some(channel) = effect.and_then(|e| diffuse_texcoord(e)) {
+            self.material_texcoord
+                .insert(self.scene.materials.len(), channel.to_string());
+        }
         self.scene.materials.push(SceneMaterial {
             name: node
                 .attribute("name")
@@ -348,7 +387,7 @@ impl<'a, 'i> Reader<'a, 'i, '_> {
         Ok(m)
     }
 
-    /// An effect's diffuse color (sRGB, as COLLADA writers give it), opacity and diffuse
+    /// An effect's diffuse color (in the file's color space, as sRGB bytes), opacity and diffuse
     /// texture image.
     #[allow(clippy::type_complexity)]
     fn effect(
@@ -364,7 +403,14 @@ impl<'a, 'i> Reader<'a, 'i, '_> {
         let Some(shading) = shading else {
             return ([204, 204, 204], 1.0, None);
         };
-        let byte = |x: f64| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let linear = self.linear_colors;
+        let byte = |x: f64| {
+            if linear {
+                srgb_byte(x)
+            } else {
+                (x.clamp(0.0, 1.0) * 255.0).round() as u8
+            }
+        };
         let mut color = [204, 204, 204];
         let mut image = None;
         if let Some(diffuse) = child(shading, "diffuse") {
@@ -457,7 +503,7 @@ impl<'a, 'i> Reader<'a, 'i, '_> {
         &mut self,
         mesh: Node<'a, 'i>,
         name: &str,
-        binding: &[(String, Option<usize>)],
+        binding: &[(String, Option<usize>, Option<u32>)],
     ) -> Result<SceneMesh, String> {
         let mut out = SceneMesh {
             name: name.to_string(),
@@ -473,12 +519,19 @@ impl<'a, 'i> Reader<'a, 'i, '_> {
         let all_normals = parts
             .iter()
             .filter(|p| polygonal(p))
-            .all(|p| self.input(*p, "NORMAL").is_some());
+            .all(|p| self.input(*p, "NORMAL", None).is_some());
         let any_uvs = parts
             .iter()
             .filter(|p| polygonal(p))
-            .any(|p| self.input(*p, "TEXCOORD").is_some());
-        let mut point_of: HashMap<(usize, Option<usize>, Option<usize>), usize> = HashMap::new();
+            .any(|p| self.input(*p, "TEXCOORD", None).is_some());
+        let any_colors = parts
+            .iter()
+            .filter(|p| polygonal(p))
+            .any(|p| self.input(*p, "COLOR", None).is_some());
+        // A corner is told apart by its position, normal, texture coordinate and color,
+        // each by source and index.
+        type Slot = Option<(NodeId, usize)>;
+        let mut point_of: HashMap<(usize, Slot, Slot, Slot), usize> = HashMap::new();
         // Taken out while the corners borrow it, and put back for the next mesh.
         let mut sources = std::mem::take(&mut self.sources);
         for part in parts {
@@ -489,12 +542,12 @@ impl<'a, 'i> Reader<'a, 'i, '_> {
             if !polygonal(&part) {
                 continue;
             }
-            let Some((position, p_offset)) = self.input(part, "VERTEX") else {
+            let Some((position, p_offset)) = self.input(part, "VERTEX", None) else {
                 self.unread += 1;
                 continue;
             };
-            let normal = self.input(part, "NORMAL").filter(|_| all_normals);
-            let uv = self.input(part, "TEXCOORD");
+            let normal = self.input(part, "NORMAL", None).filter(|_| all_normals);
+            let color = self.input(part, "COLOR", None);
             let most = part
                 .descendants()
                 .filter(|n| tag(n) == "input")
@@ -505,13 +558,14 @@ impl<'a, 'i> Reader<'a, 'i, '_> {
                 return Err(format!("an input's offset is over {MAX_INPUT_OFFSET}"));
             }
             let stride = most + 1;
-            let material = part.attribute("material").and_then(|symbol| {
-                binding
-                    .iter()
-                    .find(|(s, _)| s == symbol)
-                    .map(|(_, m)| *m)
-                    .unwrap_or_else(|| self.material(symbol).ok().flatten())
+            let bound = part
+                .attribute("material")
+                .and_then(|symbol| binding.iter().find(|(s, _, _)| s == symbol));
+            let material = part.attribute("material").and_then(|symbol| match bound {
+                Some((_, m, _)) => *m,
+                None => self.material(symbol).ok().flatten(),
             });
+            let uv = self.input(part, "TEXCOORD", bound.and_then(|b| b.2));
             let source = |n: Node<'a, 'i>, sources: &mut HashMap<NodeId, (Vec<f64>, usize)>| {
                 if let std::collections::hash_map::Entry::Vacant(e) = sources.entry(n.id()) {
                     e.insert(read_source(n)?);
@@ -523,6 +577,9 @@ impl<'a, 'i> Reader<'a, 'i, '_> {
                 source(n, &mut sources)?;
             }
             if let Some((n, _)) = uv {
+                source(n, &mut sources)?;
+            }
+            if let Some((n, _)) = color {
                 source(n, &mut sources)?;
             }
             // Each polygon's loops as corner tuples.
@@ -550,11 +607,15 @@ impl<'a, 'i> Reader<'a, 'i, '_> {
                         };
                         let n = normal.and_then(|n| pick(n, 3));
                         let t = uv.and_then(|t| pick(t, 2));
+                        let k = color.and_then(|c| pick(c, 3));
                         if normal.is_some() && n.is_none() {
                             bad = true;
                             break;
                         }
-                        let key = (pi, n.as_ref().map(|n| n.0), t.as_ref().map(|t| t.0));
+                        let slot = |src: Option<(Node, usize)>, v: &Option<(usize, Vec<f64>)>| {
+                            Some((src?.0.id(), v.as_ref()?.0))
+                        };
+                        let key = (pi, slot(normal, &n), slot(uv, &t), slot(color, &k));
                         let id = match point_of.get(&key) {
                             Some(&id) => id,
                             None => {
@@ -570,6 +631,17 @@ impl<'a, 'i> Reader<'a, 'i, '_> {
                                     out.uvs.push(
                                         t.map_or(DVec2::ZERO, |(_, t)| DVec2::new(t[0], t[1])),
                                     );
+                                }
+                                if any_colors {
+                                    out.colors.push(k.map_or([1.0; 3], |(_, c)| {
+                                        [c[0], c[1], c[2]].map(|x| {
+                                            if self.linear_colors {
+                                                x.clamp(0.0, 1.0)
+                                            } else {
+                                                srgb_to_linear(x)
+                                            }
+                                        })
+                                    }));
                                 }
                                 point_of.insert(key, out.points.len() - 1);
                                 out.points.len() - 1
@@ -602,9 +674,15 @@ impl<'a, 'i> Reader<'a, 'i, '_> {
     }
 
     /// A primitive's input of `semantic` (VERTEX: the position source the `<vertices>` name),
-    /// as its source element and offset; for TEXCOORD the lowest set. A NORMAL or TEXCOORD
+    /// as its source element and offset; for TEXCOORD and COLOR the `set` asked for, else the
+    /// lowest. A NORMAL or TEXCOORD
     /// given in `<vertices>` counts with the VERTEX offset.
-    fn input(&self, part: Node<'a, 'i>, semantic: &str) -> Option<(Node<'a, 'i>, usize)> {
+    fn input(
+        &self,
+        part: Node<'a, 'i>,
+        semantic: &str,
+        set: Option<u32>,
+    ) -> Option<(Node<'a, 'i>, usize)> {
         let inputs: Vec<Node> = children(part, "input").collect();
         let offset_of = |n: &Node| {
             n.attribute("offset")
@@ -624,19 +702,34 @@ impl<'a, 'i> Reader<'a, 'i, '_> {
         match semantic {
             "VERTEX" => via_vertices("POSITION"),
             _ => {
-                let direct = inputs
-                    .iter()
-                    .filter(|n| n.attribute("semantic") == Some(semantic))
-                    .min_by_key(|n| {
-                        n.attribute("set")
-                            .and_then(|s| s.parse::<u32>().ok())
-                            .unwrap_or(0)
-                    })
+                let set_of = |n: &Node| {
+                    n.attribute("set")
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .unwrap_or(0)
+                };
+                let named = || {
+                    inputs
+                        .iter()
+                        .filter(|n| n.attribute("semantic") == Some(semantic))
+                };
+                // The set asked for if there is one, else the lowest.
+                let direct = named()
+                    .find(|n| set.is_some_and(|s| set_of(n) == s))
+                    .or_else(|| named().min_by_key(|n| set_of(n)))
                     .and_then(|n| Some((source(n)?, offset_of(n))));
                 direct.or_else(|| via_vertices(semantic))
             }
         }
     }
+}
+
+/// The texture channel (`texcoord`) an effect's diffuse texture names.
+fn diffuse_texcoord<'a>(effect: Node<'a, '_>) -> Option<&'a str> {
+    let technique = child(child(effect, "profile_COMMON")?, "technique")?;
+    let shading = technique
+        .children()
+        .find(|c| matches!(tag(c), "lambert" | "phong" | "blinn" | "constant"))?;
+    child(child(shading, "diffuse")?, "texture")?.attribute("texcoord")
 }
 
 /// A `<source>`'s numbers and the stride between its elements.

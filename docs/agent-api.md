@@ -2377,7 +2377,28 @@ read as a tree of nodes. What is carried:
   off. A glTF `KHR_texture_transform` on the base-color texture (offset, rotation, scale and
   its `texCoord`) moves the coordinates before that; one that shears or mirrors the image (a
   rotation with unequal scales, or a negative scale) is laid as the nearest turn and scale, with
-  a warning naming it.
+  a warning naming it (a rotation that is a quarter turn, or equal scales, is laid exactly).
+- Texture coordinate sets: each texture reads the set it names. glTF: the base-color texture's
+  `texCoord` (or the `KHR_texture_transform` one) picks `TEXCOORD_n`; a primitive without that
+  set gets no placement on its faces. COLLADA: the diffuse `<texture texcoord="CHANNEL">` is
+  looked up in the instance's `bind_vertex_input` (`input_set`); without a binding the lowest
+  set is read.
+- Vertex colors: glTF `COLOR_0` (float or normalized unsigned byte or short, VEC3 or VEC4,
+  linear) and COLLADA `COLOR` inputs. A face's color is the mean of its corners' colors in
+  linear light, times its material's color; it is painted by a copy of the material made once
+  per color and named `<material> #rrggbb` (`#rrggbb` without a material). Alpha is ignored.
+  A face whose material has a texture keeps the texture (counted in a warning). Past 512
+  distinct colors, each channel snaps to four levels. Faces merge only with neighbours of the
+  same color.
+- COLLADA color space: `diffuse` and `COLOR` values are sRGB unless the file's `<asset>` has a
+  `color_space` element reading `linear`, or its authoring tool starts with `Blender` (whose
+  exporter writes scene-linear values); a `color_space` of `sRGB` wins over the tool.
+- Compression: `EXT_meshopt_compression` (attributes, triangles, indices; octahedral,
+  quaternion and exponential filters; fallback buffers need no data) and
+  `KHR_draco_mesh_compression` (triangle lists, with the `attributes` unique ids; decoded
+  with `draco-core`, bounded by the point and triangle limits) are decoded. A stream that is
+  cut short, damaged, or decodes past `MAX_IMPORT_BYTES` is a `file` error naming the buffer
+  view or "Draco".
 - Side files: buffers and images are `data:` URIs, the `.glb`'s binary chunk, buffer views,
   or relative paths (percent-escapes decoded, `/` or `\` between folders) read from the file's
   folder or below it. A path that is absolute, climbs out with `..`, or is a URL (`http:`,
@@ -2390,10 +2411,10 @@ Not carried, each counted in `warnings`: animations, skins, cameras, lights, mor
 COLLADA controllers, lines and points ("2 animations were not imported", "1 set of lines was
 not imported"), and parts that could not be read. A glTF file that requires an extension
 other than `KHR_materials_emissive_strength`, `KHR_materials_unlit`, `KHR_materials_specular`,
-`KHR_texture_transform` and `KHR_mesh_quantization` (Draco or meshopt compression, for
-example) is a `file` error naming it, and so are sparse accessors, accessors or buffer views
-that run past their data, and broken XML or a DTD in a COLLADA file. Other texture coordinate sets than the material's, vertex colors, and the materials' other
-maps are not read.
+`KHR_texture_transform`, `KHR_mesh_quantization`, `EXT_meshopt_compression` and
+`KHR_draco_mesh_compression` (Basis textures, for example) is a `file` error naming it, and so
+are sparse accessors, accessors or buffer views
+that run past their data, and broken XML or a DTD in a COLLADA file. The materials' other maps (normal, emissive, metallic) are not read.
 
 The outcome's `import` reports what was made:
 
