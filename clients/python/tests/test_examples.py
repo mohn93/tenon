@@ -136,6 +136,26 @@ class ExampleTests(unittest.TestCase):
     def test_city(self):
         self.run_example("city", {"city.png": (320, 200)})
 
+    def test_barn(self):
+        self.run_example("barn", {n: (320, 200) for n in
+                                  ("barn.png", "barn-joint.png", "barn-section.png", "barn-sketch.png")})
+        self.assertTrue(os.path.isfile(os.path.join(self.out, "barn-cutlist.txt")))
+
+    def test_gearbox(self):
+        self.run_example("gearbox", {"gearbox.png": (320, 200), "gearbox-exploded.png": (320, 200),
+                                     "gearbox-mesh.png": (200, 200)})
+        with open(os.path.join(self.out, "gearbox-report.txt")) as f:
+            self.assertIn("ratio 13.0000", f.read())
+
+    def test_villa(self):
+        self.run_example("villa", {n: (320, 200) for n in
+                                   ("villa.png", "villa-dusk.png", "villa-section.png", "villa-plan.png")})
+        self.assertTrue(os.path.isfile(os.path.join(self.out, "villa.tnn")))
+
+    def test_robot_cell(self):
+        self.run_example("robot_cell", {n: (320, 200) for n in
+                                        ("robot.png", "robot-detail.png", "robot-section.png")})
+        self.assertTrue(os.path.isfile(os.path.join(self.out, "robot-report.txt")))
 
 if __name__ == "__main__":
     unittest.main()
