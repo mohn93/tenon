@@ -12,7 +12,7 @@
 
 **Tech Stack:** Rust 2024; egui, egui-winit, egui-wgpu, egui_kittest `=0.36.2`; wgpu `=30.0.1`; egui-phosphor `=0.14.0`; glam. No new dependencies.
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`, "Interface milestones", M11c. The previous plans, `docs/superpowers/plans/2026-10-17-m11b-layout.md` and `2026-10-16-m11a-design-foundation.md`, define what this one consumes: theme tokens and `theme::AXIS_*`, `ViewStyle`, the kittest harness, `ui::draw` and `View`. The design audits (`interaction.md` P1-P4 and P10, `visual.md` P4 and P7, in `/private/tmp/claude-501/-Users-mohn93-Desktop-side-projects-sketchup/7b020704-4344-4767-b2d2-50b34442d2ad/scratchpad/design/`) only explain where values came from; the executor reads the spec bullet and this plan.
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md`, "Interface milestones", M11c. The previous plans, `docs/superpowers/plans/2026-10-17-m11b-layout.md` and `2026-10-16-m11a-design-foundation.md`, define what this one consumes: theme tokens and `theme::AXIS_*`, `ViewStyle`, the kittest harness, `ui::draw` and `View`. The design audits (`interaction.md` P1-P4 and P10, `visual.md` P4 and P7, in `/private/tmp/claude-501/-Users-mohn93-Desktop-side-projects-sketchup/7b020704-4344-4767-b2d2-50b34442d2ad/scratchpad/design/`) only explain where values came from; the executor reads the spec bullet and this plan.
 
 ## Global Constraints
 
@@ -35,7 +35,7 @@
 - Agent API parity: hover and the snap label are in `editor` and in `tool_input` results; the gizmo maps to `standard_view` and `set_projection`. `docs/agent-api.md` is updated in Task 12.
 - Git: work on `dev`. Other agents may share the checkout, so run `git status` and `git diff` first and stage only the files you changed (never `git add -A` or `git add .`). Short plain commit messages, no attribution lines. Never push or merge.
 - Clippy denies dead code in the `app` binary: an item lands in the task that first uses it. Public items of the library crates (`tools`, `render`, `api`) may land before their first user.
-- Do not launch the app window in tests (no `cargo run` of the GUI). GPU tests in `crates/render` run on this Mac. Tests never write under `~/.sketchup-alt`.
+- Do not launch the app window in tests (no `cargo run` of the GUI). GPU tests in `crates/render` run on this Mac. Tests never write under `~/.tenon`.
 
 ## Review Focus
 

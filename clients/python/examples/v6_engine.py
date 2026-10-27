@@ -3,7 +3,7 @@
 
     python3 v6_engine.py [--socket PATH] [--out DIR] [--quick]
 
-Without ``--socket`` it starts a headless app (``SKETCHUP_ALT_APP`` or the repo's
+Without ``--socket`` it starts a headless app (``TENON_APP`` or the repo's
 ``target/{debug,release}/app``). It writes ``v6.png``, ``v6-front.png`` and
 ``v6-motion.png`` (the crank turned 60 degrees, solved on a copy) to ``--out``.
 ``v6_cycle.py`` builds the same engine and runs it through a whole 720 degree cycle.
@@ -52,7 +52,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from sketchup_alt import Model, Transform, session  # noqa: E402
+from tenon import Model, Transform, session  # noqa: E402
 
 # ---------------------------------------------------------------- dimensions (meters)
 
@@ -1050,7 +1050,7 @@ def build(m, quick=False, log=print):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--socket", help="socket of a running app (default: start a headless one)")
-    ap.add_argument("--app", help="app binary to start (default: SKETCHUP_ALT_APP or the repo's target/)")
+    ap.add_argument("--app", help="app binary to start (default: TENON_APP or the repo's target/)")
     ap.add_argument("--out", default=".", help="directory for the PNG files (default: here)")
     ap.add_argument("--quick", action="store_true", help="one cylinder per bank and small images (for tests)")
     ap.add_argument("--width", type=int, help="image width (default 1600, quick 320)")

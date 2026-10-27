@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=sketchup-alt
+Name=tenon
 Comment=3D modeling
 Exec=app %f
-Icon=sketchup-alt
+Icon=tenon
 Terminal=false
 Categories=Graphics;3DGraphics;

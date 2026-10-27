@@ -28,7 +28,7 @@
 
 **Tech Stack:** Rust 2024; glam 0.34.1 (`DAffine3`, already with the `serde` feature in the kernel); no dependency changes.
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`:
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md`:
 - section 1, "Groups and components";
 - section 5, Commands and Queries;
 - the Milestones list. Task 5 amends section 1 and the milestone lines: M5 becomes M5a (this plan), M5b (tools) and M5c (files).
@@ -4595,7 +4595,7 @@ git commit -m "Draw groups and components and the open context"
 ### Task 5: API test, agent docs, spec amendment, visual check
 
 **Files:**
-- Modify: `docs/agent-api.md`, `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`
+- Modify: `docs/agent-api.md`, `docs/superpowers/specs/2026-10-10-tenon-design.md`
 - Test: `crates/api/tests/dispatch.rs`
 
 **Interfaces:**
@@ -4857,12 +4857,12 @@ Apply to `docs/agent-api.md`:
  
 ~~~~
 
-Apply to `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`:
+Apply to `docs/superpowers/specs/2026-10-10-tenon-design.md`:
 ```diff
---- a/docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
-+++ b/docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
+--- a/docs/superpowers/specs/2026-10-10-tenon-design.md
++++ b/docs/superpowers/specs/2026-10-10-tenon-design.md
 @@ -1,8 +1,8 @@
- # SketchUp Alternative — Design
+ # Tenon — Design
  
  Date: 2026-10-10
 -Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope; M4c scope)
@@ -4933,7 +4933,7 @@ Expected: clean; 423 tests pass.
 ```bash
 git status
 git diff --stat
-git add crates/api/tests/dispatch.rs docs/agent-api.md docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
+git add crates/api/tests/dispatch.rs docs/agent-api.md docs/superpowers/specs/2026-10-10-tenon-design.md
 git commit -m "Document groups and components in the agent API"
 ```
 

@@ -21,7 +21,7 @@
 
 **Tech Stack:** Rust 2024; no dependency changes.
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`: section 1 (move/copy operations), section 2 (inference engine, VCB array syntax, Move/Copy tool), section 5 (agent control). Task 8 amends milestones M4b and M4c.
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md`: section 1 (move/copy operations), section 2 (inference engine, VCB array syntax, Move/Copy tool), section 5 (agent control). Task 8 amends milestones M4b and M4c.
 
 ## Global Constraints
 
@@ -2394,7 +2394,7 @@ git commit -m "Learn reference edges and lock directions with Shift and arrow ke
 ### Task 8: Agent docs, API test, spec amendment
 
 **Files:**
-- Modify: `crates/api/tests/dispatch.rs`, `docs/agent-api.md`, `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`
+- Modify: `crates/api/tests/dispatch.rs`, `docs/agent-api.md`, `docs/superpowers/specs/2026-10-10-tenon-design.md`
 
 - [ ] **Step 1: Write the test**
 
@@ -2463,7 +2463,7 @@ JSON object per line (UTF-8, `\n`-terminated).
 | `cargo run -p app -- --headless` | No window; socket at the default path (printed on stderr) |
 | `cargo run -p app -- --headless --socket PATH` | No window; socket at `PATH` |
 
-The default socket is `sketchup-alt-<pid>.sock` in the temp directory, or in `~/.sketchup-alt/`
+The default socket is `tenon-<pid>.sock` in the temp directory, or in `~/.tenon/`
 (created with mode 0700) when the temp directory path is too long for a Unix socket. The socket is
 readable only by the current user. Try it by hand with `nc -U PATH`. The window removes the
 socket file on a normal quit. The default name includes the process id, so a socket left behind
@@ -2575,7 +2575,7 @@ params) plus `-32000` command failed (`data` is `{kind, message, ids?}`), `-3200
 (`data` is `{index, error, completed, rolled_back}`) and `-32002` rendering unavailable.
 ````
 
-In `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`:
+In `docs/superpowers/specs/2026-10-10-tenon-design.md`:
 - `Status:` line: `Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope)`.
 - Replace the M4b and M4c lines with:
 ```markdown
@@ -2591,7 +2591,7 @@ Expected: no warnings; workspace total 339.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/api/tests/dispatch.rs docs/agent-api.md docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
+git add crates/api/tests/dispatch.rs docs/agent-api.md docs/superpowers/specs/2026-10-10-tenon-design.md
 git commit -m "Document move and copy for agents and amend the M4b/M4c scope"
 ```
 

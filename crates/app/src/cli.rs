@@ -63,10 +63,10 @@ pub fn default_endpoint() -> Endpoint {
 /// Default pipe: per-process.
 #[cfg(windows)]
 pub fn default_endpoint() -> Endpoint {
-    Endpoint::from_arg(&format!("sketchup-alt-{}", std::process::id()))
+    Endpoint::from_arg(&format!("tenon-{}", std::process::id()))
 }
 
-/// Returns the private directory when `socket` lives in the `~/.sketchup-alt` fallback.
+/// Returns the private directory when `socket` lives in the `~/.tenon` fallback.
 pub fn private_dir_for(socket: &Path) -> Option<&Path> {
     let parent = socket.parent()?;
     (parent.file_name()? == FALLBACK_DIR).then_some(parent)
@@ -269,7 +269,7 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("sketchup-alt-test-{}-{name}", std::process::id()))
+        std::env::temp_dir().join(format!("tenon-test-{}-{name}", std::process::id()))
     }
 
     #[test]
@@ -411,7 +411,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn the_default_endpoint_is_a_pipe_per_process() {
-        let name = format!(r"\\.\pipe\sketchup-alt-{}", std::process::id());
+        let name = format!(r"\\.\pipe\tenon-{}", std::process::id());
         assert_eq!(default_endpoint(), Endpoint::Pipe(name));
         assert_eq!(
             parse(args(r"--headless --socket main")).unwrap(),

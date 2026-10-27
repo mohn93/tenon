@@ -117,7 +117,7 @@ mod tests {
 
     fn folder(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "sketchup-alt-editor-library-{name}-{}",
+            "tenon-editor-library-{name}-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);

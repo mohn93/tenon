@@ -512,7 +512,7 @@ fn the_outcome_counts_triangles_and_faces_left_out() {
     });
     let skr = scratch("empty-face.skr");
     let document = json!({
-        "format": "sketchup-alt",
+        "format": "tenon",
         "schema_version": session::file::SCHEMA_VERSION,
         "camera": {"eye": [5, -5, 5], "target": [0, 0, 0], "fov_y_deg": 45},
         "model": model
@@ -561,7 +561,7 @@ fn a_model_whose_every_face_fails_to_triangulate_says_so() {
     });
     let skr = scratch("all-left-out.skr");
     let document = json!({
-        "format": "sketchup-alt",
+        "format": "tenon",
         "schema_version": session::file::SCHEMA_VERSION,
         "camera": {"eye": [5, -5, 5], "target": [0, 0, 0], "fov_y_deg": 45},
         "model": model

@@ -362,7 +362,7 @@ pub(crate) fn encode(
         xml,
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<model unit=\"millimeter\" \
          xml:lang=\"en-US\" xmlns=\"{MODEL_NS}\"{extension}>\n\
-         <metadata name=\"Application\">sketchup-alt</metadata>\n<resources>\n"
+         <metadata name=\"Application\">tenon</metadata>\n<resources>\n"
     );
     xml.push_str("<basematerials id=\"1\">\n");
     for m in &used {

@@ -1,4 +1,4 @@
-"""Python client for the sketchup-alt agent API (standard library only)."""
+"""Python client for the tenon agent API (standard library only)."""
 from .batch import Batch, Ref
 from .client import ApiError, Client
 from .model import Instance, Joint, Material, Model

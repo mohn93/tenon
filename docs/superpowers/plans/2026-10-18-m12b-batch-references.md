@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust 2024, serde_json =1.0.151, schemars =1.2.2. No new dependencies.
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`, the M12b bullet under "Agent integration milestones".
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md`, the M12b bullet under "Agent integration milestones".
 
 ## Global Constraints
 

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust 2024, glam (DAffine3/DMat3), egui 0.36.2, egui-phosphor =0.14.0. No new dependencies.
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`, the M13a1 bullet under "Modeling parity milestones".
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md`, the M13a1 bullet under "Modeling parity milestones".
 
 ## Global Constraints
 

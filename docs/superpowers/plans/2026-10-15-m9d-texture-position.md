@@ -12,7 +12,7 @@
 
 **Tech Stack:** Rust 2024; glam 0.34, wgpu 30, egui 0.36. No dependency changes.
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md` ("Post-v1 milestones", M9d; M9b for the projection it builds on).
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md` ("Post-v1 milestones", M9d; M9b for the projection it builds on).
 
 ## Global Constraints
 
@@ -1831,7 +1831,7 @@ index ebe5472..95643be 100644
 @@ -17,20 +17,23 @@ use crate::texture::{MAX_TEXTURE_BYTES, decode};
  
  /// The `format` every file records.
- pub const FORMAT: &str = "sketchup-alt";
+ pub const FORMAT: &str = "tenon";
 -/// The newest schema version this build reads, and the one it writes when a material glows or
 -/// the view is lit by night. Version 2 added guides, version 3 curves and soft edges, version 4
 -/// the camera's up direction and projection, version 5 materials, version 6 material opacity,
@@ -2946,8 +2946,8 @@ index 26b09df..6429b49 100644
  ### Files
  
  Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
--(`"sketchup-alt"`), `schema_version` (8 when a material glows or the view is lit by night, else 7 when a material has a
-+(`"sketchup-alt"`), `schema_version` (9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
+-(`"tenon"`), `schema_version` (8 when a material glows or the view is lit by night, else 7 when a material has a
++(`"tenon"`), `schema_version` (9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
  texture, else 6 when a material is see-through, else 5; a material's `opacity` is written only
 -when below 1 and its `emission` only when above 0, so a model whose materials are all opaque
 -and dark is saved exactly as before opacity existed and older builds still open it; version 7
@@ -2958,7 +2958,7 @@ index 26b09df..6429b49 100644
  and older files open without glow; version 6 and older files open without textures; version 5 files open with
  every material opaque, version 4 files, written before materials, open unpainted, version 3 files, written before camera projections, open in perspective, and
  versions 2 and 1, written before curves and guides, still open), the camera (eye, target, field
-@@ -489,8 +517,9 @@ reason (a missing file, not a sketchup-alt file, a missing or newer schema versi
+@@ -489,8 +517,9 @@ reason (a missing file, not a tenon file, a missing or newer schema versi
  over 256 MiB, an id of 2^53 or more or one number used as the id of two things, a transform that cannot be inverted, a coordinate beyond the
  +/-1e6 m limit, a curve whose edges branch, fall apart or are straight, a soft edge bounding
  fewer than two faces, a face or instance painted with a material the file lacks, a material

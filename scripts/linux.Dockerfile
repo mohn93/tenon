@@ -1,4 +1,4 @@
-# Linux build-and-test image for sketchup-alt. Used by scripts/linux-test.sh; mirrors the CI job.
+# Linux build-and-test image for tenon. Used by scripts/linux-test.sh; mirrors the CI job.
 FROM ubuntu:24.04
 
 ARG RUST_VERSION=1.99.0

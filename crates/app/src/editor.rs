@@ -5322,7 +5322,7 @@ mod tests {
     /// A path for a test file, unique to this process.
     fn temp_file(name: &str) -> std::path::PathBuf {
         let path =
-            std::env::temp_dir().join(format!("sketchup-alt-editor-{}-{name}", std::process::id()));
+            std::env::temp_dir().join(format!("tenon-editor-{}-{name}", std::process::id()));
         let _ = std::fs::remove_file(&path);
         path
     }
@@ -6177,7 +6177,7 @@ mod tests {
         e.add_material();
         let id = e.current_material().unwrap();
         let png = std::env::temp_dir().join(format!(
-            "sketchup-alt-editor-{}-red-blue.png",
+            "tenon-editor-{}-red-blue.png",
             std::process::id()
         ));
         std::fs::write(&png, RED_BLUE_PNG).unwrap();

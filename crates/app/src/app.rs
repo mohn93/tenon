@@ -128,7 +128,7 @@ fn fit_surface(width: u32, height: u32, max: u32) -> (u32, u32) {
 /// shown, so `resumed` shows it once the adapter exists.
 fn window_attributes() -> WindowAttributes {
     Window::default_attributes()
-        .with_title("sketchup-alt")
+        .with_title("tenon")
         .with_inner_size(LogicalSize::new(1280.0, 800.0))
         .with_min_inner_size(MIN_WINDOW)
         .with_visible(false)
@@ -2837,7 +2837,7 @@ impl State {
         // Where files have no path, the name the model was opened from or saved under.
         let kept = self.flows.kept_name().map(Path::new);
         let title = if self.features.read_only {
-            format!("{} - sketchup-alt", self.model_name)
+            format!("{} - tenon", self.model_name)
         } else {
             window_title(
                 doc.path()
@@ -3662,7 +3662,7 @@ fn view_input_reaches_editor(flying: bool, pointer_in_view: bool, sheet_open: bo
 
 /// A file dialog for `.skr` models.
 /// The window title: the file name alone on macOS, where the close button shows unsaved
-/// changes; elsewhere "house.skr* - sketchup-alt". A model opened from a SketchUp file and
+/// changes; elsewhere "house.skr* - tenon". A model opened from a SketchUp file and
 /// not saved yet is "desk.skp (imported)"; one opened from the Recover Models window
 /// (`recovered`: its name) "house (recovered)".
 fn window_title(
@@ -3681,7 +3681,7 @@ fn window_title(
         return name;
     }
     let star = if modified { "*" } else { "" };
-    format!("{name}{star} - sketchup-alt")
+    format!("{name}{star} - tenon")
 }
 
 /// The editor key for a key press. Characters from non-ASCII layouts (e.g. Arabic) fall back to
@@ -5194,7 +5194,7 @@ mod tests {
         assert!(sheet_applies(&sheet, &origin, &e).is_err());
         // An agent opens a file.
         let path =
-            std::env::temp_dir().join(format!("sketchup-alt-app-{}-sheet.skr", std::process::id()));
+            std::env::temp_dir().join(format!("tenon-app-{}-sheet.skr", std::process::id()));
         e.execute(session::Command::Save {
             path: Some(path.display().to_string()),
             overwrite: true,
@@ -5477,11 +5477,11 @@ mod tests {
         let house = Some(Path::new("/m/house.skr"));
         assert_eq!(
             window_title(None, None, None, false, false),
-            "Untitled.skr - sketchup-alt"
+            "Untitled.skr - tenon"
         );
         assert_eq!(
             window_title(house, None, None, true, false),
-            "house.skr* - sketchup-alt"
+            "house.skr* - tenon"
         );
         // macOS: the close button's dot shows unsaved changes.
         assert_eq!(window_title(house, None, None, true, true), "house.skr");
@@ -5497,7 +5497,7 @@ mod tests {
         );
         assert_eq!(
             window_title(None, desk, None, true, false),
-            "desk.skp (imported)* - sketchup-alt"
+            "desk.skp (imported)* - tenon"
         );
         // Saving gives it a path of its own (and the document forgets the SketchUp file).
         let saved = Some(Path::new("/m/desk.skr"));
@@ -5813,7 +5813,7 @@ mod tests {
     /// A fresh recovery folder for one test.
     fn recovery_folder(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "sketchup-alt-app-recovery-{}-{name}",
+            "tenon-app-recovery-{}-{name}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
@@ -6105,7 +6105,7 @@ mod tests {
         );
         assert_eq!(
             window_title(None, None, Some("Untitled"), true, false),
-            "Untitled (recovered)* - sketchup-alt"
+            "Untitled (recovered)* - tenon"
         );
         let saved = Some(Path::new("/m/house.skr"));
         assert_eq!(

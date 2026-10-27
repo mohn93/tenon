@@ -611,9 +611,9 @@ fn unsaved_sheet(ui: &mut Ui, prompt: &UnsavedPrompt, actions: &mut Vec<UiAction
 
 /// Help > About: the app's name, and what is off in this browser.
 fn about_sheet(ui: &mut Ui, shadows_off: bool, actions: &mut Vec<UiAction>) {
-    widgets::section_header(ui, "About sketchup-alt");
+    widgets::section_header(ui, "About tenon");
     ui.add_space(theme::GRID);
-    ui.label(format!("sketchup-alt {}", crate::update::version_label()));
+    ui.label(format!("tenon {}", crate::update::version_label()));
     if shadows_off {
         ui.label(SHADOWS_OFF);
     }

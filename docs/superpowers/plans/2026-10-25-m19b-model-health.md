@@ -43,7 +43,7 @@
 
 ### Task 2: model_health query and make_solid command
 
-**Files:** `crates/session/src/(new) document/health.rs`, `crates/session/src/query.rs`, `crates/session/src/command.rs`, `crates/session/src/document.rs`, `crates/session/src/lib.rs`, `crates/api/tests/integration/dispatch.rs`, `crates/session/tests/integration/(new) health.rs`, `docs/agent-api.md`, `clients/python/sketchup_alt/model.py` and its tests; tests: the query lists a broken box and not a solid one; make_solid fixes a component once for all its instances, reports, and undo restores the original in one step; a part with nothing fixable makes no undo step; loose ids are invalid input.
+**Files:** `crates/session/src/(new) document/health.rs`, `crates/session/src/query.rs`, `crates/session/src/command.rs`, `crates/session/src/document.rs`, `crates/session/src/lib.rs`, `crates/api/tests/integration/dispatch.rs`, `crates/session/tests/integration/(new) health.rs`, `docs/agent-api.md`, `clients/python/tenon/model.py` and its tests; tests: the query lists a broken box and not a solid one; make_solid fixes a component once for all its instances, reports, and undo restores the original in one step; a part with nothing fixable makes no undo step; loose ids are invalid input.
 
 - [ ] **Step 1-5:** tests, implement, gate, commit `git commit -m "model_health query and make_solid command"`.
 

@@ -357,7 +357,7 @@ fn y_up(p: DVec3) -> DVec3 {
 /// faces are painted, each material's faces follow a `usemtl` line and the material library is
 /// returned too, with the texture images it names (`<library stem>_<material>.png` or `.jpg`).
 fn obj(groups: &Groups, mtl_name: &str) -> Encoded {
-    let mut out = String::from("# sketchup-alt export: meters, Y up\n");
+    let mut out = String::from("# tenon export: meters, Y up\n");
     let painted = groups.painted();
     if painted {
         let _ = writeln!(out, "mtllib {mtl_name}");
@@ -424,7 +424,7 @@ fn obj(groups: &Groups, mtl_name: &str) -> Encoded {
     let mut images = Vec::new();
     let mtl = painted.then(|| {
         let stem = mtl_name.strip_suffix(".mtl").unwrap_or(mtl_name);
-        let mut mtl = String::from("# sketchup-alt materials: diffuse colors, linear\n");
+        let mut mtl = String::from("# tenon materials: diffuse colors, linear\n");
         for (g, name) in groups.groups.iter().zip(&names) {
             let [r, gr, b] = g.color.map(linear);
             let _ = writeln!(mtl, "newmtl {name}\nKd {r:.6} {gr:.6} {b:.6}");
@@ -463,7 +463,7 @@ fn stl(triangles: &[Triangle]) -> Result<Vec<u8>, String> {
     let count = stl_count(triangles.len())?;
     let mut out = Vec::with_capacity(84 + 50 * triangles.len());
     let mut header = [0u8; 80];
-    let title = b"sketchup-alt export, meters";
+    let title = b"tenon export, meters";
     header[..title.len()].copy_from_slice(title);
     out.extend_from_slice(&header);
     out.extend_from_slice(&count.to_le_bytes());
@@ -603,7 +603,7 @@ fn gltf_parts(groups: &Groups) -> (Vec<u8>, serde_json::Value) {
         start += n;
     }
     let mut doc = json!({
-        "asset": {"version": "2.0", "generator": "sketchup-alt"},
+        "asset": {"version": "2.0", "generator": "tenon"},
         "scene": 0,
         "scenes": [{"nodes": [0]}],
         "nodes": [{"mesh": 0, "name": "model"}],

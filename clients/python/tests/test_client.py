@@ -1,6 +1,6 @@
 """Tests for the client, batch builder and launcher, against a real headless app.
 
-They skip cleanly when no app binary is found (SKETCHUP_ALT_APP, then
+They skip cleanly when no app binary is found (TENON_APP, then
 target/debug/app and target/release/app under the repo root).
 """
 import copy
@@ -14,8 +14,8 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from sketchup_alt import ApiError, Client, Ref, find_app, launch_headless  # noqa: E402
-from sketchup_alt.batch import Ref as BatchRef  # noqa: E402
+from tenon import ApiError, Client, Ref, find_app, launch_headless  # noqa: E402
+from tenon.batch import Ref as BatchRef  # noqa: E402
 
 APP = find_app()
 
@@ -116,14 +116,14 @@ class ProtocolTests(unittest.TestCase):
             def command_schema(self):
                 return {"add_edge": {"fields": {"start", "end"}, "required": {"start", "end"}, "doc": ""}}
 
-        from sketchup_alt.batch import Batch
+        from tenon.batch import Batch
 
         b = Batch(Fake())
         with self.assertRaises(ValueError):
             b.add_edge(start=[float("nan"), 0, 0], end=[1, 0, 0])
 
 
-@unittest.skipIf(APP is None, "no sketchup-alt app binary found")
+@unittest.skipIf(APP is None, "no tenon app binary found")
 class AppTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -259,17 +259,17 @@ class AppTests(unittest.TestCase):
             c.close()
 
     def test_env_socket(self):
-        os.environ["SKETCHUP_ALT_SOCKET"] = self.app.socket_path
+        os.environ["TENON_SOCKET"] = self.app.socket_path
         try:
             c = Client()
             self.assertEqual(c.query("stats")["edges"], 0)
             c.close()
         finally:
-            del os.environ["SKETCHUP_ALT_SOCKET"]
+            del os.environ["TENON_SOCKET"]
 
 
 class LauncherTests(unittest.TestCase):
-    @unittest.skipIf(APP is None, "no sketchup-alt app binary found")
+    @unittest.skipIf(APP is None, "no tenon app binary found")
     def test_stop_removes_socket_dir(self):
         app = launch_headless(APP)
         path = app.socket_path
@@ -279,17 +279,17 @@ class LauncherTests(unittest.TestCase):
         app.stop()  # idempotent
 
     def test_find_app_env(self):
-        old = os.environ.get("SKETCHUP_ALT_APP")
-        os.environ["SKETCHUP_ALT_APP"] = sys.executable
+        old = os.environ.get("TENON_APP")
+        os.environ["TENON_APP"] = sys.executable
         try:
             self.assertEqual(find_app(), sys.executable)
-            os.environ["SKETCHUP_ALT_APP"] = "/nonexistent/app"
+            os.environ["TENON_APP"] = "/nonexistent/app"
             self.assertNotEqual(find_app(), "/nonexistent/app")
         finally:
             if old is None:
-                del os.environ["SKETCHUP_ALT_APP"]
+                del os.environ["TENON_APP"]
             else:
-                os.environ["SKETCHUP_ALT_APP"] = old
+                os.environ["TENON_APP"] = old
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # Roadmap
 
-The milestones left to build the v1 in the spec (`specs/2026-10-10-sketchup-alt-design.md`), in order. The autonomous loop works through them top to bottom. For each one it:
+The milestones left to build the v1 in the spec (`specs/2026-10-10-tenon-design.md`), in order. The autonomous loop works through them top to bottom. For each one it:
 1. scopes it in the spec (amending the milestone list);
 2. writes a plan with superpowers:writing-plans, verifying the code in a scratch copy;
 3. executes the plan with superpowers:subagent-driven-development (a task review after each task and a final review);

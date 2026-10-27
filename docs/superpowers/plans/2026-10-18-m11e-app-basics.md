@@ -28,7 +28,7 @@
 
 **Tech Stack:** Rust 2024; egui, egui-winit, egui-wgpu, egui_kittest `=0.36.2`; wgpu `=30.0.1`; egui-phosphor `=0.14.0`; muda `=0.21.2`; rfd `=0.17.2`; winit `=0.30.13`. One new feature flag, egui-winit's `accesskit`, and no new direct dependency.
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`, "Interface milestones", M11e (and M11b's note that Settings..., Open Recent, Rename Component..., Purge Unused and Field of View... wait for M11e).
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md`, "Interface milestones", M11e (and M11b's note that Settings..., Open Recent, Rename Component..., Purge Unused and Field of View... wait for M11e).
 
 The previous plans define what this one consumes:
 - `docs/superpowers/plans/2026-10-17-m11d-interaction.md`: `Prefs::recent`, `prefs::remember_recent`, `UiAction::OpenRecent`, the start card.
@@ -76,7 +76,7 @@ The design audits (`ia.md` F4, F6, F9 and P4, P7; `engineering.md` items 5 and E
   - `ui::draw` appends actions on every pass, so anything applied from an action must be harmless twice. Each confirm action takes the open sheet (`State::sheet.take()`), so a second copy finds none and does nothing.
 - Agent API parity: rename and purge are `rename_definition` and `purge_definitions`. Import options are `import`'s `scale`, `up`, `as` and `merge_coplanar`. Field of view is `set_camera` `fov_y_deg`. Settings, recent files, the sheets and the title are window chrome. `docs/agent-api.md` is updated in Task 10.
 - The renderer (`crates/render`) is not touched. CLASSIC renders stay byte-identical. Task 11 checks that `git diff --stat <base>..HEAD -- crates/render` is empty. Only if it is not does Task 11 run the two-worktree golden `cmp`.
-- Prefs are window chrome. The API and headless mode never read or write them, and tests never write under `~/.sketchup-alt` (they use `std::env::temp_dir()` folders, as `prefs.rs`'s tests do).
+- Prefs are window chrome. The API and headless mode never read or write them, and tests never write under `~/.tenon` (they use `std::env::temp_dir()` folders, as `prefs.rs`'s tests do).
 - Do not launch the app window in tests (no `cargo run` of the GUI). rfd dialogs and the native menu cannot be driven in tests: their logic is pure functions, tested on their own.
 - Git:
   - Work on `dev`. Other agents may share the checkout, so run `git status` and `git diff` first and stage only the files you changed. Never `git add -A` or `git add .`.
@@ -129,7 +129,7 @@ The design audits (`ia.md` F4, F6, F9 and P4, P7; `engineering.md` items 5 and E
   - Answers: `Custom("Save")` and `Yes` save; `Custom("Don't Save")` and `No` discard; anything else (`Custom("Cancel")`, `Cancel`, a dismissed alert) cancels.
 - **Window title.**
   - macOS: the title is `file_name(path)` alone ("house.skr", "Untitled.skr"). `WindowExtMacOS::set_document_edited(modified)` shows the edited dot. It exists in winit 0.30.13 (`src/platform/macos.rs`).
-  - Other systems keep `"house.skr* - sketchup-alt"`.
+  - Other systems keep `"house.skr* - tenon"`.
   - Both are set only when they change: `State::title` holds the last title, and a new `State::edited` the last edited flag.
 - **Open Recent.**
   - File menu: New, Open..., Open Recent ▸, Save, Save As..., then as before.
@@ -182,7 +182,7 @@ The design audits (`ia.md` F4, F6, F9 and P4, P7; `engineering.md` items 5 and E
   - `Editor::set_field_of_view(degrees)` runs `SetCamera { eye, target, fov_y_deg: Some(degrees), up: Some(camera.up), projection: None }` from the document camera. Passing `up` keeps a top or bottom view's screen direction.
 - **Settings.**
   - Opened by Settings... (`Bound::Settings`, Cmd+, on macOS, Ctrl+, elsewhere, `Key::Comma`).
-    - On macOS it is in the app menu: About sketchup-alt, a separator, Settings..., a separator, Hide, Hide Others, Show All, a separator, Quit sketchup-alt.
+    - On macOS it is in the app menu: About tenon, a separator, Settings..., a separator, Hide, Hide Others, Show All, a separator, Quit tenon.
     - Elsewhere it is the last Edit item, after a separator.
   - A non-modal `egui::Window` titled "Settings": not collapsible, not resizable, closable, centred over the window on first open, 380 pt wide. `UiAction::ShowSettings(bool)` opens and closes it.
   - Two selectable tab buttons at the top, "Appearance" and "Input". The tab lives in egui memory, default Appearance.
@@ -315,7 +315,7 @@ git commit -m "Session: purge reports the count and runs in one pass per level"
 
 ```rust
 /// The window title: the file name alone on macOS, where the close button shows unsaved
-/// changes; elsewhere "house.skr* - sketchup-alt".
+/// changes; elsewhere "house.skr* - tenon".
 fn window_title(path: Option<&Path>, modified: bool, mac: bool) -> String;
 /// `Do you want to save changes to "house.skr"?`
 fn unsaved_question(path: Option<&Path>) -> String;
@@ -328,8 +328,8 @@ fn unsaved_choice(answer: &rfd::MessageDialogResult) -> UnsavedChoice;
 - [ ] **Step 1: Write the failing tests** (`app.rs` tests)
 
 - `titles_name_the_file_and_mark_unsaved_changes` (rewritten, so the count stays):
-  - `window_title(None, false, false) == "Untitled.skr - sketchup-alt"`.
-  - `window_title(Some("/m/house.skr"), true, false) == "house.skr* - sketchup-alt"`.
+  - `window_title(None, false, false) == "Untitled.skr - tenon"`.
+  - `window_title(Some("/m/house.skr"), true, false) == "house.skr* - tenon"`.
   - `window_title(Some("/m/house.skr"), true, true) == "house.skr"`.
   - `window_title(None, true, true) == "Untitled.skr"`.
 - `the_unsaved_question_names_the_file`:
@@ -827,7 +827,7 @@ fn min_window_size(scale: UiScale) -> LogicalSize<f64>;
 
 `ui/tests/menus.rs`:
 - `settings_is_in_the_app_menu_or_ends_edit`:
-  - `menu_bar(.., true)`'s first menu has "Settings..." before "Quit sketchup-alt".
+  - `menu_bar(.., true)`'s first menu has "Settings..." before "Quit tenon".
   - `menu_bar(.., false)`'s Edit ends with a separator, then "Settings...". It reports `ShowSettings(true)` and shows "Ctrl+," off macOS (check with `text_for(false)`).
 - `every_cmd_chord_is_a_native_menu_accelerator` covers Settings.
 
@@ -858,7 +858,7 @@ Expected: compile errors.
 - `shortcuts::command(letter, ..)` maps ',' to `Key::Comma` and letters to `Key::Letter`. `Chord::text_for` shows "," for Comma.
 - `native_menu::accelerator` maps `Key::Comma` with Cmd to `Code::Comma`.
 - `NativeMenu::new` builds the app menu in the Spec notes' order: About, a separator, the first table entry (Settings...), a separator, Hide, Hide Others, Show All, a separator, the remaining entries (Quit).
-- The app menu's table entries become `[Settings..., Quit sketchup-alt]`. Off macOS, Edit gets a separator and Settings... at its end.
+- The app menu's table entries become `[Settings..., Quit tenon]`. Off macOS, Edit gets a separator and Settings... at its end.
 - `ui::settings::settings_window`: as in the Spec notes. The tab buttons are `Button::selectable` named "Appearance" and "Input". The scale and theme buttons are selectable, named by their labels.
 - In `ui::draw`, call it before the sheet when `view.settings` is Some.
 
@@ -1073,7 +1073,7 @@ git commit -m "Accessibility: AccessKit adapter on screen reader request, every 
   - Import row: "File > Import... (Cmd+I) and its options sheet (units, up axis, import as, merge coplanar faces)": `import` (`scale`, `up`, `as`, `merge_coplanar`); `set_import_units`. Drop "File > Import Units".
   - Group row: Make Component... (Shift+G, asks for a name): `make_component` (`name`). New row: Group > Rename Component... (F2), Entity Info's Name field: `rename_definition` (the instance's `definition` from `entity`). New row: Group > Purge Unused: `purge_definitions` (`purged`).
   - Camera row: add Field of View...: `set_camera` (`fov_y_deg`, with the current `eye` and `target`).
-  - Theme row becomes: Settings (Cmd+,): Appearance (theme, UI scale) and Input (trackpad scroll); View > Theme. None: window chrome, kept in `~/.sketchup-alt/prefs.json`.
+  - Theme row becomes: Settings (Cmd+,): Appearance (theme, UI scale) and Input (trackpad scroll); View > Theme. None: window chrome, kept in `~/.tenon/prefs.json`.
   - Title row: "The window's title (the file name; the edited dot on macOS, `*` elsewhere)": `file`.
 - **Chrome paragraph:** add the UI scale and trackpad setting, the sheets and the Settings window, and VoiceOver (AccessKit) reading the window.
 

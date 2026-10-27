@@ -8,9 +8,9 @@ import time
 
 
 def find_app():
-    """Path of the app binary, or None: ``$SKETCHUP_ALT_APP``, then
+    """Path of the app binary, or None: ``$TENON_APP``, then
     ``target/debug/app`` and ``target/release/app`` under the repo root."""
-    env = os.environ.get("SKETCHUP_ALT_APP")
+    env = os.environ.get("TENON_APP")
     if env and os.path.isfile(env):
         return env
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -86,13 +86,13 @@ def launch_headless(app=None, *args, startup_timeout=30):
     accepts connections. ``app`` defaults to ``find_app()``."""
     app = app or find_app()
     if app is None:
-        raise FileNotFoundError("no app binary: set SKETCHUP_ALT_APP or run `cargo build -p app`")
+        raise FileNotFoundError("no app binary: set TENON_APP or run `cargo build -p app`")
     tmpdir = tempfile.mkdtemp(prefix="skalt")
     if sys.platform != "win32" and len(os.path.join(tmpdir, "api.sock").encode()) > 100:
         shutil.rmtree(tmpdir, ignore_errors=True)  # too long for a Unix socket path
         tmpdir = tempfile.mkdtemp(prefix="skalt", dir="/tmp")
     if sys.platform == "win32":
-        sock = "sketchup-alt-py-%d-%s" % (os.getpid(), os.path.basename(tmpdir))
+        sock = "tenon-py-%d-%s" % (os.getpid(), os.path.basename(tmpdir))
     else:
         sock = os.path.join(tmpdir, "api.sock")
     errfile = os.path.join(tmpdir, "stderr.log")

@@ -923,7 +923,7 @@ mod tests {
 
     fn recovery_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "sketchup-alt-recovery-{}-{name}",
+            "tenon-recovery-{}-{name}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1137,7 +1137,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn the_sketchup_alt_folder_is_made_private_with_the_recovery_folder_in_it() {
+    fn the_tenon_folder_is_made_private_with_the_recovery_folder_in_it() {
         let base = recovery_dir("home");
         let dir = base.join(crate::cli::FALLBACK_DIR).join("recovery");
         std::fs::create_dir_all(&base).unwrap();
@@ -1218,8 +1218,8 @@ mod tests {
             std::process::id(),
         )
         .unwrap();
-        assert_eq!(found.prefs, roaming.join("sketchup-alt").join("prefs.json"));
-        assert_eq!(found.recovery, local.join("sketchup-alt").join("recovery"));
+        assert_eq!(found.prefs, roaming.join("tenon").join("prefs.json"));
+        assert_eq!(found.recovery, local.join("tenon").join("recovery"));
         // Preferences: the folder and the file are the user's only.
         let prefs = crate::prefs::Prefs {
             recent: vec![base.join("house.skr")],

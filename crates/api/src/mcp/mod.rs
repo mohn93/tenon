@@ -121,7 +121,7 @@ impl Server {
                 Ok(json!({
                     "protocolVersion": version,
                     "capabilities": {"tools": {"listChanged": false}},
-                    "serverInfo": {"name": "sketchup-alt", "version": env!("CARGO_PKG_VERSION")},
+                    "serverInfo": {"name": "tenon", "version": env!("CARGO_PKG_VERSION")},
                     "instructions": INSTRUCTIONS,
                 }))
             }

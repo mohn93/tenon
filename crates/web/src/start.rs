@@ -25,7 +25,7 @@ use crate::viewer::{self, Start, try_both};
 pub fn start() {
     // Without a panic hook a panic is an "unreachable" trap with no message.
     std::panic::set_hook(Box::new(|info| {
-        let text = format!("sketchup-alt crashed: {info}");
+        let text = format!("tenon crashed: {info}");
         web_sys::console::error_1(&text.clone().into());
         show_problem(&text);
     }));
@@ -255,7 +255,7 @@ async fn run() -> Result<(), String> {
     config.gpu = Some(context);
     config.window = Some(
         Window::default_attributes()
-            .with_title("sketchup-alt")
+            .with_title("tenon")
             .with_canvas(Some(canvas))
             .with_prevent_default(false),
     );

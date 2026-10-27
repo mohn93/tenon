@@ -1,6 +1,6 @@
 # Web build
 
-sketchup-alt runs in a browser tab: the `web` crate is the same window app (`app::App`) drawing
+tenon runs in a browser tab: the `web` crate is the same window app (`app::App`) drawing
 to a canvas through WebGPU, or WebGL2 where WebGPU is missing.
 
 ## Build
@@ -50,7 +50,7 @@ tested by hand (open, draw, save, reopen).
   binary, glTF, SketchUp 2017, SVG; the one used last is first), then the save picker or a
   download offers only that format. An OBJ with materials downloads its `.mtl` and textures
   beside it.
-- Preferences live in `localStorage` under `sketchup-alt-prefs` (the JSON of `prefs.json`).
+- Preferences live in `localStorage` under `tenon-prefs` (the JSON of `prefs.json`).
 - The unsaved-changes question is an in-app dialog. Help > About says what is off.
 - Cut, Copy and Paste of components between tabs go through text on the clipboard.
 - The canvas fills the tab and follows its size.
@@ -77,7 +77,7 @@ changes the model. Touch gestures (orbit, pan, pinch, tap, double tap) and the r
 `web` crate's `viewer` module holds the testable parts (fragment meaning, the 256 MiB cap, the
 messages), `load` the browser's fetch and history calls, `recent` the Recent list's logic over a
 `Storage` trait (the last 5 models, the 64 MiB limit, ages and sizes) and `idb` its IndexedDB
-storage (database `sketchup-alt-viewer`, stores `recent` and `recent-info`; web-sys features
+storage (database `tenon-viewer`, stores `recent` and `recent-info`; web-sys features
 `Idb*`). Keeping is opt-in per model ("Keep on this phone"). What is kept holds the share's key beside the encrypted blob so a kept model opens without its link (the page itself is still served by the computer, so Recent needs a sharing computer; see phone.md).
 
 ## What is off

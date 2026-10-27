@@ -197,13 +197,13 @@ fn files_that_cannot_be_opened_leave_the_model_alone() {
     )
     .unwrap_err();
     assert_eq!(kind, ErrorKind::File);
-    assert!(message.contains("not a sketchup-alt file"), "{message}");
+    assert!(message.contains("not a tenon file"), "{message}");
 
     let newer = scratch("newer.skr");
     let mut zip = zip::ZipWriter::new(std::fs::File::create(&newer).unwrap());
     zip.start_file("document.json", zip::write::SimpleFileOptions::default())
         .unwrap();
-    zip.write_all(br#"{"format": "sketchup-alt", "schema_version": 99}"#)
+    zip.write_all(br#"{"format": "tenon", "schema_version": 99}"#)
         .unwrap();
     zip.finish().unwrap();
     let (kind, message) = run(
@@ -392,9 +392,9 @@ fn a_header_is_read_from_a_document_object_only() {
     let listed = edited_file("listed.skr", |d| {
         *d = json!([d["format"].clone(), d["schema_version"].clone()]);
     });
-    open_fails(&listed, "not a sketchup-alt file");
+    open_fails(&listed, "not a tenon file");
     let unnamed = edited_file("format-null.skr", |d| d["format"] = Value::Null);
-    open_fails(&unnamed, "not a sketchup-alt file");
+    open_fails(&unnamed, "not a tenon file");
     let unversioned = edited_file("version-null.skr", |d| d["schema_version"] = Value::Null);
     open_fails(&unversioned, "schema version");
     let newer = edited_file("version-newer.skr", |d| {
@@ -583,9 +583,9 @@ fn skr_with(path: &Path, json: &str) {
 fn open_errors_do_not_quote_the_file() {
     let path = scratch("secret.skr");
     let cases = [
-        r#"{"format": "sketchup-alt", "schema_version": 9, "camera": "hunter2-SECRET"}"#,
-        r#"{"format": "sketchup-alt", "schema_version": 9, "hunter2-SECRET": 1}"#,
-        r#"{"format": "sketchup-alt", "schema_version": 9, "camera": {"eye": [hunter2-SECRET"#,
+        r#"{"format": "tenon", "schema_version": 9, "camera": "hunter2-SECRET"}"#,
+        r#"{"format": "tenon", "schema_version": 9, "hunter2-SECRET": 1}"#,
+        r#"{"format": "tenon", "schema_version": 9, "camera": {"eye": [hunter2-SECRET"#,
     ];
     for json in cases {
         skr_with(&path, json);

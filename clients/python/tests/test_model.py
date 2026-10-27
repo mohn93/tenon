@@ -9,7 +9,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from sketchup_alt import ApiError, Joint, Model, Transform, find_app, launch_headless  # noqa: E402
+from tenon import ApiError, Joint, Model, Transform, find_app, launch_headless  # noqa: E402
 
 APP = find_app()
 
@@ -72,7 +72,7 @@ class TransformTests(unittest.TestCase):
             Transform.look((0, 0, 0), (0, 0, 0))
 
 
-@unittest.skipIf(APP is None, "no sketchup-alt app binary found")
+@unittest.skipIf(APP is None, "no tenon app binary found")
 class ModelTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

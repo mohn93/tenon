@@ -31,7 +31,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
 sys.path.insert(0, HERE)
 
-from sketchup_alt import Model, session  # noqa: E402
+from tenon import Model, session  # noqa: E402
 
 import v6_engine  # noqa: E402
 from v6_engine import DECK, GASKET, X, add, cylinder_number, mul, sub  # noqa: E402
@@ -392,7 +392,7 @@ class Cycle:
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--socket", help="socket of a running app (default: start a headless one)")
-    ap.add_argument("--app", help="app binary to start (default: SKETCHUP_ALT_APP or the repo's target/)")
+    ap.add_argument("--app", help="app binary to start (default: TENON_APP or the repo's target/)")
     ap.add_argument("--out", default=".", help="directory for the frames, sheet, movie and report (default: here)")
     ap.add_argument("--frames", type=int, help="frames over the 720 degrees (default 72, quick 6)")
     ap.add_argument("--quick", action="store_true", help="one cylinder per bank, few frames, coarse checks (for tests)")

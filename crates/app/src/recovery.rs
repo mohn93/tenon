@@ -50,7 +50,7 @@ struct Sidecar {
 }
 
 /// Makes sure the recovery folder `dir` exists and is private, as the app's other private
-/// folders (0700, not a link; the `~/.sketchup-alt` fallback folder too, and on Linux and
+/// folders (0700, not a link; the `~/.tenon` fallback folder too, and on Linux and
 /// Windows missing parents are created).
 pub fn ensure_folder(dir: &Path) -> io::Result<()> {
     if let Some(parent) = crate::cli::private_dir_for(dir) {
@@ -433,7 +433,7 @@ pub fn list(dir: &Path, own: &Session, include_discarded: bool) -> Vec<Entry> {
 /// whose sidecar cannot be read, or whose model is missing, a link or open to other users, is
 /// listed with an `error` (it can only be discarded), unless its name says it belongs to a
 /// running session. Lock files of ended sessions with no entries seen are removed, and so are
-/// temporary files (`.sketchup-alt-*.partial`, `.session-*.locking`) a day old.
+/// temporary files (`.tenon-*.partial`, `.session-*.locking`) a day old.
 pub fn list_newest(dir: &Path, own: &Session, include_discarded: bool, max: usize) -> Listing {
     let Ok(read) = std::fs::read_dir(dir) else {
         return Listing::default();
@@ -580,9 +580,9 @@ pub fn list_newest(dir: &Path, own: &Session, include_discarded: bool, max: usiz
 }
 
 /// Whether `name` is a temporary file's that the app writes in the recovery folder: a write's
-/// `.sketchup-alt-<pid>-<n>.partial` or a starting session's `.session-<id>.locking`.
+/// `.tenon-<pid>-<n>.partial` or a starting session's `.session-<id>.locking`.
 fn is_temp_name(name: &str) -> bool {
-    (name.starts_with(".sketchup-alt-") && name.ends_with(".partial"))
+    (name.starts_with(".tenon-") && name.ends_with(".partial"))
         || (name.starts_with(".session-") && name.ends_with(".locking"))
 }
 
@@ -622,7 +622,7 @@ mod tests {
     /// A fresh private folder for one test.
     fn folder(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "sketchup-alt-recovery-test-{}-{name}",
+            "tenon-recovery-test-{}-{name}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
@@ -888,7 +888,7 @@ mod tests {
         assert_eq!(found.len(), 1);
         discard(&found[0]).unwrap();
         // A partial file is never an entry.
-        std::fs::write(dir.join(".sketchup-alt-1-0.partial"), b"x").unwrap();
+        std::fs::write(dir.join(".tenon-1-0.partial"), b"x").unwrap();
         assert!(list(&dir, &b, true).is_empty());
         drop(b);
         let _ = std::fs::remove_dir_all(&dir);
@@ -1133,9 +1133,9 @@ mod tests {
         let dir = folder("stale-temp");
         let b = Session::start(&dir).unwrap();
         let day = 24 * 60 * 60;
-        let stale_partial = dir.join(".sketchup-alt-9-1.partial");
+        let stale_partial = dir.join(".tenon-9-1.partial");
         let stale_locking = dir.join(".session-9-1.locking");
-        let fresh = dir.join(".sketchup-alt-9-2.partial");
+        let fresh = dir.join(".tenon-9-2.partial");
         let other = dir.join(".other-9.partial");
         for path in [&stale_partial, &stale_locking, &fresh, &other] {
             crate::prefs::create_private_file(path).unwrap();

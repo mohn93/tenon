@@ -16,7 +16,7 @@ pub const KEEP: usize = 5;
 pub const MAX_KEPT_BYTES: usize = 64 * 1024 * 1024;
 
 /// The IndexedDB database the viewer keeps its models in.
-pub const DB_NAME: &str = "sketchup-alt-viewer";
+pub const DB_NAME: &str = "tenon-viewer";
 
 /// The object store holding each kept model: `{ id, key, name, time, blob }`.
 pub const STORE: &str = "recent";

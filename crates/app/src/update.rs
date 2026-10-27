@@ -8,7 +8,7 @@
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The short git hash of the commit this program was built from, when the build knew it.
-pub const GIT_HASH: Option<&str> = option_env!("SKETCHUP_ALT_GIT_HASH");
+pub const GIT_HASH: Option<&str> = option_env!("TENON_GIT_HASH");
 
 /// A release's page: this and its tag. A link of any other shape is not trusted.
 const RELEASE_TAG_PREFIX: &str = "https://github.com/mohn93/sketchup/releases/tag/";
@@ -172,7 +172,7 @@ pub fn check() -> Outcome {
         .header("Accept", "application/vnd.github+json")
         .header(
             "User-Agent",
-            concat!("sketchup-alt/", env!("CARGO_PKG_VERSION")),
+            concat!("tenon/", env!("CARGO_PKG_VERSION")),
         )
         .call();
     let mut response = match response {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Builds target/package/macos/sketchup-alt-<version>-macos-<arch>.dmg: the release build in a
-# sketchup-alt.app bundle, ad-hoc signed (`codesign -s -`), in a disk image. It opens no window
+# Builds target/package/macos/tenon-<version>-macos-<arch>.dmg: the release build in a
+# tenon.app bundle, ad-hoc signed (`codesign -s -`), in a disk image. It opens no window
 # and installs nothing outside target/. Developer ID signing and notarization are not done here
 # (docs/packaging.md says what they need).
 #
@@ -19,10 +19,10 @@ export MACOSX_DEPLOYMENT_TARGET="$min_macos"
 version="$(awk -F'"' '/^version *=/ { print $2; exit }' Cargo.toml)"
 target_dir="${CARGO_TARGET_DIR:-$root/target}"
 out="$target_dir/package/macos"
-app="$out/sketchup-alt.app"
+app="$out/tenon.app"
 
-# The commit About shows; a source tarball without git sets SKETCHUP_ALT_GIT_HASH itself.
-export SKETCHUP_ALT_GIT_HASH="${SKETCHUP_ALT_GIT_HASH:-$(git rev-parse --short=7 HEAD 2>/dev/null || true)}"
+# The commit About shows; a source tarball without git sets TENON_GIT_HASH itself.
+export TENON_GIT_HASH="${TENON_GIT_HASH:-$(git rev-parse --short=7 HEAD 2>/dev/null || true)}"
 
 rm -rf "$out"
 mkdir -p "$out"
@@ -61,13 +61,13 @@ stage="$out/dmg"
 mkdir -p "$stage"
 cp -R "$app" "$stage/"
 ln -s /Applications "$stage/Applications"
-dmg="$out/sketchup-alt-$version-macos-$arch_name.dmg"
+dmg="$out/tenon-$version-macos-$arch_name.dmg"
 # hdiutil sizes the image itself, but on a busy runner it has failed with "No space left on
 # device" or "Resource busy"; so the size is given (the folder's size plus 20% and 20 MB) and a
 # failed attempt is retried after a pause, with a leftover mount of the volume detached first.
 stage_kb="$(du -sk "$stage" | awk '{ print $1 }')"
 size_mb=$(( stage_kb / 1024 * 12 / 10 + 20 ))
-volname="sketchup-alt $version"
+volname="tenon $version"
 attempt=1
 until hdiutil create -volname "$volname" -srcfolder "$stage" -size "${size_mb}m" -ov -format UDZO "$dmg"; do
     if [ "$attempt" -ge 4 ]; then

@@ -1,4 +1,4 @@
-//! Window preferences kept between sessions in `~/.sketchup-alt/prefs.json`. They are window
+//! Window preferences kept between sessions in `~/.tenon/prefs.json`. They are window
 //! chrome: never part of a model, never read or written by the API or in headless mode.
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -339,7 +339,7 @@ mod tests {
     /// A fresh folder standing in for HOME.
     fn home(name: &str) -> PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("sketchup-alt-prefs-{}-{name}", std::process::id()));
+            std::env::temp_dir().join(format!("tenon-prefs-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -350,7 +350,7 @@ mod tests {
     fn old_prefs_are_read_once() {
         let home = home("legacy");
         let old = path_in(&home);
-        let new = home.join(".config/sketchup-alt/prefs.json");
+        let new = home.join(".config/tenon/prefs.json");
         std::fs::create_dir_all(home.join(".config")).unwrap();
         let file = PrefsFile {
             path: new.clone(),

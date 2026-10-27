@@ -18,7 +18,7 @@ use crate::document::MAX_COORDINATE;
 use crate::file::{self, ViewLook};
 
 /// The first line of every clip text.
-pub const HEADER: &str = "sketchup-alt clip 1";
+pub const HEADER: &str = "tenon clip 1";
 /// The most bytes a clip's archive may hold once its base64 is decoded.
 pub const MAX_CLIP_BYTES: usize = 64 * 1024 * 1024;
 /// The most segments [`outline`] returns.
@@ -102,7 +102,7 @@ pub(crate) fn decode(text: &str) -> Result<Clip, CommandError> {
             rest.strip_prefix('\n')
                 .or_else(|| rest.strip_prefix("\r\n"))
         })
-        .ok_or_else(|| invalid("not a sketchup-alt clip".into()))?;
+        .ok_or_else(|| invalid("not a tenon clip".into()))?;
     // Base64 takes 4 characters for 3 bytes; line breaks a clipboard may add are allowed.
     let encoded_limit = MAX_CLIP_BYTES.div_ceil(3) * 4;
     let too_large = || {

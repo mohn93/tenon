@@ -36,24 +36,24 @@ window warns, keeps no preferences and no recovery files.
 
 | What | Location |
 |---|---|
-| Preferences | `$XDG_CONFIG_HOME/sketchup-alt/prefs.json` (default `~/.config/sketchup-alt/prefs.json`) |
-| Recovery files (autosaves, work an agent discards, their `.json` notes and the open windows' `session-*.lock` files) | `$XDG_STATE_HOME/sketchup-alt/recovery/` (default `~/.local/state/sketchup-alt/recovery/`) |
-| Default agent socket | `sketchup-alt-<pid>.sock` in `$XDG_RUNTIME_DIR`, else in `$TMPDIR`, else in `~/.sketchup-alt/` (see below) |
+| Preferences | `$XDG_CONFIG_HOME/tenon/prefs.json` (default `~/.config/tenon/prefs.json`) |
+| Recovery files (autosaves, work an agent discards, their `.json` notes and the open windows' `session-*.lock` files) | `$XDG_STATE_HOME/tenon/recovery/` (default `~/.local/state/tenon/recovery/`) |
+| Default agent socket | `tenon-<pid>.sock` in `$XDG_RUNTIME_DIR`, else in `$TMPDIR`, else in `~/.tenon/` (see below) |
 
 Folders the app creates are mode 0700 and files 0600. File > Recover Models... lists only notes
 and copies that are regular 0600 files; links and files others can read are skipped or shown as
 unusable. The runtime folder is used only when it is
 a real folder you own that group and others cannot write to, and the socket path fits the Unix
 limit. Otherwise the socket goes in `$TMPDIR` when that is set to a folder other than `/tmp`
-and short enough for a socket path, and failing that in `~/.sketchup-alt/` (created 0700).
+and short enough for a socket path, and failing that in `~/.tenon/` (created 0700).
 
-Earlier versions kept everything in `~/.sketchup-alt`. If the new preferences file does not exist
-yet, the old `~/.sketchup-alt/prefs.json` is read on every start until the first change is saved;
+Earlier versions kept everything in `~/.tenon`. If the new preferences file does not exist
+yet, the old `~/.tenon/prefs.json` is read on every start until the first change is saved;
 that save writes the new location, which is read from then on, and the old file is left alone
 (delete it when you like). Recovery files already in
-`~/.sketchup-alt/recovery` are not moved.
+`~/.tenon/recovery` are not moved.
 
-macOS keeps `~/.sketchup-alt/prefs.json`, `~/.sketchup-alt/recovery` and the socket in the temp
+macOS keeps `~/.tenon/prefs.json`, `~/.tenon/recovery` and the socket in the temp
 folder, as before.
 
 ## Keys
@@ -82,7 +82,7 @@ software adapter they skip with a printed note instead of comparing, and so does
 
 `scripts/linux-test.sh` runs the same three commands in an Ubuntu 24.04 Docker container, using
 the Rust version of your local `rustc`. It keeps build output in the Docker volume
-`sketchup-alt-linux-target` (not the repo's `target/`) and can be run repeatedly. It is not
+`tenon-linux-target` (not the repo's `target/`) and can be run repeatedly. It is not
 verified yet (CI is the reference and the script mirrors it).
 
 ```bash

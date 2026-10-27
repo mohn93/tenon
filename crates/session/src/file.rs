@@ -22,7 +22,7 @@ use crate::texture::{MAX_TEXTURE_BYTES, check_total_pixels, decode, dimensions};
 use crate::units::{StoredUnits, Units};
 
 /// The `format` every file records.
-pub const FORMAT: &str = "sketchup-alt";
+pub const FORMAT: &str = "tenon";
 /// The newest schema version this build reads.
 /// Version 2 added guides, version 3 curves and soft edges, version 4 the camera's up direction
 /// and projection, version 5 materials, version 6 material opacity, version 7 textures,
@@ -230,14 +230,14 @@ const MAX_LISTED_ENTRIES: usize = 10_000;
 /// the file is not an archive holding a document, or holds more than 10,000 entries.
 pub(crate) fn read_entry(path: &Path, name: &str, limit: u64) -> Result<Option<Vec<u8>>, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    let mut zip = zip::ZipArchive::new(file).map_err(|_| "not a sketchup-alt file".to_string())?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|_| "not a tenon file".to_string())?;
     if zip.len() > MAX_LISTED_ENTRIES {
         return Err(format!(
             "the file holds more than {MAX_LISTED_ENTRIES} entries"
         ));
     }
     if zip.by_name(ENTRY).is_err() {
-        return Err("not a sketchup-alt file".into());
+        return Err("not a tenon file".into());
     }
     match zip.by_name(name) {
         Ok(entry) if entry.size() <= limit => Ok(read_limited(entry, limit, name).ok()),
@@ -473,7 +473,7 @@ pub(crate) enum Access {
 }
 
 /// Writes `bytes` to `path`, replacing the file there only once they are all on disk. The
-/// bytes go first to a new hidden file beside it (`.sketchup-alt-<pid>-<n>.partial`), created
+/// bytes go first to a new hidden file beside it (`.tenon-<pid>-<n>.partial`), created
 /// only where nothing is, so they never go through a link and no file of the user's is
 /// touched; it is renamed over `path` once written, or removed if the write fails.
 pub(crate) fn replace_file(path: &Path, bytes: &[u8], access: Access) -> Result<(), String> {
@@ -484,7 +484,7 @@ pub(crate) fn replace_file(path: &Path, bytes: &[u8], access: Access) -> Result<
     };
     let (partial, mut file) = loop {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let partial = dir.join(format!(".sketchup-alt-{}-{n}.partial", std::process::id()));
+        let partial = dir.join(format!(".tenon-{}-{n}.partial", std::process::id()));
         match create_new(&partial, access) {
             Ok(file) => break (partial, file),
             // Another file (a process's that reused this id, say) has the name.
@@ -582,10 +582,10 @@ fn read_archive<R: Read + Seek>(
     extra: &[(&str, u64)],
 ) -> Result<(Opened, Vec<Vec<u8>>), String> {
     let mut zip =
-        zip::ZipArchive::new(reader).map_err(|_| "not a sketchup-alt file".to_string())?;
+        zip::ZipArchive::new(reader).map_err(|_| "not a tenon file".to_string())?;
     let entry = zip
         .by_name(document)
-        .map_err(|_| "not a sketchup-alt file".to_string())?;
+        .map_err(|_| "not a tenon file".to_string())?;
     let json = read_limited(entry, MAX_DOCUMENT_BYTES, "the document")?;
     // Check the header first, so a newer file gets a clear message rather than a field error.
     // Only its two fields are kept (the rest is skipped, not built); a document that is not
@@ -613,7 +613,7 @@ fn read_archive<R: Read + Seek>(
         }
     };
     if header.format != FORMAT {
-        return Err("not a sketchup-alt file".into());
+        return Err("not a tenon file".into());
     }
     let Some(version) = header.schema_version.as_u64().filter(|v| *v >= 1) else {
         return Err("the file has no valid schema version (a whole number from 1)".into());

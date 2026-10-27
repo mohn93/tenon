@@ -26,7 +26,7 @@
 
 **Tech Stack:** Rust 2024; no dependency changes.
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`:
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md`:
 - section 2 (v1 tools include Tape Measure, guides);
 - section 5 (commands).
 
@@ -2046,7 +2046,7 @@ Apply to `crates/session/src/file.rs`:
  use crate::document::MAX_COORDINATE;
  
  /// The `format` every file records.
- pub const FORMAT: &str = "sketchup-alt";
+ pub const FORMAT: &str = "tenon";
 -/// The schema version this build writes and the newest it reads.
 -pub const SCHEMA_VERSION: u32 = 1;
 +/// The schema version this build writes and the newest it reads. Version 2 added guides;
@@ -2289,8 +2289,8 @@ Apply to `docs/agent-api.md`:
  ### Files
  
  Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
--(`"sketchup-alt"`), `schema_version` (1), the camera and the model with every id.
-+(`"sketchup-alt"`), `schema_version` (2; version 1 files, written before guides, still open), the
+-(`"tenon"`), `schema_version` (1), the camera and the model with every id.
++(`"tenon"`), `schema_version` (2; version 1 files, written before guides, still open), the
 +camera and the model with every id.
  
  | Command | Effect |
@@ -3637,7 +3637,7 @@ git commit -m "Guides in the window: snaps, picking, box selection, dashed rende
 - Modify:
   - `crates/tools/src/tool.rs` (`ToolKind::TapeMeasure`, `ALL` has 9, label "Tape Measure", shortcut `t`), `crates/tools/src/lib.rs`
   - `crates/app/src/editor.rs` (Ctrl reaches the Tape Measure, `delete_guides()`), `ui.rs` (`UiAction::DeleteGuides`, `View.has_guides`, Edit menu; test screen 1280x800), `app.rs` (`has_guides`, the action, KeyT fallback)
-  - `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md` (status line, section 5 commands, M6c milestone line)
+  - `docs/superpowers/specs/2026-10-10-tenon-design.md` (status line, section 5 commands, M6c milestone line)
 - Test: test-module hunks of the new `tape.rs` (6), `editor.rs` (1), `ui.rs` (`the_edit_menu_deletes_guides`; existing `View` literals gain `has_guides`), `app.rs` (KeyT in `non_ascii_layouts_fall_back_to_the_physical_key`). `tool.rs`'s round-trip test covers the new kind.
 
 **Interfaces:**
@@ -4509,12 +4509,12 @@ Apply to `crates/app/src/app.rs`:
  }
 ```
 
-Apply to `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`:
+Apply to `docs/superpowers/specs/2026-10-10-tenon-design.md`:
 ```diff
---- a/docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
-+++ b/docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
+--- a/docs/superpowers/specs/2026-10-10-tenon-design.md
++++ b/docs/superpowers/specs/2026-10-10-tenon-design.md
 @@ -1,8 +1,8 @@
- # SketchUp Alternative — Design
+ # Tenon — Design
  
  Date: 2026-10-10
 -Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope; M4c scope; M5 split into M5a-c; M5b tools); 2026-10-12 (M5c files, M5d export, M6a circles, M6b rotate)
@@ -4563,7 +4563,7 @@ Expected: clean; 605 tests pass.
 ```bash
 git status
 git diff --stat
-git add crates/tools/src/tape.rs crates/tools/src/tool.rs crates/tools/src/lib.rs crates/app/src/editor.rs crates/app/src/ui.rs crates/app/src/app.rs docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
+git add crates/tools/src/tape.rs crates/tools/src/tool.rs crates/tools/src/lib.rs crates/app/src/editor.rs crates/app/src/ui.rs crates/app/src/app.rs docs/superpowers/specs/2026-10-10-tenon-design.md
 git commit -m "Tape Measure tool (t): guide points and parallel guide lines, typed distances, Ctrl measures only; Edit > Delete Guides"
 ```
 

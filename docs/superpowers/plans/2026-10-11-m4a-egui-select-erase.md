@@ -19,7 +19,7 @@
 
 **Tech Stack:** Rust 2024; new pins egui, egui-wgpu and egui-winit `=0.36.2`. They use wgpu 30 and winit 0.30, so the existing `wgpu =30.0.1` and `winit =0.30.13` pins are shared and no second copy is built.
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`: section 1 (erase), section 2 (Select and Erase tools), section 3 (selection highlight), section 4 (egui shell, input routing), section 5 (agent control). Milestone M4 is split into M4a/M4b/M4c in Task 8.
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md`: section 1 (erase), section 2 (Select and Erase tools), section 3 (selection highlight), section 4 (egui shell, input routing), section 5 (agent control). Milestone M4 is split into M4a/M4b/M4c in Task 8.
 
 ## Global Constraints
 
@@ -48,7 +48,7 @@
   - Shift toggles. Shift-clicking empty space leaves the selection alone.
 - **Erase tool:** clicking erases the edge or face under the cursor, which is outlined while hovered. Delete (or Backspace with nothing typed) erases the selection in any tool.
 - **Shortcuts:** Space is Select and E is Erase. The default tool stays Line, so the existing editor tests are unchanged.
-- **Status:** the window title goes back to `sketchup-alt`. Status, prompt and measurements box move to the bottom bar. The measurements box shows typed text, or the live value, read-only; typing still goes to it without focus, as in SketchUp.
+- **Status:** the window title goes back to `tenon`. Status, prompt and measurements box move to the bottom bar. The measurements box shows typed text, or the live value, read-only; typing still goes to it without focus, as in SketchUp.
 - **Selected entities render blue:** faces tinted 50% toward blue, edges drawn blue. `render_view` shows the selection too.
 - **Deferred to M4b:**
   - Move/Copy and VCB array syntax.
@@ -2378,7 +2378,7 @@ git commit -m "Erase the selection with Delete or Backspace"
     - `frame(window, view) -> GuiFrame { actions, viewport }`;
     - `paint(window, device, queue, target, size, frame) -> bool` (repaint now).
   - **`app.rs`:**
-    - The title is `sketchup-alt`.
+    - The title is `tenon`.
     - Each frame lays out the panels, applies clicked actions, sizes the camera to the central rect, re-uploads model buffers when the revision or the selection changed, draws the scene with `render_in` into that rect, then paints egui with `LoadOp::Load`.
     - Cursor positions reach the editor relative to the view's origin. Outside the view the marker is hidden.
     - A press reaches the editor only if it lands in the view and not on a panel; releases always do.
@@ -3300,7 +3300,7 @@ impl ApplicationHandler<ApiWake> for App {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("sketchup-alt")
+            .with_title("tenon")
             .with_inner_size(LogicalSize::new(1280.0, 800.0));
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         let mut state = State::new(window);
@@ -3442,7 +3442,7 @@ git commit -m "Wrap the view in an egui toolbar, status bar and Entity Info pane
 ### Task 8: Agent docs, API test, spec amendment
 
 **Files:**
-- Modify: `crates/api/tests/dispatch.rs`, `docs/agent-api.md`, `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`
+- Modify: `crates/api/tests/dispatch.rs`, `docs/agent-api.md`, `docs/superpowers/specs/2026-10-10-tenon-design.md`
 
 **Interfaces:**
 - Consumes: everything above. `describe` picks up `select`, `erase` and `selection` through the existing schemas.
@@ -3502,7 +3502,7 @@ JSON object per line (UTF-8, `\n`-terminated).
 | `cargo run -p app -- --headless` | No window; socket at the default path (printed on stderr) |
 | `cargo run -p app -- --headless --socket PATH` | No window; socket at `PATH` |
 
-The default socket is `sketchup-alt-<pid>.sock` in the temp directory, or in `~/.sketchup-alt/`
+The default socket is `tenon-<pid>.sock` in the temp directory, or in `~/.tenon/`
 (created with mode 0700) when the temp directory path is too long for a Unix socket. The socket is
 readable only by the current user. Try it by hand with `nc -U PATH`. The window removes the
 socket file on a normal quit. The default name includes the process id, so a socket left behind
@@ -3606,7 +3606,7 @@ params) plus `-32000` command failed (`data` is `{kind, message, ids?}`), `-3200
 (`data` is `{index, error, completed, rolled_back}`) and `-32002` rendering unavailable.
 ````
 
-In `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`:
+In `docs/superpowers/specs/2026-10-10-tenon-design.md`:
 - `Status:` line: `Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c)`.
 - Replace the M4 milestone line with:
 ```markdown
@@ -3623,7 +3623,7 @@ Expected: no warnings; workspace total 300.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/api/tests/dispatch.rs docs/agent-api.md docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
+git add crates/api/tests/dispatch.rs docs/agent-api.md docs/superpowers/specs/2026-10-10-tenon-design.md
 git commit -m "Document select and erase for agents and split M4 into M4a-c"
 ```
 

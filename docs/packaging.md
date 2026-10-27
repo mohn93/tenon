@@ -1,9 +1,9 @@
 # Packaging
 
-The product is named **sketchup-alt**; the program is `app` (`app.exe` on Windows) in every package.
-The macOS bundle id is `io.github.mohn93.sketchup-alt`. The version is the workspace version in
+The product is named **tenon**; the program is `app` (`app.exe` on Windows) in every package.
+The macOS bundle id is `io.github.mohn93.tenon`. The version is the workspace version in
 `Cargo.toml`; About and Help > Check for Updates show it, with the short git hash of the commit
-the program was built from (`SKETCHUP_ALT_GIT_HASH` overrides it, for a build without git).
+the program was built from (`TENON_GIT_HASH` overrides it, for a build without git).
 
 CI builds every package in `.github/workflows/package.yml`, on a push to `main` or by hand
 (Actions, Package, Run workflow). It uploads workflow artifacts (kept 30 days) and never creates
@@ -12,9 +12,9 @@ Windows zip.
 
 | Artifact | Contents |
 |---|---|
-| `sketchup-alt-macos-dmg` | `sketchup-alt-<version>-macos-universal.dmg`: `sketchup-alt.app` (aarch64 and x86_64, macOS 11 or later, ad-hoc signed) and a link to Applications |
-| `sketchup-alt-windows` | `sketchup-alt-<version>-windows-x86_64.msi` (per-machine, Start menu shortcut, `.skr` association, icon) and the `.zip` with `app.exe`; both unsigned |
-| `sketchup-alt-linux-x86_64`, `sketchup-alt-linux-aarch64` | `sketchup-alt-<version>-linux-<arch>.AppImage` and `.tar.gz` (program, `.desktop` file, icon, notices) |
+| `tenon-macos-dmg` | `tenon-<version>-macos-universal.dmg`: `tenon.app` (aarch64 and x86_64, macOS 11 or later, ad-hoc signed) and a link to Applications |
+| `tenon-windows` | `tenon-<version>-windows-x86_64.msi` (per-machine, Start menu shortcut, `.skr` association, icon) and the `.zip` with `app.exe`; both unsigned |
+| `tenon-linux-x86_64`, `tenon-linux-aarch64` | `tenon-<version>-linux-<arch>.AppImage` and `.tar.gz` (program, `.desktop` file, icon, notices) |
 
 ## Build locally
 
@@ -25,7 +25,7 @@ scripts/package-macos.sh                # this Mac's architecture
 UNIVERSAL=1 scripts/package-macos.sh    # both; needs rustup targets aarch64-apple-darwin and x86_64-apple-darwin
 ```
 
-The result is `target/package/macos/sketchup-alt-<version>-macos-<arch>.dmg`. The first start of
+The result is `target/package/macos/tenon-<version>-macos-<arch>.dmg`. The first start of
 an ad-hoc signed app is refused by Gatekeeper: right-click the app, Open, Open.
 
 **Linux**:
@@ -44,14 +44,14 @@ come from the system (see [linux.md](linux.md)).
 **Windows** (PowerShell, with the Rust toolchain and the .NET SDK):
 
 ```powershell
-$env:RUSTFLAGS = "-C target-feature=+crt-static"; $env:SKETCHUP_ALT_WINRES = "1"
+$env:RUSTFLAGS = "-C target-feature=+crt-static"; $env:TENON_WINRES = "1"
 cargo build --release --locked -p app
 dotnet tool install --global wix --version 4.0.5
-wix build -arch x64 -o sketchup-alt.msi -d Version=0.1.0 -d ExePath=target/release/app.exe `
-  -d IcoPath=packaging/icons/app.ico -d NoticesPath=THIRD_PARTY_NOTICES.md packaging/windows/sketchup-alt.wxs
+wix build -arch x64 -o tenon.msi -d Version=0.1.0 -d ExePath=target/release/app.exe `
+  -d IcoPath=packaging/icons/app.ico -d NoticesPath=THIRD_PARTY_NOTICES.md packaging/windows/tenon.wxs
 ```
 
-`SKETCHUP_ALT_WINRES` embeds the icon and version resource; without it `app.exe` has none and
+`TENON_WINRES` embeds the icon and version resource; without it `app.exe` has none and
 the build needs no resource compiler.
 
 **Icons**: `scripts/make-icons.py` draws the icon from vector shapes (original artwork) and

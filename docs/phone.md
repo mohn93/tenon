@@ -47,7 +47,7 @@ offers Share the new version, which makes a new link and code and stops the old 
   says "Connect this computer to Wi-Fi to share". A firewall may ask to allow incoming
   connections the first time.
 - The viewer must be built: run `scripts/build-web.sh`. The app looks for the viewer in a
-  `viewer` folder next to the executable, then in `$SKETCHUP_ALT_VIEWER`, then in the source
+  `viewer` folder next to the executable, then in `$TENON_VIEWER`, then in the source
   tree's `web/dist`. Otherwise the sheet says "The phone viewer is not built: run
   scripts/build-web.sh".
 
@@ -128,7 +128,7 @@ Recent is opt-in per model. Nothing is kept when a share opens; the part card, a
 the Recent list, offer "Keep on this phone" for the open model (with a line saying that a kept
 model, key included, can be read by pages served at this address). Only then is it stored. The
 Recent button lists the kept models (last 5; name, when, size); a tap opens one, Delete forgets
-one. They live in the browser's IndexedDB: database `sketchup-alt-viewer`, object store `recent`
+one. They live in the browser's IndexedDB: database `tenon-viewer`, object store `recent`
 (`id`, `key`, `name`, `time`, `blob`), and a small `recent-info` store (`id`, `name`, `time`,
 `size`) so the list does not read every blob. The blob is the encrypted share as the server
 sent it. The store opens in the background after the viewer starts (and is given up on after

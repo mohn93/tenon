@@ -16,7 +16,7 @@ impl egui::DroppedFile for NativeFile {
         &self.path
     }
 
-    // sketchup-alt patch: egui 0.36 reads dropped files asynchronously on wasm32 and has no
+    // tenon patch: egui 0.36 reads dropped files asynchronously on wasm32 and has no
     // `bytes` there. Dropped files are not used on the web (the app opens files itself).
     #[cfg(target_arch = "wasm32")]
     fn bytes_async(

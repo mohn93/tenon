@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust 2024; no new dependencies (wgpu 30.0.1, winit 0.30.13, glam 0.34.1, serde, schemars, earcutr as pinned).
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`: milestone M3, section 1 (push_pull), section 2 (tool contract, measurements box), section 5 (agent control).
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md`: milestone M3, section 1 (push_pull), section 2 (tool contract, measurements box), section 5 (agent control).
 
 ## Global Constraints
 
@@ -2266,7 +2266,7 @@ git commit -m "Report the face under the cursor, skip hidden snaps, parse typed 
   - `Editor::cancel` is removed (Escape goes through `key`). `execute`/`execute_batch`/`undo`/`redo` call `Tool::on_external_change` when the command can change the model.
   - Command failures from tools set the status message instead of printing to stderr.
   - Window:
-    - The title shows `sketchup-alt  |  <status>`.
+    - The title shows `tenon  |  <status>`.
     - Key presses without Cmd/Ctrl go to `Editor::key`. On non-ASCII layouts they fall back to the physical key for digits, `.`, `-`, `,` and `l r p m`.
     - `CursorLeft` hides the marker.
 
@@ -3128,7 +3128,7 @@ initialized with `title: String::new(),` in `State::new`, and a method:
 ```rust
     /// Shows the editor status (tool, prompt, measurement) in the window title.
     fn sync_title(&mut self) {
-        let title = format!("sketchup-alt  |  {}", self.editor.status());
+        let title = format!("tenon  |  {}", self.editor.status());
         if title != self.title {
             self.window.set_title(&title);
             self.title = title;
@@ -4153,7 +4153,7 @@ git commit -m "Add the Push/Pull tool"
 ### Task 8: Agent docs, API test, spec amendment, visual check
 
 **Files:**
-- Modify: `crates/api/tests/dispatch.rs`, `docs/agent-api.md`, `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`
+- Modify: `crates/api/tests/dispatch.rs`, `docs/agent-api.md`, `docs/superpowers/specs/2026-10-10-tenon-design.md`
 
 **Interfaces:**
 - Consumes: everything above. `describe` picks up the new commands and the `within` filter through the existing schemas, with no code change.
@@ -4239,7 +4239,7 @@ JSON object per line (UTF-8, `\n`-terminated).
 | `cargo run -p app -- --headless` | No window; socket at the default path (printed on stderr) |
 | `cargo run -p app -- --headless --socket PATH` | No window; socket at `PATH` |
 
-The default socket is `sketchup-alt-<pid>.sock` in the temp directory, or in `~/.sketchup-alt/`
+The default socket is `tenon-<pid>.sock` in the temp directory, or in `~/.tenon/`
 (created with mode 0700) when the temp directory path is too long for a Unix socket. The socket is
 readable only by the current user. Try it by hand with `nc -U PATH`. The window removes the
 socket file on a normal quit. The default name includes the process id, so a socket left behind
@@ -4332,7 +4332,7 @@ params) plus `-32000` command failed (`data` is `{kind, message, ids?}`), `-3200
 
 The ids in the box example are what an empty model produces. Check them by running the two requests through `cargo run -p app -- --headless --stdio`.
 
-In `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`:
+In `docs/superpowers/specs/2026-10-10-tenon-design.md`:
 - `Status:` line: `Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope)`.
 - Milestones, replace the M3 and M4 lines with:
 ```markdown
@@ -4363,7 +4363,7 @@ Expected: no warnings; workspace total 250.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/api/tests/dispatch.rs docs/agent-api.md docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
+git add crates/api/tests/dispatch.rs docs/agent-api.md docs/superpowers/specs/2026-10-10-tenon-design.md
 git commit -m "Document rectangle and push/pull for agents and amend the M3/M4 scope"
 ```
 

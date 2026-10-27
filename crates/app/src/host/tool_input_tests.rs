@@ -1726,7 +1726,7 @@ fn text_that_is_not_a_clip_is_refused_and_changes_nothing() {
         assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
         let state = ask(&mut e, json!({"type": "editor"}));
         assert_eq!(
-            state["message"], "The clipboard does not hold sketchup-alt geometry",
+            state["message"], "The clipboard does not hold tenon geometry",
             "{command}"
         );
         assert_eq!(state["tool"], "select");
@@ -1734,7 +1734,7 @@ fn text_that_is_not_a_clip_is_refused_and_changes_nothing() {
     }
     // Damaged clip text: why, in the status.
     let mut board = MemoryClipboard::default();
-    board.set_text("sketchup-alt clip 1\n!!!".into()).unwrap();
+    board.set_text("tenon clip 1\n!!!".into()).unwrap();
     e.set_clipboard(Box::new(board));
     assert!(e.clip_ready(), "by its header");
     let r = call(&mut e, "execute", json!({"type": "paste_clipboard"}));
@@ -2198,7 +2198,7 @@ fn call_in(e: &mut Editor, roots: &ApiRoots, method: &str, params: Value) -> Val
 
 #[test]
 fn place_library_item_brings_out_the_paste_tool_and_a_click_inserts() {
-    let dir = std::env::temp_dir().join(format!("sketchup-alt-place-item-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("tenon-place-item-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let item = dir.join("plate.skr").display().to_string();
@@ -2245,7 +2245,7 @@ fn place_library_item_brings_out_the_paste_tool_and_a_click_inserts() {
 
 #[test]
 fn place_library_item_refuses_what_it_cannot_place() {
-    let dir = std::env::temp_dir().join(format!("sketchup-alt-place-bad-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("tenon-place-bad-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let inside = dir.join("inside");
     std::fs::create_dir_all(&inside).unwrap();

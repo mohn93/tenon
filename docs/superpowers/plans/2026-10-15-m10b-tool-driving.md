@@ -12,7 +12,7 @@
 
 **Tech Stack:** Rust 2024; serde, schemars, serde_json, glam; no new dependencies.
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md` ("Agent control milestones", M10b; section 5 for the API). M10a's plan (`docs/superpowers/plans/2026-10-15-m10a-agent-state.md`) has the interfaces this builds on (`EditorState`, `Host::editor`, `AppHost`, `editor_state`, `snap` kinds of `infer`).
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md` ("Agent control milestones", M10b; section 5 for the API). M10a's plan (`docs/superpowers/plans/2026-10-15-m10a-agent-state.md`) has the interfaces this builds on (`EditorState`, `Host::editor`, `AppHost`, `editor_state`, `snap` kinds of `infer`).
 
 ## Global Constraints
 
@@ -22,7 +22,7 @@
 - From the spec: method `tool_input {events}` feeds the active tool the events a user would make, without the window: `move`, `down`, `up`, `click`, `double_click` at a pixel (with view width and height) or a model point, `drag` paths, `key` (with modifiers) and `type` (measurements box text then Enter), each run through the same inference, locks and typed-value handling as the window; the result reports the tool's phase, preview (inferred point, rubber-band geometry), status text and the outcome of any command it issued. Parity gaps closed as commands: `orbit`/`zoom` about a given model point; `select` by screen box with window or crossing mode; `add_arc` by start, end and a third point (or bulge); `position_texture` with `rotate_by` (relative); `undo`/`redo` with a count.
 - `tool_input` must drive the same tool code paths the window uses (the Editor's input methods), not a reimplementation, headless and in the window; every tool is covered by tests (Line, Rectangle, Circle, Arc, Push/Pull, Move incl. copy, Rotate, Tape Measure, Erase, Paint, Select incl. box and double-click open), typed values, Shift/axis locks and modifier keys.
 - Git: work on `dev`; other agents may share the checkout: run `git status` and `git diff` first and stage only the files you changed (never `git add -A` or `git add .`); short plain commit messages, no attribution lines. Never push or merge.
-- Do not launch the app window. Tests that start the binary use stdio or their own scratch sockets; never touch `~/.sketchup-alt/house.sock` or `h.sock` or their processes.
+- Do not launch the app window. Tests that start the binary use stdio or their own scratch sockets; never touch `~/.tenon/house.sock` or `h.sock` or their processes.
 
 ## Spec notes (rulings made in this plan)
 

@@ -1,4 +1,4 @@
-# sketchup-alt Python client
+# tenon Python client
 
 A small client for the agent API (see `docs/agent-api.md`). Python 3.9+, standard library only.
 
@@ -16,12 +16,12 @@ examples need an app binary: `cargo build -p app` (or `--release`, much faster f
 ## Connect
 
 ```python
-from sketchup_alt import Client, launch_headless, session
+from tenon import Client, launch_headless, session
 
-c = Client("/path/to.sock")              # a running app (--socket PATH), or $SKETCHUP_ALT_SOCKET
+c = Client("/path/to.sock")              # a running app (--socket PATH), or $TENON_SOCKET
 
 with launch_headless() as app:           # starts app --headless --socket <private path>
-    c = app.client()                      # uses $SKETCHUP_ALT_APP or target/{debug,release}/app
+    c = app.client()                      # uses $TENON_APP or target/{debug,release}/app
     c.execute({"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]})
     print(c.query("stats"))
 
@@ -58,7 +58,7 @@ or missing field raises `TypeError` before anything is sent. Leaving the block s
 `Model(client)` wraps the common steps. Lengths are meters, colors `"#rrggbb"` or `(r, g, b)`.
 
 ```python
-from sketchup_alt import Model, Transform
+from tenon import Model, Transform
 
 m = Model(c)
 steel = m.material("Steel", (200, 205, 215), metalness=1, roughness=0.3)   # reused by name
@@ -122,8 +122,8 @@ images (the tests use it).
 
 ```
 cargo build --release -p app
-SKETCHUP_ALT_APP=target/release/app python3 clients/python/examples/v6_engine.py --out /tmp/v6
-SKETCHUP_ALT_APP=target/release/app python3 clients/python/examples/v6_cycle.py --out /tmp/v6-cycle
+TENON_APP=target/release/app python3 clients/python/examples/v6_engine.py --out /tmp/v6
+TENON_APP=target/release/app python3 clients/python/examples/v6_cycle.py --out /tmp/v6-cycle
 ```
 
 ## Tests

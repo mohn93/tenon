@@ -1,4 +1,4 @@
-//! The browser's IndexedDB as the Recent list's `Storage`: database `sketchup-alt-viewer`,
+//! The browser's IndexedDB as the Recent list's `Storage`: database `tenon-viewer`,
 //! object store `recent` (`{ id, key, name, time, blob }`, keyed by `id`) beside `recent-info`
 //! (`{ id, name, time, size }`), which lets the list load without reading every blob (up to
 //! five of 64 MiB). The list is read from memory (`infos` is loaded once when the database
@@ -23,7 +23,7 @@ use crate::recent::{DB_NAME, INFO_STORE, Info, Record, STORE, Storage};
 
 /// The keys of the kept models are never logged.
 fn log(text: &str) {
-    web_sys::console::error_1(&format!("sketchup-alt viewer storage: {text}").into());
+    web_sys::console::error_1(&format!("tenon viewer storage: {text}").into());
 }
 
 type Infos = Rc<RefCell<Vec<Info>>>;

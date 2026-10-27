@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** The window gets a design system under an unchanged layout: `ui.rs` becomes a `ui/` module tree, the UI tests find widgets by label through AccessKit (`egui_kittest`), a theme module installs dark and light token sets with Inter, JetBrains Mono and Phosphor built in, a widget kit and one shortcut table drive the menus, tooltips and key handling, the window's viewport follows the theme (day canvas gradient, accent selection with 2 px edges and an 18% face tint) while `render_view` and headless renders stay as they are, the right panel sizes its sections from measured text, Undo and Redo are disabled when empty and name their step, the window has a 960 x 600 pt minimum, and View > Theme (System, Dark, Light) is saved in `~/.sketchup-alt/prefs.json`.
+**Goal:** The window gets a design system under an unchanged layout: `ui.rs` becomes a `ui/` module tree, the UI tests find widgets by label through AccessKit (`egui_kittest`), a theme module installs dark and light token sets with Inter, JetBrains Mono and Phosphor built in, a widget kit and one shortcut table drive the menus, tooltips and key handling, the window's viewport follows the theme (day canvas gradient, accent selection with 2 px edges and an 18% face tint) while `render_view` and headless renders stay as they are, the right panel sizes its sections from measured text, Undo and Redo are disabled when empty and name their step, the window has a 960 x 600 pt minimum, and View > Theme (System, Dark, Light) is saved in `~/.tenon/prefs.json`.
 
 **Architecture:**
 - `app/src/ui/` replaces `ui.rs`: `mod.rs` (types, `draw`), `toolbar.rs`, `status.rs`, `right.rs` (Entity Info and the panel's measured layout), `materials.rs`, `outliner.rs`, `dialogs.rs`, plus the new `theme.rs` (tokens, metrics, egui style mapping, the viewport's `ViewStyle`), `fonts.rs` (embedded fonts), `icons.rs` (Phosphor glyphs) and `widgets.rs` (the kit). Tests live in `ui/tests/` and drive `draw` through `egui_kittest`.
@@ -13,22 +13,22 @@
 
 **Tech Stack:** Rust 2024; egui, egui-winit, egui-wgpu `=0.36.2`; wgpu `=30.0.1`; new: `egui-phosphor =0.14.0` (MIT OR Apache-2.0, depends on `egui ^0.36`), `egui_kittest =0.36.2` (dev only); Inter 4.1 and JetBrains Mono 2.304 TTFs (OFL 1.1) in `crates/app/assets/fonts/`; `serde`/`serde_json` (already workspace dependencies) move into the app's normal dependencies for the prefs file.
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`, "Interface milestones", M11a. Design audit reports (token tables, refactor order, risks): `visual.md`, `engineering.md`, `ia.md`, `interaction.md` in `/private/tmp/claude-501/-Users-mohn93-Desktop-side-projects-sketchup/7b020704-4344-4767-b2d2-50b34442d2ad/scratchpad/design/`. The executor reads the spec bullet and this plan; the reports only explain where values came from.
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md`, "Interface milestones", M11a. Design audit reports (token tables, refactor order, risks): `visual.md`, `engineering.md`, `ia.md`, `interaction.md` in `/private/tmp/claude-501/-Users-mohn93-Desktop-side-projects-sketchup/7b020704-4344-4767-b2d2-50b34442d2ad/scratchpad/design/`. The executor reads the spec bullet and this plan; the reports only explain where values came from.
 
 ## Global Constraints
 
 - No emoji anywhere (code, comments, docs, commit messages). Comments succinct, in the style of the surrounding code.
 - Before any cargo command: `export PATH="$HOME/.cargo/bin:$PATH"`. After every task: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace` pass. The suite has 1159 tests at the start; no task leaves fewer (a test replaced by a twin keeps the count; count with `cargo test --workspace 2>&1 | grep "test result" | awk '{s+=$4} END {print s}'`).
 - Pinned versions: egui, egui-winit, egui-wgpu and egui_kittest `=0.36.2`; wgpu `=30.0.1`; egui-phosphor `=0.14.0`. Every new dependency is added to `[workspace.dependencies]` with `=` and used with `.workspace = true`.
-- From the spec: the layout is unchanged (toolbar on top, status bar at the bottom, right panel on the right, same order of controls). Accent `#4C8DFF` dark, `#2463EB` light. 4 pt spacing grid, 28 pt controls, corner radius 6 for controls, 8 for windows, 4 for swatches, 2 pt accent focus ring. Inter 13 pt body, 11 pt uppercase section titles, JetBrains Mono for values. Theme System, Dark, Light, default System, from View > Theme, saved in `~/.sketchup-alt/prefs.json` (window chrome). `render_view` and headless renders keep their current backgrounds, so golden images and agent renders do not change. Selected edges 2 px in the accent, face tint 18%. Undo and Redo disabled when there is nothing to undo or redo, tooltips naming the step. Minimum window 960 x 600 pt.
+- From the spec: the layout is unchanged (toolbar on top, status bar at the bottom, right panel on the right, same order of controls). Accent `#4C8DFF` dark, `#2463EB` light. 4 pt spacing grid, 28 pt controls, corner radius 6 for controls, 8 for windows, 4 for swatches, 2 pt accent focus ring. Inter 13 pt body, 11 pt uppercase section titles, JetBrains Mono for values. Theme System, Dark, Light, default System, from View > Theme, saved in `~/.tenon/prefs.json` (window chrome). `render_view` and headless renders keep their current backgrounds, so golden images and agent renders do not change. Selected edges 2 px in the accent, face tint 18%. Undo and Redo disabled when there is nothing to undo or redo, tooltips naming the step. Minimum window 960 x 600 pt.
 - Idle stays at 0% CPU: no unconditional `request_repaint`; a measured layout may call `request_discard` only when a measurement changed.
 - Git: work on `dev`; other agents may share the checkout: run `git status` and `git diff` first and stage only the files you changed (never `git add -A` or `git add .`); short plain commit messages, no attribution lines. Never push or merge.
-- Do not launch the app window (no `cargo run` of the GUI). Tests never write under `~/.sketchup-alt`: prefs tests use `std::env::temp_dir()` paths with the process id in the name.
+- Do not launch the app window (no `cargo run` of the GUI). Tests never write under `~/.tenon`: prefs tests use `std::env::temp_dir()` paths with the process id in the name.
 - Downloaded archives go into a fresh empty folder under the scratchpad, never into the repo; only the checked TTF and license files are copied into `crates/app/assets/fonts/`.
 
 ## Review Focus
 
-- A prefs file that is missing, empty, not JSON, names an unknown theme, cannot be read, or sits in a `~/.sketchup-alt` that is a symlink, or HOME unset: the window starts with defaults and never panics; a theme change still applies for the session; a broken file is replaced at the next change (Task 9 tests: `load` on each bad input returns defaults; `save` into a symlinked folder is an error and leaves the link's target untouched).
+- A prefs file that is missing, empty, not JSON, names an unknown theme, cannot be read, or sits in a `~/.tenon` that is a symlink, or HOME unset: the window starts with defaults and never panics; a theme change still applies for the session; a broken file is replaced at the next change (Task 9 tests: `load` on each bad input returns defaults; `save` into a symlinked folder is an error and leaves the link's target untouched).
 - Keys that worked before the shortcut table must still work the same way: Shift+L picks Line, Shift+F enters fly mode, Shift+G makes a component, Shift+Z zooms to extents, Cmd+Z repeats when held but Cmd+S does not, Cmd+I with Shift does nothing, and Cmd chords on non-Latin layouts still reach their letters (Task 4 tests: `plain` and `command` cases, and a test that every Cmd letter in the table has a physical-key fallback in `shortcut_letter`).
 - Idle repaint: the measured right panel, the themed widgets and tooltips must let the window go idle (Task 3 test `the_panels_settle_in_one_frame`: after the harness settles, one more `try_run` takes a single step).
 - A model with 40 materials and 60-character names at the 960 x 600 minimum: no list row cut in half at the bottom of the Materials list, the panel keeps its width, the Outliner keeps its rows, a too-short window scrolls the panel (Task 3 tests `no_material_row_is_cut_by_the_list_bottom` at 800, 600 and 520 pt and `long_names_keep_the_panel_width`; Task 8 `the_panels_fit_the_smallest_window`).
@@ -48,7 +48,7 @@
 - **Right panel.** Keeps its place and stays fixed-width, 200 pt (180 before: 13 pt Inter and 28 pt controls do not fit two value fields in 180). Its sections size from what the last frame measured (Entity Info, the headers, the controls under the Materials list) and from a row pitch (control height plus item spacing): the Materials list shows whole rows only, at most 8 and at least 2; the Outliner keeps at least 5 rows; a panel shorter than the sum scrolls. A changed measurement stores itself and asks for one discarded pass (`request_discard`), never a repaint.
 - **Undo and Redo** become icon buttons (Phosphor `ARROW_U_UP_LEFT`, `ARROW_U_UP_RIGHT`) in the same toolbar place, named "Undo" and "Redo" for AccessKit, disabled when there is nothing to undo or redo; the tooltip reads `Undo <Step>` with the key chip, the step being the history label with underscores as spaces and the first letter capital (`push_pull` reads "Push pull", `batch` reads "Batch"). The Cmd+Z path is unchanged (with nothing to undo it still reports why in the status bar).
 - **Shortcut table.** One entry per binding: the 11 tools (Space and the tool letters), New, Open, Save, Save As, Import, Export, Quit, Undo, Redo (the only two that act again while held), Erase Selection (Delete), Make Group (G), Make Component (Shift+G), Close Group (Escape), Zoom Extents (Shift+Z), Fly mode (F). Cmd chords match their modifiers exactly (Shift+Cmd+N, Shift+Cmd+O and Shift+Cmd+Q no longer act; they did by accident). Plain keys: an uppercase letter with no binding of its own acts as its lowercase one, so Shift+L is Line and Shift+F flies as before. Delete, Backspace and Escape keep the editor's own multi-step handling (typed text first); their table entries label the menus and tooltips, and tests check the editor does what they say. Fly mode's own keys and the arrow locks are not table shortcuts. Key text: on macOS `⇧⌘S`, `⌫`, `Esc`, `Space`, `L`; elsewhere `Ctrl+Shift+S`, `Delete`, `Esc`, `Space`, `L` (Inter has the macOS key glyphs).
-- **Prefs.** `~/.sketchup-alt/prefs.json` (`HOME` unset: in memory only, one warning at start), JSON `{"theme": "system" | "dark" | "light"}`. Missing file: defaults, silently. Unreadable or invalid file (including an unknown theme): defaults and one stderr warning; it is overwritten at the next change. Unknown keys are ignored and not kept. Written on each change through a temporary file renamed into place, mode 0600, in `~/.sketchup-alt` made or checked with `cli::ensure_private_dir` (0700, no symlink); a failed write is a stderr warning and the choice still holds for the session. Neither the API nor headless reads or writes it.
+- **Prefs.** `~/.tenon/prefs.json` (`HOME` unset: in memory only, one warning at start), JSON `{"theme": "system" | "dark" | "light"}`. Missing file: defaults, silently. Unreadable or invalid file (including an unknown theme): defaults and one stderr warning; it is overwritten at the next change. Unknown keys are ignored and not kept. Written on each change through a temporary file renamed into place, mode 0600, in `~/.tenon` made or checked with `cli::ensure_private_dir` (0700, no symlink); a failed write is a stderr warning and the choice still holds for the session. Neither the API nor headless reads or writes it.
 - **Docs.** agent-api.md lists View > Theme (and the prefs file) and the minimum window size as window chrome; the other preferences the spec names (UI scale, panel sizes, recent files) are added by the milestones that make them.
 - **Not in M11a** (engineering.md proposals for later milestones): the AccessKit adapter, native menus, UI scale, the frame-time overlay, the icon rail and the resizable dock.
 
@@ -3686,7 +3686,7 @@ const MIN_WINDOW: LogicalSize<f64> = LogicalSize::new(960.0, 600.0);
 /// The window as it opens: title, default size and least size.
 fn window_attributes() -> WindowAttributes {
     Window::default_attributes()
-        .with_title("sketchup-alt")
+        .with_title("tenon")
         .with_inner_size(LogicalSize::new(1280.0, 800.0))
         .with_min_inner_size(MIN_WINDOW)
 }
@@ -3728,7 +3728,7 @@ mod tests {
 
     /// A fresh folder standing in for HOME.
     fn home(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("sketchup-alt-prefs-{}-{name}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tenon-prefs-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -3789,7 +3789,7 @@ Add `mod prefs;` to `main.rs`. Run `cargo test -p app prefs`. Expected: FAIL to 
 `crates/app/Cargo.toml`: move `serde_json.workspace = true` from `[dev-dependencies]` to `[dependencies]`. Above the tests:
 
 ```rust
-//! Window preferences kept between sessions in `~/.sketchup-alt/prefs.json`. They are window
+//! Window preferences kept between sessions in `~/.tenon/prefs.json`. They are window
 //! chrome: never part of a model, never read or written by the API or in headless mode.
 
 use std::io::{self, Write};
@@ -3834,7 +3834,7 @@ pub fn load(path: &Path) -> Prefs {
 }
 
 /// Writes `prefs` to `path` (mode 0600) through a temporary file renamed into place, in a
-/// folder made or checked private like the rest of `~/.sketchup-alt` (0700, not a link).
+/// folder made or checked private like the rest of `~/.tenon` (0700, not a link).
 pub fn save(path: &Path, prefs: &Prefs) -> io::Result<()> {
     let dir = path
         .parent()
@@ -3973,7 +3973,7 @@ In the table, the Undo row becomes:
 and after the "View > Agent Activity" row add:
 
 ```
-| View > Theme (System, Dark, Light) | none: window chrome, kept in `~/.sketchup-alt/prefs.json` |
+| View > Theme (System, Dark, Light) | none: window chrome, kept in `~/.tenon/prefs.json` |
 ```
 The chrome paragraph becomes:
 
@@ -3982,7 +3982,7 @@ Window chrome, which changes nothing in the model, its view or the editor, has n
 window's size and position (at least 960 x 600 points), the panels' sizes and scroll positions,
 which menus are open, tooltips, which Outliner rows are expanded, the export dialog's suggested
 format, keyboard focus, and the window's preferences: the theme (View > Theme), kept in
-`~/.sketchup-alt/prefs.json`, which the API never reads or writes. The window's 3D view follows
+`~/.tenon/prefs.json`, which the API never reads or writes. The window's 3D view follows
 the theme (its day background and the selection's color and width); `render_view` keeps one
 fixed look, so its images do not depend on the window. The file dialogs are chrome too (commands
 take paths); while one, or the unsaved-changes prompt, is open, the window answers no requests.

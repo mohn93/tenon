@@ -14,7 +14,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(HERE, "..", "examples"))
 
-from sketchup_alt import ApiError, find_app  # noqa: E402
+from tenon import ApiError, find_app  # noqa: E402
 
 APP = find_app()
 
@@ -76,7 +76,7 @@ def drawn_fraction(rows):
     return hit / n
 
 
-@unittest.skipIf(APP is None, "no sketchup-alt app binary found")
+@unittest.skipIf(APP is None, "no tenon app binary found")
 class ExampleTests(unittest.TestCase):
     def setUp(self):
         self.out = tempfile.mkdtemp(prefix="skex")

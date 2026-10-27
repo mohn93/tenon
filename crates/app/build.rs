@@ -4,12 +4,12 @@
 use std::process::Command;
 
 fn main() {
-    println!("cargo:rerun-if-env-changed=SKETCHUP_ALT_GIT_HASH");
-    println!("cargo:rerun-if-env-changed=SKETCHUP_ALT_WINRES");
+    println!("cargo:rerun-if-env-changed=TENON_GIT_HASH");
+    println!("cargo:rerun-if-env-changed=TENON_WINRES");
     println!("cargo:rerun-if-changed=build.rs");
 
     // The packaging scripts may set the hash (a source tarball has no git); otherwise ask git.
-    let hash = std::env::var("SKETCHUP_ALT_GIT_HASH").ok().or_else(|| {
+    let hash = std::env::var("TENON_GIT_HASH").ok().or_else(|| {
         let out = Command::new("git")
             .args(["rev-parse", "--short=7", "HEAD"])
             .output()
@@ -19,7 +19,7 @@ fn main() {
             .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
     });
     if let Some(hash) = hash.filter(|h| !h.is_empty()) {
-        println!("cargo:rustc-env=SKETCHUP_ALT_GIT_HASH={hash}");
+        println!("cargo:rustc-env=TENON_GIT_HASH={hash}");
     }
     // `rerun-if-changed=build.rs` turns off rerunning on every change, so a new commit would
     // keep the old hash (a cached target in CI too): watch what moves with the commit.
@@ -51,18 +51,18 @@ fn git_files() -> Vec<std::path::PathBuf> {
         .collect()
 }
 
-/// Embeds the icon and version resource when `SKETCHUP_ALT_WINRES` is set (the packaging
+/// Embeds the icon and version resource when `TENON_WINRES` is set (the packaging
 /// workflow); other builds skip it, so they never need the resource compiler.
 #[cfg(windows)]
 fn windows_resource() {
-    if std::env::var_os("SKETCHUP_ALT_WINRES").is_none() {
+    if std::env::var_os("TENON_WINRES").is_none() {
         return;
     }
     println!("cargo:rerun-if-changed=../../packaging/icons/app.ico");
     let mut res = winresource::WindowsResource::new();
     res.set_icon("../../packaging/icons/app.ico");
-    res.set("ProductName", "sketchup-alt");
-    res.set("FileDescription", "sketchup-alt");
+    res.set("ProductName", "tenon");
+    res.set("FileDescription", "tenon");
     res.compile().expect("embedding the Windows resource");
 }
 

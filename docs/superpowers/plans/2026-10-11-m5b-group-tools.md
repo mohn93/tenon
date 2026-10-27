@@ -25,7 +25,7 @@
 
 **Tech Stack:** Rust 2024; glam 0.34.1; egui 0.36.2; winit 0.30.13; no dependency changes.
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`:
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md`:
 - section 2 (inference engine; tools include Make Group/Component);
 - section 4 (input routing);
 - the M5b milestone line. Task 4 adds an inference note to section 2.
@@ -2029,7 +2029,7 @@ git commit -m "Pick, box-select, move and open groups with the tools"
 
 **Files:**
 - Modify: `crates/app/src/editor.rs` (`make_group`, `make_component`, `explode_selection`, `close_instance`, `g`/`c` keys), `crates/app/src/ui.rs` (buttons, `View` fields, `UiAction` variants), `crates/app/src/app.rs` (actions, view fields, physical `g`/`c`), `crates/app/src/info.rs` ("Editing ..." line)
-- Modify: `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md` (section 2 note, status line)
+- Modify: `docs/superpowers/specs/2026-10-10-tenon-design.md` (section 2 note, status line)
 - Test: two new editor tests, `says_what_is_being_edited` in `info::tests`, and the extended `clicking_a_tool_button_reports_it` in `ui::tests`
 
 **Interfaces:**
@@ -2456,12 +2456,12 @@ Apply to `crates/app/src/info.rs`:
  }
 ```
 
-Apply to `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`:
+Apply to `docs/superpowers/specs/2026-10-10-tenon-design.md`:
 ```diff
---- a/docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
-+++ b/docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
+--- a/docs/superpowers/specs/2026-10-10-tenon-design.md
++++ b/docs/superpowers/specs/2026-10-10-tenon-design.md
 @@ -1,8 +1,8 @@
- # SketchUp Alternative — Design
+ # Tenon — Design
  
  Date: 2026-10-10
 -Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope; M4c scope; M5 split into M5a-c)
@@ -2497,7 +2497,7 @@ The window is not launched; the egui test clicks the new buttons headlessly and 
 ```bash
 git status
 git diff --stat
-git add crates/app/src/editor.rs crates/app/src/ui.rs crates/app/src/app.rs crates/app/src/info.rs docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
+git add crates/app/src/editor.rs crates/app/src/ui.rs crates/app/src/app.rs crates/app/src/info.rs docs/superpowers/specs/2026-10-10-tenon-design.md
 git commit -m "Group and component buttons, shortcuts and editing line"
 ```
 

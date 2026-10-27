@@ -61,7 +61,7 @@ jobs:
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: sketchup-alt-macos-dmg
+          name: tenon-macos-dmg
           path: target/package/macos/*.dmg
           if-no-files-found: error
           retention-days: 30
@@ -93,11 +93,11 @@ jobs:
             package-windows-${{ env.RUST_VERSION }}-
 
       # The C runtime is linked in, so neither package needs the Visual C++ redistributable.
-      # SKETCHUP_ALT_WINRES embeds the icon and version resource (crates/app/build.rs).
+      # TENON_WINRES embeds the icon and version resource (crates/app/build.rs).
       - name: Build
         env:
           RUSTFLAGS: -C target-feature=+crt-static
-          SKETCHUP_ALT_WINRES: "1"
+          TENON_WINRES: "1"
         run: cargo build --release --locked -p app
 
       - name: Zip
@@ -105,7 +105,7 @@ jobs:
         run: |
           $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
           New-Item -ItemType Directory -Force dist | Out-Null
-          Compress-Archive -DestinationPath "dist/sketchup-alt-$version-windows-x86_64.zip" -Path `
+          Compress-Archive -DestinationPath "dist/tenon-$version-windows-x86_64.zip" -Path `
             target/release/app.exe, THIRD_PARTY_NOTICES.md, docs/windows.md
 
       - name: Install WiX
@@ -115,15 +115,15 @@ jobs:
         shell: pwsh
         run: |
           $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
-          wix build -arch x64 -o "dist/sketchup-alt-$version-windows-x86_64.msi" `
+          wix build -arch x64 -o "dist/tenon-$version-windows-x86_64.msi" `
             -d "Version=$version" -d "ExePath=target/release/app.exe" `
             -d "IcoPath=packaging/icons/app.ico" -d "NoticesPath=THIRD_PARTY_NOTICES.md" `
-            packaging/windows/sketchup-alt.wxs
+            packaging/windows/tenon.wxs
           if ($LASTEXITCODE -ne 0) { throw "wix build failed" }
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: sketchup-alt-windows
+          name: tenon-windows
           path: |
             dist/*.msi
             dist/*.zip
@@ -189,7 +189,7 @@ jobs:
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: sketchup-alt-linux-${{ matrix.arch }}
+          name: tenon-linux-${{ matrix.arch }}
           path: |
             target/package/linux/*.tar.gz
             target/package/linux/*.AppImage

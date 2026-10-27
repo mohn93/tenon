@@ -53,7 +53,7 @@ fn collect_replies(
 #[cfg(unix)]
 #[test]
 fn unix_socket_serves_requests_and_is_private() {
-    let dir = std::env::temp_dir().join(format!("sketchup-alt-api-test-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("tenon-api-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("api.sock");
 
@@ -199,7 +199,7 @@ fn the_socket_is_private_from_the_start_and_leaves_no_folder() {
 /// A pipe name no other test uses.
 #[cfg(windows)]
 fn pipe(name: &str) -> Endpoint {
-    Endpoint::from_arg(&format!("sketchup-alt-test-{}-{name}", std::process::id()))
+    Endpoint::from_arg(&format!("tenon-test-{}-{name}", std::process::id()))
 }
 
 #[cfg(windows)]

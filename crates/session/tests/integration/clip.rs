@@ -95,7 +95,7 @@ fn definitions(d: &Document) -> usize {
 }
 
 fn header_body(text: &str) -> Vec<u8> {
-    let body = text.strip_prefix("sketchup-alt clip 1\n").expect("header");
+    let body = text.strip_prefix("tenon clip 1\n").expect("header");
     base64::engine::general_purpose::STANDARD
         .decode(body)
         .unwrap()
@@ -126,7 +126,7 @@ fn rezip(entries: &[(String, Vec<u8>)]) -> String {
 
 fn text_of(bytes: &[u8]) -> String {
     format!(
-        "sketchup-alt clip 1\n{}",
+        "tenon clip 1\n{}",
         base64::engine::general_purpose::STANDARD.encode(bytes)
     )
 }
@@ -136,12 +136,12 @@ fn clip_text_is_a_header_and_an_archive_with_the_model_and_the_base_point() {
     let mut d = doc();
     let ids = rectangle(&mut d, [2.0, 3.0, 0.0], [4.0, 5.0, 0.0]);
     let text = d.clip(&ids).unwrap();
-    assert!(text.starts_with("sketchup-alt clip 1\n"));
+    assert!(text.starts_with("tenon clip 1\n"));
     let entries = entries(&header_body(&text));
     let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(names, ["model.json", "clip.json"]);
     let model: Value = serde_json::from_slice(&entries[0].1).unwrap();
-    assert_eq!(model["format"], "sketchup-alt");
+    assert_eq!(model["format"], "tenon");
     assert_eq!(model["model"]["root"]["edges"].as_array().unwrap().len(), 4);
     let info: Value = serde_json::from_slice(&entries[1].1).unwrap();
     assert_eq!(info["base"], json!([2.0, 3.0, 0.0]));
@@ -539,12 +539,12 @@ fn text_that_is_not_a_good_clip_is_refused_and_changes_nothing() {
 
     refuses(&mut d, "", "empty");
     refuses(&mut d, "hello", "not ours");
-    refuses(&mut d, "sketchup-alt clip 2\nAAAA", "another version");
-    refuses(&mut d, "sketchup-alt clip 1", "header only");
-    refuses(&mut d, "sketchup-alt clip 1\n", "no body");
+    refuses(&mut d, "tenon clip 2\nAAAA", "another version");
+    refuses(&mut d, "tenon clip 1", "header only");
+    refuses(&mut d, "tenon clip 1\n", "no body");
     refuses(&mut d, &good[..good.len() / 2], "truncated");
     refuses(&mut d, &good[..good.len() - 1], "one character short");
-    refuses(&mut d, "sketchup-alt clip 1\n@@@@!!!!", "bad base64");
+    refuses(&mut d, "tenon clip 1\n@@@@!!!!", "bad base64");
     refuses(&mut d, &text_of(b"hello, world"), "not a zip");
     let mut damaged = bytes.clone();
     let middle = damaged.len() / 2;
@@ -614,7 +614,7 @@ fn text_that_is_not_a_good_clip_is_refused_and_changes_nothing() {
     }
     // Over the size cap: refused before decoding.
     let huge = format!(
-        "sketchup-alt clip 1\n{}",
+        "tenon clip 1\n{}",
         "A".repeat((clip::MAX_CLIP_BYTES / 3 + 2) * 4)
     );
     refuses(&mut d, &huge, "too large");

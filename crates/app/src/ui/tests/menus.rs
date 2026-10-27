@@ -763,7 +763,7 @@ fn quit_ends_the_file_menu_off_macos_and_leads_the_app_menu_on_it() {
     assert_eq!(quits, 1);
     assert!(
         matches!(native[0].entries.as_slice(), [Entry::Item(s), Entry::Item(q)]
-        if s.label == "Settings..." && q.action == UiAction::Quit && q.label == "Quit sketchup-alt")
+        if s.label == "Settings..." && q.action == UiAction::Quit && q.label == "Quit tenon")
     );
     assert_eq!(
         click_menu(&mut harness(Fixture::default()), &["File", "Quit"]),
@@ -786,7 +786,7 @@ fn settings_is_in_the_app_menu_or_ends_edit() {
             _ => None,
         })
         .collect();
-    assert_eq!(labels, ["Settings...", "Quit sketchup-alt"]);
+    assert_eq!(labels, ["Settings...", "Quit tenon"]);
     let settings_items = |bar: &[crate::menus::Menu]| {
         crate::menus::items(bar)
             .iter()
@@ -851,7 +851,7 @@ fn the_app_menu_reads_about_settings_then_quit() {
             "HideOthers",
             "ShowAll",
             "-",
-            "Quit sketchup-alt"
+            "Quit tenon"
         ]
     );
 }

@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>sketchup-alt</title>
+  <title>tenon</title>
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #202124; color: #e8eaed;
                  font-family: system-ui, sans-serif; }
-    canvas#sketchup-alt { position: fixed; inset: 0; width: 100%; height: 100%; display: block;
+    canvas#tenon { position: fixed; inset: 0; width: 100%; height: 100%; display: block;
                           outline: none; touch-action: none; user-select: none; }
     #loading, #problem { position: fixed; inset: 0; display: grid; place-items: center;
                          padding: 24px; text-align: center; pointer-events: none; }
@@ -16,22 +16,22 @@
   </style>
 </head>
 <body>
-  <canvas id="sketchup-alt" tabindex="0"></canvas>
-  <div id="loading">Loading sketchup-alt...</div>
+  <canvas id="tenon" tabindex="0"></canvas>
+  <div id="loading">Loading tenon...</div>
   <div id="problem" hidden></div>
-  <noscript>sketchup-alt needs JavaScript.</noscript>
+  <noscript>tenon needs JavaScript.</noscript>
   <script type="module">
     // A share link holds its key in the fragment: take it out of the address bar and the
     // history entry now, before the (large) module downloads, and hand it to the module through
     // a global it reads once and deletes. Never log it.
     if (location.hash.startsWith("#v1.")) {
-      globalThis.__sketchupAltLink = location.hash;
+      globalThis.__tenonLink = location.hash;
       history.replaceState(null, "", location.pathname);
     }
     import init from "./web.js";
     init().catch((e) => {
       const problem = document.getElementById("problem");
-      problem.textContent = "sketchup-alt could not start: " + e;
+      problem.textContent = "tenon could not start: " + e;
       problem.hidden = false;
     });
   </script>

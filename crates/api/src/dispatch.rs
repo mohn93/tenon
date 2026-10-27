@@ -709,7 +709,7 @@ pub fn describe() -> Value {
         "protocol": "JSON-RPC 2.0, one JSON object per line (UTF-8, '\\n' terminated)",
         "units": "meters; Z is up; angles in degrees",
         "paths": "file paths are absolute or relative to the app's working directory; with --api-root, relative to the first root and kept within the roots after symlinks (query file lists them as api_roots); save and export refuse to replace a file of another format unless overwrite: true",
-        "discard": "in the window, new, open and quit with discard: true first write the unsaved model to a recovery file in ~/.sketchup-alt/recovery (the status bar and View > Agent Activity name it); if that fails the command fails with file and nothing is discarded; headless writes nothing",
+        "discard": "in the window, new, open and quit with discard: true first write the unsaved model to a recovery file in ~/.tenon/recovery (the status bar and View > Agent Activity name it); if that fails the command fails with file and nothing is discarded; headless writes nothing",
         "methods": {
             "execute": {
                 "params": "Command, ScreenCommand (select by a box on screen) or EditorCommand (EditorCommand result: {editor: EditorState, pdf?: {sheets, warnings} (export_pdf only), revision})",

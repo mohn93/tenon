@@ -6,10 +6,10 @@ use app::platform::Filter;
 use app::prefs::{self, Prefs};
 
 /// The `localStorage` key the preferences are kept under (the same JSON as `prefs.json`).
-pub const PREFS_KEY: &str = "sketchup-alt-prefs";
+pub const PREFS_KEY: &str = "tenon-prefs";
 
 /// The id of the page's canvas; one is made if the page has none.
-pub const CANVAS_ID: &str = "sketchup-alt";
+pub const CANVAS_ID: &str = "tenon";
 
 /// The value of an `<input type=file accept>`: every extension of every filter, once, with a
 /// dot.

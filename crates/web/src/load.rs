@@ -17,7 +17,7 @@ use crate::viewer::{Collector, Failure, check_length};
 
 /// The name of the global `index.html` leaves a share link in once it has taken the link out of
 /// the address bar (before the module downloaded).
-const LINK_GLOBAL: &str = "__sketchupAltLink";
+const LINK_GLOBAL: &str = "__tenonLink";
 
 /// The page's share link: the one `index.html` took out of the address bar (read once, then
 /// forgotten), else `location.hash` ("" when it has none or the browser will not say).

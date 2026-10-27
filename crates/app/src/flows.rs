@@ -108,14 +108,14 @@ fn remember(env: &Env) -> Effect {
 }
 
 fn skr_filters() -> Vec<Filter> {
-    vec![Filter::new("SketchUp Alt model", &["skr"])]
+    vec![Filter::new("Tenon model", &["skr"])]
 }
 
 /// The File > Open filters: `.skr` models, and SketchUp files (opened as new models).
 fn open_filters() -> Vec<Filter> {
     vec![
-        Filter::new("SketchUp Alt or SketchUp model", &["skr", "skp"]),
-        Filter::new("SketchUp Alt model", &["skr"]),
+        Filter::new("Tenon or SketchUp model", &["skr", "skp"]),
+        Filter::new("Tenon model", &["skr"]),
         Filter::new("SketchUp model", &["skp"]),
     ]
 }
@@ -1020,7 +1020,7 @@ mod tests {
         assert_eq!(platform.path_requests.borrow()[0].name, "Untitled.skr");
 
         // Saved to the path chosen: the quit goes on.
-        let dir = std::env::temp_dir().join(format!("sketchup-alt-flows-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tenon-flows-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("house.skr");
         platform
@@ -1051,7 +1051,7 @@ mod tests {
     fn a_model_saved_from_the_prompt_is_remembered_before_the_new_one_replaces_it() {
         let platform = desktop();
         let dir =
-            std::env::temp_dir().join(format!("sketchup-alt-flows-rem-{}", std::process::id()));
+            std::env::temp_dir().join(format!("tenon-flows-rem-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("house.skr");
         platform
@@ -1387,7 +1387,7 @@ mod tests {
         let mut editor = in_cabinet();
         let mut f = flows();
         let dir =
-            std::env::temp_dir().join(format!("sketchup-alt-flows-cut-{}", std::process::id()));
+            std::env::temp_dir().join(format!("tenon-flows-cut-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("cabinet.csv");
         platform
