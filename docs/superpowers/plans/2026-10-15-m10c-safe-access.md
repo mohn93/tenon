@@ -7,11 +7,11 @@
 **Architecture:**
 - `session`: `file::replace_file` removes whatever is at `<path>.partial` and creates it with `create_new` (never through a link); read errors from OBJ, STL, `.skr` and texture files are worded without quoting the file; new module `sniff` recognises `.skr`, OBJ, MTL, STL, glTF and PNG/JPEG files, and `Save`/`Export` gain `overwrite` (default false) checked against it before anything is written; `Import` gains a hidden `library_roots` (never in JSON) that keeps `mtllib` reads inside the API roots; `Document::write_copy` writes the model to a path without making it the document's file.
 - `api`: new module `roots` (`ApiRoots`: resolve a read or a write, `apply` to a `Command`); `Host::roots` (default None); `dispatch` applies roots to `execute` and every `batch` command before anything runs, and `query file` reports `api_roots`; `listen_unix` binds in a fresh 0700 folder, makes the socket 0600 and hard-links it into place; the `Hub` keeps an activity log (`Activity`, last 100, repeats folded, connects and disconnects).
-- `app`: `--api-root DIR` (repeatable) in `cli`, resolved at start (`ApiRoots::new`, exit 2 on a bad folder); `AppHost` gains `roots` and `recovery` (the window's `~/.sketchup-alt/recovery`, None headless) and keeps discarded work before a discarding `new`/`open`/`quit` runs; the window's status bar shows "Agents: N" while any are connected, a View menu opens the Agent Activity window (connections, recovery files, the log newest first), which opens itself when a recovery file is written.
+- `app`: `--api-root DIR` (repeatable) in `cli`, resolved at start (`ApiRoots::new`, exit 2 on a bad folder); `AppHost` gains `roots` and `recovery` (the window's `~/.tenon/recovery`, None headless) and keeps discarded work before a discarding `new`/`open`/`quit` runs; the window's status bar shows "Agents: N" while any are connected, a View menu opens the Agent Activity window (connections, recovery files, the log newest first), which opens itself when a recovery file is written.
 
 **Tech Stack:** Rust 2024; serde, serde_json, schemars, zip (already a session dependency), egui; no new dependencies.
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md` ("Agent control milestones", M10c). Security findings: the API audit's "Security notes" (path handling, overwrite of arbitrary files, contents echoed in import errors, discard dropping window work, bind-then-chmod window, `.partial` following a symlink). M10a's and M10b's plans (`docs/superpowers/plans/2026-10-15-m10a-agent-state.md`, `2026-10-15-m10b-tool-driving.md`) describe `Host`, `AppHost`, `Hub`, `EditorState` and `editor_state` that this builds on.
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md` ("Agent control milestones", M10c). Security findings: the API audit's "Security notes" (path handling, overwrite of arbitrary files, contents echoed in import errors, discard dropping window work, bind-then-chmod window, `.partial` following a symlink). M10a's and M10b's plans (`docs/superpowers/plans/2026-10-15-m10a-agent-state.md`, `2026-10-15-m10b-tool-driving.md`) describe `Host`, `AppHost`, `Hub`, `EditorState` and `editor_state` that this builds on.
 
 ## Global Constraints
 
@@ -20,7 +20,7 @@
 - No new external dependencies. Disk is limited: no extra worktrees or target directories.
 - From the spec: the window shows when agents are connected (a status-bar indicator with the count, and a log of the last commands in View > Agent Activity). An opt-in `--api-root DIR` (repeatable) limits every path the API reads or writes (open, save, import, export, textures) to those folders, resolved after symlinks; relative paths resolve against the first root. Without roots, behaviour is unchanged. API saves and exports refuse to overwrite a file that is not of the target format unless `overwrite: true`. File errors never echo file contents. When an API `open`/`new` with `discard: true` drops unsaved window work, the dropped model is first written to a recovery file and the window says so.
 - Git: work on `dev`; other agents may share the checkout: run `git status` and `git diff` first and stage only the files you changed (never `git add -A` or `git add .`); short plain commit messages, no attribution lines. Never push or merge.
-- Do not launch the app window. Tests that start the binary use stdio or their own scratch sockets; never touch `~/.sketchup-alt/house.sock` or `h.sock` or their processes. Tests never write under `~/.sketchup-alt`: recovery tests pass their own scratch folder.
+- Do not launch the app window. Tests that start the binary use stdio or their own scratch sockets; never touch `~/.tenon/house.sock` or `h.sock` or their processes. Tests never write under `~/.tenon`: recovery tests pass their own scratch folder.
 - Test files go under `env!("CARGO_TARGET_TMPDIR")` (integration tests) or `std::env::temp_dir()` with the process id in the name (unit tests), as the existing tests do.
 
 ## Review Focus
@@ -41,7 +41,7 @@
 - **Agents can see the roots:** `query file` adds `api_roots`: the resolved folders, or null without `--api-root`. `describe` gets a `paths` note.
 - **Overwrite guard.** `save` and `export` gain `overwrite` (default false). Without it, an existing target must be of the target format, or empty; a missing target is fine. Formats are recognised from at most the first 64 KiB (and the size): `.skr` = a zip archive with a `document.json` entry; OBJ = UTF-8 text whose every complete line is blank, a `#` comment or starts with an OBJ keyword, with at least one keyword line; MTL = the same with MTL keywords and at least one `newmtl`; STL = text starting (after spaces) with `solid` in any case, or a binary STL whose size is 84 + 50 x its triangle count; `glb` = starts with `glTF`; `gltf` = starts (after spaces) with `{` and has `"asset"` in the first 64 KiB; texture image beside an OBJ = PNG or JPEG signature. Something that is not a regular file (a folder, a device) is refused. An OBJ export checks its `.mtl` and every image it would write the same way, all before writing anything. A refusal is `invalid_input`: "PATH exists and is not a FORMAT file: pass \"overwrite\": true to replace it". The window's Save, Save As and Export pass `overwrite: true` (its dialogs ask before replacing). A link at the target is judged by the file it points to (the write itself replaces the link, as before).
 - **No file contents in errors.** No error message quotes text read from a file: OBJ and STL number and index errors say what was wrong and where (`line 3: a coordinate is not a finite number`), `.skr` JSON errors give only line and column and the kind of fault, `.skr` texture errors name the material id but not the entry name the file gives, and image decoder errors become fixed wording ("the image is broken", "the image's header is broken"). Paths given by the caller, ids, counts, limits and system error text (`No such file or directory`) stay. This applies to every caller, window included.
-- **Recovery file.** Kept only in the window (headless, the API's own work is all there is; nothing is written). Before an API `new`, `open` or `quit` with `discard: true` runs while the model has unsaved changes, the model is written to `~/.sketchup-alt/recovery/<name>-<unix seconds>.skr` (`<name>` the open file's stem or `untitled`, characters other than letters, digits, `-`, `_` and space replaced by `_`; `-2`, `-3`, ... added when taken), with `~/.sketchup-alt` and `recovery` created 0700 and refused if open to others or a link. `quit` is included (the spec names `open`/`new`; `quit {discard: true}` drops the same work). Non-atomic batches holding a discarding `new`/`open` are run one command at a time so the work is kept at that command's turn. If the file cannot be written the command fails (`file`, "could not keep the unsaved changes in a recovery file (...): nothing was discarded"); if the command then fails (a missing file to open), the recovery file is removed (nothing was dropped). Afterwards the status bar says "An agent discarded unsaved changes; they were kept in PATH", the Agent Activity window opens and lists the file (all recovery files of the session), and stderr gets the same line. The API reply is unchanged.
+- **Recovery file.** Kept only in the window (headless, the API's own work is all there is; nothing is written). Before an API `new`, `open` or `quit` with `discard: true` runs while the model has unsaved changes, the model is written to `~/.tenon/recovery/<name>-<unix seconds>.skr` (`<name>` the open file's stem or `untitled`, characters other than letters, digits, `-`, `_` and space replaced by `_`; `-2`, `-3`, ... added when taken), with `~/.tenon` and `recovery` created 0700 and refused if open to others or a link. `quit` is included (the spec names `open`/`new`; `quit {discard: true}` drops the same work). Non-atomic batches holding a discarding `new`/`open` are run one command at a time so the work is kept at that command's turn. If the file cannot be written the command fails (`file`, "could not keep the unsaved changes in a recovery file (...): nothing was discarded"); if the command then fails (a missing file to open), the recovery file is removed (nothing was dropped). Afterwards the status bar says "An agent discarded unsaved changes; they were kept in PATH", the Agent Activity window opens and lists the file (all recovery files of the session), and stderr gets the same line. The API reply is unchanged.
 - **Indicator.** "Agents: N" at the right of the status bar while N > 0 socket connections are open (each open connection counts, whether or not it sent anything); hidden at 0. Clicking it opens Agent Activity. Hover text: "Programs connected to the agent API".
 - **Activity log.** The `Hub` keeps the last 100 entries (`ACTIVITY_LEN`), in order: each connection opening and closing (`connected`, `disconnected`), and every request it handled: `method`, then the command or query `type`, then for `open`/`save`/`export`/`import` the path as given (`execute save /a/house.skr`); `batch (N commands)`; `tool_input (N events)`; a line that is not JSON is `(not JSON)`. Each entry has the connection id, the time it was handled (`Instant`), and the error message when the reply was an error. A request equal to the last entry (same connection, request text and error) increments its `repeats` instead (an agent polling `query camera` makes one line). Request text is cut to 160 characters. The window lists entries newest first as `12 s ago  #3  execute save /a/house.skr  ok` (or `error: ...`, and ` (x12)` when repeated). Headless keeps the log but shows nothing. `describe` is logged like any request.
 - **Socket bind.** `listen_unix` binds the socket inside a fresh folder `.sa<pid>-<n>` created 0700 beside the target, sets it 0600, then hard-links it to the target path (failing, not replacing, if something appeared there) and removes the folder; so the socket is never reachable at a mode the umask chose. The stale-socket and non-socket checks stay.
@@ -114,9 +114,9 @@ fn skr_with(path: &Path, json: &str) {
 fn open_errors_do_not_quote_the_file() {
     let path = scratch("secret.skr");
     let cases = [
-        r#"{"format": "sketchup-alt", "schema_version": 9, "camera": "hunter2-SECRET"}"#,
-        r#"{"format": "sketchup-alt", "schema_version": 9, "hunter2-SECRET": 1}"#,
-        r#"{"format": "sketchup-alt", "schema_version": 9, "camera": {"eye": [hunter2-SECRET"#,
+        r#"{"format": "tenon", "schema_version": 9, "camera": "hunter2-SECRET"}"#,
+        r#"{"format": "tenon", "schema_version": 9, "hunter2-SECRET": 1}"#,
+        r#"{"format": "tenon", "schema_version": 9, "camera": {"eye": [hunter2-SECRET"#,
     ];
     for json in cases {
         skr_with(&path, json);
@@ -436,7 +436,7 @@ pub(crate) enum Kind {
 impl Kind {
     fn name(self) -> &'static str {
         match self {
-            Kind::Skr => "sketchup-alt model",
+            Kind::Skr => "tenon model",
             Kind::Obj => "OBJ",
             Kind::Mtl => "MTL material library",
             Kind::Stl => "STL",
@@ -1411,7 +1411,7 @@ git commit -m "Socket bound private from the start; hub keeps an activity log"
 - Consumes: Task 3's `AppHost { roots }`, Task 4's `Hub::activity`, `activity_revision`, `open_connections`, `Activity`.
 - Produces:
   - `Document::write_copy(&self, path: &Path) -> Result<(), CommandError>`: writes the model, view and lighting as a `.skr` at `path` without making it the document's file or marking it saved.
-  - `AppHost { ..., recovery: Option<&'a Path> }`: the folder discarded work is kept in (window: `~/.sketchup-alt/recovery`; headless and tests that do not test it: None).
+  - `AppHost { ..., recovery: Option<&'a Path> }`: the folder discarded work is kept in (window: `~/.tenon/recovery`; headless and tests that do not test it: None).
   - `host::recovery_path(dir: &Path, open_file: Option<&Path>, now: SystemTime) -> PathBuf` (a free name).
   - `Editor::note_recovery(&mut self, path: PathBuf)`, `Editor::recovered(&self) -> &[PathBuf]`.
   - `ui::Agents<'a> { connected: usize, log: Option<&'a [String]>, recovered: &'a [PathBuf] }`; `View.agents: Agents<'a>`; `UiAction::ShowAgentActivity(bool)`.
@@ -1424,7 +1424,7 @@ git commit -m "Socket bound private from the start; hub keeps an activity log"
 ```rust
     fn recovery_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir()
-            .join(format!("sketchup-alt-recovery-{}-{name}", std::process::id()));
+            .join(format!("tenon-recovery-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }
@@ -1669,7 +1669,7 @@ impl AppHost<'_> {
 }
 ```
 
-(`cli::private_dir_for(dir)` returns `dir`'s parent only when it is the `.sketchup-alt` folder: for `~/.sketchup-alt/recovery` that is `~/.sketchup-alt`, which must then be private; a test folder's parent is left alone. Import `std::time::{SystemTime, UNIX_EPOCH}`, `std::path::{Path, PathBuf}`, `session::ErrorKind`, `crate::cli`.)
+(`cli::private_dir_for(dir)` returns `dir`'s parent only when it is the `.tenon` folder: for `~/.tenon/recovery` that is `~/.tenon`, which must then be private; a test folder's parent is left alone. Import `std::time::{SystemTime, UNIX_EPOCH}`, `std::path::{Path, PathBuf}`, `session::ErrorKind`, `crate::cli`.)
 
 In `impl Host for AppHost`: `execute` calls `self.execute_keeping(command)`; `execute_batch`:
 
@@ -1828,7 +1828,7 @@ fn activity_line(a: &api::Activity, now: Instant) -> String {
 (`connected` and `disconnected` entries end in `ok` too; keep it simple.) `State` gains `agent_activity: bool` and `recovered_seen: usize`. `render` takes what it needs from the hub: change its call site (`s.render()` in `window_event`) to `s.render(&self.hub)` and inside build `let lines: Vec<String> = self.agent_activity.then(|| hub.activity().iter().rev().map(|a| activity_line(a, Instant::now())).collect()).unwrap_or_default();` and `agents: Agents { connected: hub.open_connections(), log: self.agent_activity.then_some(&lines[..]), recovered: self.editor.recovered() }`. Before building the view: `if self.editor.recovered().len() > self.recovered_seen { self.recovered_seen = self.editor.recovered().len(); self.agent_activity = true; }`. `apply`: `UiAction::ShowAgentActivity(open) => self.agent_activity = open`. `process_api`: also request a frame when `hub.open_connections()` or (`self.agent_activity` and `hub.activity_revision()`) changed across `hub.process` (compare before/after), so the indicator and the open log stay current. While the log is open and an entry is shown, schedule a repaint each second (`self.repaint_at = Some(earliest(self.repaint_at, now + Duration::from_secs(1)))` after presenting) so the ages move.
 
 `docs/agent-api.md`:
-- Files paragraph: after "a client that means it, or has asked the user, passes `\"discard\": true`.": "In the window, `new`, `open` and `quit` with `discard: true` first write the unsaved model to a recovery file, `~/.sketchup-alt/recovery/<name>-<seconds>.skr`; the window's status bar and its Agent Activity window name it. If the file cannot be written the command fails with `file` and nothing is discarded. Headless, nothing is written."
+- Files paragraph: after "a client that means it, or has asked the user, passes `\"discard\": true`.": "In the window, `new`, `open` and `quit` with `discard: true` first write the unsaved model to a recovery file, `~/.tenon/recovery/<name>-<seconds>.skr`; the window's status bar and its Agent Activity window name it. If the file cannot be written the command fails with `file` and nothing is discarded. Headless, nothing is written."
 - Access and safety: append "The window shows `Agents: N` in its status bar while N connections are open; View > Agent Activity lists the connections' requests (the last 100, newest first, with their results and how long ago they came) and any recovery files."
 - Window actions table: add rows for View > Agent Activity and the status-bar indicator ("none: they only show what agents do").
 

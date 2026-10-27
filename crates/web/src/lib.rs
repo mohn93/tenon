@@ -1,4 +1,4 @@
-//! sketchup-alt in a browser canvas. The page loads the module built from this crate
+//! tenon in a browser canvas. The page loads the module built from this crate
 //! (`scripts/build-web.sh`); `start` runs when it loads.
 
 pub mod names;

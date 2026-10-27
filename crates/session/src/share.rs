@@ -17,7 +17,7 @@ use crate::{CommandError, ErrorKind};
 const MAGIC: &[u8; 5] = b"SKAS1";
 const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
-/// Largest model (and blob) accepted, as for `.skr` files.
+/// Largest model (and blob) accepted, as for `.tnn` files.
 pub const MAX_BLOB_BYTES: usize = 256 * 1024 * 1024;
 /// Longest model name carried, in bytes of UTF-8.
 pub const MAX_NAME_BYTES: usize = 256;

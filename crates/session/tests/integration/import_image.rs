@@ -268,17 +268,17 @@ fn the_image_survives_saving_and_exports_as_a_textured_face() {
     let file = png("kept.png", 4, 2);
     run(&mut d, pic(&file, json!({"width": 2}))).unwrap();
     let bytes = std::fs::read(&file).unwrap();
-    let skr = scratch("kept.skr");
+    let tnn = scratch("kept.tnn");
     run(
         &mut d,
-        json!({"type": "save", "path": skr.to_str().unwrap()}),
+        json!({"type": "save", "path": tnn.to_str().unwrap()}),
     )
     .unwrap();
     std::fs::remove_file(&file).unwrap();
     let mut e = doc();
     run(
         &mut e,
-        json!({"type": "open", "path": skr.to_str().unwrap()}),
+        json!({"type": "open", "path": tnn.to_str().unwrap()}),
     )
     .unwrap();
     assert_eq!(e.scene(), d.scene());

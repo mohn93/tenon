@@ -1,4 +1,4 @@
-//! The sketchup-alt app as a library: the window (`app::App`, started with a `platform::Platform`
+//! The tenon app as a library: the window (`app::App`, started with a `platform::Platform`
 //! and, on the web, a GPU context made beforehand) and, on desktops, the command line, the
 //! headless and MCP modes. `main.rs` is the desktop's thin binary; the web crate calls
 //! `app::App` itself.

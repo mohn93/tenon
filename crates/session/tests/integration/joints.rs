@@ -430,7 +430,7 @@ fn grouping_a_part_deletes_its_joints() {
 fn joints_save_at_schema_25_and_read_back() {
     let mut d = doc();
     let (a, b) = two_parts(&mut d);
-    let path = scratch("none.skr");
+    let path = scratch("none.tnn");
     ok(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -450,7 +450,7 @@ fn joints_save_at_schema_25_and_read_back() {
     );
     let listing = ask(&d, json!({"type": "joints"}))["joints"].clone();
 
-    let path = scratch("joints.skr");
+    let path = scratch("joints.tnn");
     ok(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -468,7 +468,7 @@ fn joints_save_at_schema_25_and_read_back() {
     assert_eq!(ask(&e, json!({"type": "joints"}))["joints"], listing);
     assert_eq!(e.scene(), d.scene());
 
-    let newer = scratch("newer.skr");
+    let newer = scratch("newer.tnn");
     std::fs::copy(&path, &newer).unwrap();
     edit_file(&newer, |doc| doc["schema_version"] = json!(30));
     let err = run(
@@ -479,7 +479,7 @@ fn joints_save_at_schema_25_and_read_back() {
     assert!(err.1.contains("newer"), "{}", err.1);
 
     // A joint naming a part the file does not have is refused.
-    let broken = scratch("broken.skr");
+    let broken = scratch("broken.tnn");
     std::fs::copy(&path, &broken).unwrap();
     edit_file(&broken, |doc| {
         doc["model"]["joints"][0]["b"] = json!(987654)

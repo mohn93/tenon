@@ -11,7 +11,7 @@
 
 **Tech Stack:** Rust 2024; no dependency changes.
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`: the outliner (UI section), commands and queries (section 5). Task 1 adds the M7c milestone line.
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md`: the outliner (UI section), commands and queries (section 5). Task 1 adds the M7c milestone line.
 
 ## Global Constraints
 
@@ -56,7 +56,7 @@
 | `crates/session/tests/outliner.rs` | new: 8 command-driven tests | 1 |
 | `crates/api/tests/dispatch.rs` | describe lists `open_path`, `outliner` | 1 |
 | `docs/agent-api.md` | query row, command, open_path and outliner docs; window paragraph | 1, 2 |
-| `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md` | status line, section 5 lists, M7c line | 1 |
+| `docs/superpowers/specs/2026-10-10-tenon-design.md` | status line, section 5 lists, M7c line | 1 |
 | `crates/app/src/editor.rs` | `outliner_select`, `open_path`, 3 tests | 2 |
 | `crates/app/src/ui.rs` | Outliner section, `UiAction` variants, `View.outliner`, 3 tests | 2 |
 | `crates/app/src/app.rs` | builds the tree per frame, applies the actions | 2 |
@@ -78,7 +78,7 @@ Code for new files is given in full. Changes to existing files are given as unif
 - Create (Test): `crates/session/tests/outliner.rs`
 - Modify (Test): `crates/api/tests/dispatch.rs` (describe schema lists gain `"open_path"` and `"outliner"`)
 - Modify: `docs/agent-api.md` (query table row, command list, `open_path` paragraph in Groups and components, outliner result example and bullets)
-- Modify: `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md` (status line "M7c outliner"; section 5 command list "open a path of instances" and query list "the outliner tree of groups and components"; milestone line **M7c** after M7b)
+- Modify: `docs/superpowers/specs/2026-10-10-tenon-design.md` (status line "M7c outliner"; section 5 command list "open a path of instances" and query list "the outliner tree of groups and components"; milestone line **M7c** after M7b)
 
 **Interfaces produced:**
 ```rust
@@ -736,12 +736,12 @@ Apply to `docs/agent-api.md`:
  whose last instance was erased, and what only it placed (one undo step).
 ~~~~
 
-Apply to `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`:
+Apply to `docs/superpowers/specs/2026-10-10-tenon-design.md`:
 ```diff
---- a/docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
-+++ b/docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
+--- a/docs/superpowers/specs/2026-10-10-tenon-design.md
++++ b/docs/superpowers/specs/2026-10-10-tenon-design.md
 @@ -1,8 +1,8 @@
- # SketchUp Alternative — Design
+ # Tenon — Design
  
  Date: 2026-10-10
 -Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope; M4c scope; M5 split into M5a-c; M5b tools); 2026-10-12 (M5c files, M5d export, M6a circles, M6b rotate, M6c guides, M6d curves, M7a camera, M7b materials)
@@ -792,7 +792,7 @@ Expected workspace totals after each task: 725, 731.
 ```bash
 git status
 git diff --stat
-git add crates/api/tests/dispatch.rs crates/session/tests/outliner.rs crates/session/src/command.rs crates/session/src/document.rs crates/session/src/document/groups.rs crates/session/src/lib.rs crates/session/src/query.rs docs/agent-api.md docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
+git add crates/api/tests/dispatch.rs crates/session/tests/outliner.rs crates/session/src/command.rs crates/session/src/document.rs crates/session/src/document/groups.rs crates/session/src/lib.rs crates/session/src/query.rs docs/agent-api.md docs/superpowers/specs/2026-10-10-tenon-design.md
 git commit -m "Outliner query and open_path command: the tree of placed groups and components with open and selected marks; open a path of instances from the root; spec M7c"
 ```
 

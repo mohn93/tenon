@@ -13,7 +13,7 @@ const GLTF_HEAD: u64 = 16 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kind {
-    Skr,
+    Tnn,
     Obj,
     Mtl,
     Stl,
@@ -36,7 +36,7 @@ pub(crate) enum Kind {
 impl Kind {
     fn name(self) -> &'static str {
         match self {
-            Kind::Skr => "sketchup-alt model",
+            Kind::Tnn => "Tenon model",
             Kind::Obj => "OBJ",
             Kind::Mtl => "MTL material library",
             Kind::Stl => "STL",
@@ -127,7 +127,7 @@ pub(crate) fn replaceable(path: &Path, kind: Kind) -> bool {
     let Ok(file) = std::fs::File::open(path) else {
         return false;
     };
-    if kind == Kind::Skr {
+    if kind == Kind::Tnn {
         return zip::ZipArchive::new(file).is_ok_and(|mut z| z.by_name("document.json").is_ok());
     }
     if kind == Kind::ThreeMf {
@@ -144,10 +144,10 @@ pub(crate) fn replaceable(path: &Path, kind: Kind) -> bool {
     is_kind(&head, meta.len(), kind)
 }
 
-/// Whether a file of `len` bytes starting with `head` is of `kind` (not `Skr`).
+/// Whether a file of `len` bytes starting with `head` is of `kind` (not `Tnn`).
 fn is_kind(head: &[u8], len: u64, kind: Kind) -> bool {
     match kind {
-        Kind::Skr | Kind::ThreeMf => false,
+        Kind::Tnn | Kind::ThreeMf => false,
         Kind::Glb => head.starts_with(b"glTF"),
         Kind::Skp => head.starts_with(&skp_magic()),
         Kind::Image => {

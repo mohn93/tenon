@@ -6,10 +6,11 @@ use app::platform::Filter;
 use app::prefs::{self, Prefs};
 
 /// The `localStorage` key the preferences are kept under (the same JSON as `prefs.json`).
+/// Kept from before the rename to Tenon, as stored data stays where the browser has it.
 pub const PREFS_KEY: &str = "sketchup-alt-prefs";
 
 /// The id of the page's canvas; one is made if the page has none.
-pub const CANVAS_ID: &str = "sketchup-alt";
+pub const CANVAS_ID: &str = "tenon";
 
 /// The value of an `<input type=file accept>`: every extension of every filter, once, with a
 /// dot.
@@ -55,11 +56,11 @@ pub fn mime_for(name: &str) -> &'static str {
     }
 }
 
-/// Whether a file picked by the user may be written back by Save: only a `.skr` the model was
+/// Whether a file picked by the user may be written back by Save: only a `.tnn` the model was
 /// opened from (a `.skp` or an OBJ it was imported from must never be overwritten by a model).
 pub fn writes_back(name: &str) -> bool {
     name.rsplit_once('.')
-        .is_some_and(|(stem, e)| !stem.is_empty() && e.eq_ignore_ascii_case("skr"))
+        .is_some_and(|(stem, e)| !stem.is_empty() && session::file::is_model_extension(e))
 }
 
 /// The file handle Save may write to, and how it comes and goes. A handle is picked with a
@@ -87,7 +88,7 @@ impl<H: Clone> Handles<H> {
         self.candidate = Some((name.to_string(), handle));
     }
 
-    /// The file picked last opened as the model `name`: its handle is kept when it is a `.skr`.
+    /// The file picked last opened as the model `name`: its handle is kept when it is a `.tnn`.
     pub fn opened(&mut self, name: &str) {
         let picked = self.candidate.take();
         self.kept = picked
@@ -206,26 +207,26 @@ mod tests {
     #[test]
     fn the_accept_attribute_lists_each_extension_once() {
         let filters = vec![
-            Filter::new("both", &["skr", "skp"]),
-            Filter::new("one", &["skr"]),
+            Filter::new("both", &["tnn", "skp"]),
+            Filter::new("one", &["tnn"]),
             Filter::new("other", &["skp"]),
         ];
-        assert_eq!(accept_attribute(&filters), ".skr,.skp");
+        assert_eq!(accept_attribute(&filters), ".tnn,.skp");
         assert_eq!(accept_attribute(&[]), "");
     }
 
     #[test]
     fn a_download_name_loses_its_folders() {
-        assert_eq!(download_name("house.skr", "x.skr"), "house.skr");
-        assert_eq!(download_name("a/b\\c.obj", "x.skr"), "c.obj");
-        assert_eq!(download_name("  ", "x.skr"), "x.skr");
-        assert_eq!(download_name("..", "x.skr"), "x.skr");
-        assert_eq!(download_name("dir/", "x.skr"), "x.skr");
+        assert_eq!(download_name("house.tnn", "x.tnn"), "house.tnn");
+        assert_eq!(download_name("a/b\\c.obj", "x.tnn"), "c.obj");
+        assert_eq!(download_name("  ", "x.tnn"), "x.tnn");
+        assert_eq!(download_name("..", "x.tnn"), "x.tnn");
+        assert_eq!(download_name("dir/", "x.tnn"), "x.tnn");
     }
 
     #[test]
     fn files_have_media_types() {
-        assert_eq!(mime_for("a.skr"), "application/octet-stream");
+        assert_eq!(mime_for("a.tnn"), "application/octet-stream");
         assert_eq!(mime_for("a.OBJ"), "model/obj");
         assert_eq!(mime_for("a.glb"), "model/gltf-binary");
         assert_eq!(mime_for("a.mtl"), "text/plain");
@@ -233,51 +234,51 @@ mod tests {
     }
 
     #[test]
-    fn only_a_skr_is_written_back() {
-        assert!(writes_back("house.skr"));
-        assert!(writes_back("House.SKR"));
+    fn only_a_tnn_is_written_back() {
+        assert!(writes_back("house.tnn"));
+        assert!(writes_back("House.TNN"));
         assert!(!writes_back("house.skp"));
         assert!(!writes_back("house.obj"));
-        assert!(!writes_back(".skr"));
-        assert!(!writes_back("skr"));
+        assert!(!writes_back(".tnn"));
+        assert!(!writes_back("tnn"));
     }
 
     #[test]
     fn a_kept_handle_belongs_to_the_model_opened_from_it() {
         let mut h: Handles<u32> = Handles::default();
         assert_eq!(h.for_save(true), None);
-        // Open a.skr: kept once it opened.
-        h.picked("a.skr", Some(1));
+        // Open a.tnn: kept once it opened.
+        h.picked("a.tnn", Some(1));
         assert_eq!(h.for_save(true), None, "not before it opened");
-        h.opened("a.skr");
+        h.opened("a.tnn");
         assert_eq!(h.for_save(true), Some(1));
         // The window says it is not that file's model (after New).
         assert_eq!(h.for_save(false), None);
         // A file that fails to open leaves the kept one: it is never `opened`.
-        h.picked("bad.skr", Some(2));
+        h.picked("bad.tnn", Some(2));
         assert_eq!(h.for_save(true), Some(1));
         // The next pick replaces the failed one; a SketchUp file keeps no handle.
         h.picked("b.skp", Some(3));
         h.opened("b.skp");
         assert_eq!(h.for_save(true), None);
         // A pick that is not the one opened keeps nothing.
-        h.picked("c.skr", Some(4));
-        h.opened("other.skr");
+        h.picked("c.tnn", Some(4));
+        h.opened("other.tnn");
         assert_eq!(h.for_save(true), None);
     }
 
     #[test]
     fn saving_a_model_replaces_the_handle_and_downloads_clear_it() {
         let mut h: Handles<u32> = Handles::default();
-        h.saved("x.skr", Some(5));
+        h.saved("x.tnn", Some(5));
         assert_eq!(h.for_save(true), Some(5));
-        h.saved("y.skr", None);
+        h.saved("y.tnn", None);
         assert_eq!(
             h.for_save(true),
             None,
             "a download is not the handle's file"
         );
-        h.saved("z.skr", Some(6));
+        h.saved("z.tnn", Some(6));
         // An export's file is never the model's.
         h.saved("z.obj", Some(7));
         assert_eq!(h.for_save(true), None);

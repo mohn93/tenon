@@ -12,7 +12,7 @@
 
 **Tech Stack:** Rust 2024; wgpu 30, egui 0.36; new dependency `image` 0.25.10 (features `png`, `jpeg` only) in `session`.
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md` (Milestones, "Post-v1 milestones", M9b).
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md` (Milestones, "Post-v1 milestones", M9b).
 
 ## Global Constraints
 
@@ -1695,7 +1695,7 @@ index 0739459..2f450ac 100644
 +use crate::texture::{MAX_TEXTURE_BYTES, decode};
  
  /// The `format` every file records.
- pub const FORMAT: &str = "sketchup-alt";
+ pub const FORMAT: &str = "tenon";
 -/// The newest schema version this build reads, and the one it writes when a material is
 -/// see-through. Version 2 added guides, version 3 curves and soft edges, version 4 the
 -/// camera's up direction and projection, version 5 materials, and version 6 material
@@ -1926,10 +1926,10 @@ index 32a8ba5..62e3c51 100644
  ### Files
  
  Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
--(`"sketchup-alt"`), `schema_version` (6 when a material is see-through, else 5; a material's
+-(`"tenon"`), `schema_version` (6 when a material is see-through, else 5; a material's
 -`opacity` is written only when below 1, so a model whose materials are all opaque is saved
 -exactly as before opacity existed and older builds still open it; version 5 files open with
-+(`"sketchup-alt"`), `schema_version` (7 when a material has a texture, else 6 when a material
++(`"tenon"`), `schema_version` (7 when a material has a texture, else 6 when a material
 +is see-through, else 5; a material's `opacity` is written only when below 1, so a model whose
 +materials are all opaque is saved exactly as before opacity existed and older builds still open
 +it; version 6 and older files open without textures; version 5 files open with
@@ -1943,7 +1943,7 @@ index 32a8ba5..62e3c51 100644
  
  | Command | Effect |
  |---|---|
-@@ -421,7 +451,8 @@ reason (a missing file, not a sketchup-alt file, a missing or newer schema versi
+@@ -421,7 +451,8 @@ reason (a missing file, not a tenon file, a missing or newer schema versi
  over 256 MiB, an id of 2^53 or more or one number used as the id of two things, a transform that cannot be inverted, a coordinate beyond the
  +/-1e6 m limit, a curve whose edges branch, fall apart or are straight, a soft edge bounding
  fewer than two faces, a face or instance painted with a material the file lacks, a material
@@ -2316,7 +2316,7 @@ index 7961925..4aa8ea7 100644
 +/// faces are painted, each material's faces follow a `usemtl` line and the material library is
 +/// returned too, with the texture images it names (`<library stem>_<material>.png` or `.jpg`).
 +fn obj(groups: &Groups, mtl_name: &str) -> Encoded {
-     let mut out = String::from("# sketchup-alt export: meters, Y up\n");
+     let mut out = String::from("# tenon export: meters, Y up\n");
      let painted = groups.painted();
      if painted {
 @@ -240,6 +249,7 @@ fn obj(groups: &Groups, mtl_name: &str) -> (String, Option<String>) {
@@ -2378,7 +2378,7 @@ index 7961925..4aa8ea7 100644
 +    let mut images = Vec::new();
      let mtl = painted.then(|| {
 +        let stem = mtl_name.strip_suffix(".mtl").unwrap_or(mtl_name);
-         let mut mtl = String::from("# sketchup-alt materials: diffuse colors, linear\n");
+         let mut mtl = String::from("# tenon materials: diffuse colors, linear\n");
          for (g, name) in groups.groups.iter().zip(&names) {
              let [r, gr, b] = g.color.map(linear);
 @@ -280,10 +316,19 @@ fn obj(groups: &Groups, mtl_name: &str) -> (String, Option<String>) {
@@ -2494,7 +2494,7 @@ index 7961925..4aa8ea7 100644
      }
 -    let doc = json!({
 +    let mut doc = json!({
-         "asset": {"version": "2.0", "generator": "sketchup-alt"},
+         "asset": {"version": "2.0", "generator": "tenon"},
          "scene": 0,
          "scenes": [{"nodes": [0]}],
 @@ -378,12 +468,16 @@ fn gltf_parts(groups: &Groups) -> (Vec<u8>, serde_json::Value) {
@@ -3935,7 +3935,7 @@ index 52d71c6..b96f081 100644
 +        e.add_material();
 +        let id = e.current_material().unwrap();
 +        let png = std::env::temp_dir().join(format!(
-+            "sketchup-alt-editor-{}-red-blue.png",
++            "tenon-editor-{}-red-blue.png",
 +            std::process::id()
 +        ));
 +        std::fs::write(&png, RED_BLUE_PNG).unwrap();

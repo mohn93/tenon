@@ -113,7 +113,7 @@ mod tests {
         e.add_style(None);
         assert!(!e.style_before_add.is_empty());
         let before = e.documents();
-        assert!(e.open_bytes("kept.skr", &bytes));
+        assert!(e.open_bytes("kept.tnn", &bytes));
         assert!(e.style_before_add.is_empty());
         assert_eq!(e.documents(), before + 1);
     }

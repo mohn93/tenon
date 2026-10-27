@@ -1511,9 +1511,9 @@ fn export_pdf_refuses_bad_input_and_other_files_before_rendering() {
     let r = call(
         &mut h,
         "execute",
-        json!({"type": "export_pdf", "path": dir.join("a.skr").display().to_string()}),
+        json!({"type": "export_pdf", "path": dir.join("a.tnn").display().to_string()}),
     );
-    assert!(r["error"]["message"].as_str().unwrap().contains(".skr"));
+    assert!(r["error"]["message"].as_str().unwrap().contains(".tnn"));
     // A perspective view cannot print at a scale (or, without a GPU, cannot print at all).
     let r = call(
         &mut h,

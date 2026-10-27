@@ -94,7 +94,7 @@ fn handshake_lists_seven_tools() {
     assert_eq!(out.len(), 2); // the notification got no reply
     assert_eq!(out[0]["id"], 1);
     assert_eq!(out[0]["result"]["protocolVersion"], "2025-06-18");
-    assert_eq!(out[0]["result"]["serverInfo"]["name"], "sketchup-alt");
+    assert_eq!(out[0]["result"]["serverInfo"]["name"], "tenon");
     assert_eq!(
         out[0]["result"]["capabilities"]["tools"]["listChanged"],
         false

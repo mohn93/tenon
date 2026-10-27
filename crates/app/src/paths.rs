@@ -1,6 +1,6 @@
 //! Where the app keeps its files, per platform.
 //!
-//! macOS (and any other Unix) keeps everything under `~/.sketchup-alt`. Linux follows the XDG
+//! macOS (and any other Unix) keeps everything under `~/.tenon`. Linux follows the XDG
 //! Base Directory layout: preferences in the config folder, recovery files in the state folder,
 //! and the default agent socket in the runtime folder. Windows keeps preferences in the roaming
 //! application data folder and recovery files in the local one (its agent API uses a named
@@ -14,10 +14,15 @@ use std::path::{Path, PathBuf};
 
 /// Base folder under HOME for the files that live there on macOS, and for the socket when the
 /// preferred folder is unusable.
-pub const FALLBACK_DIR: &str = ".sketchup-alt";
+pub const FALLBACK_DIR: &str = ".tenon";
 
 /// The app's folder name under the XDG base folders and the Windows application data folders.
-const XDG_DIR: &str = "sketchup-alt";
+const XDG_DIR: &str = "tenon";
+
+/// The folder names the app used before it was renamed Tenon: the preferences in them are read
+/// once when the new ones do not exist yet.
+const OLD_FALLBACK_DIR: &str = ".sketchup-alt";
+const OLD_XDG_DIR: &str = "sketchup-alt";
 
 /// Unix socket paths are limited to about 104 bytes on macOS (108 on Linux).
 pub const MAX_SOCKET_PATH: usize = 100;
@@ -56,8 +61,9 @@ pub struct Paths {
     /// The folder the default agent socket goes in (on Windows, which uses a named pipe, the
     /// temp folder, unused).
     pub socket_dir: PathBuf,
-    /// The earlier prefs location, read once when `prefs` does not exist yet (Linux only).
-    pub legacy_prefs: Option<PathBuf>,
+    /// The prefs locations from before the rename to Tenon, newest first: the first that exists
+    /// is read once when `prefs` does not exist yet.
+    pub legacy_prefs: Vec<PathBuf>,
 }
 
 pub type Env<'a> = &'a dyn Fn(&str) -> Option<OsString>;
@@ -84,7 +90,10 @@ fn resolve_as(os: Os, env: Env, temp: &Path, pid: u32, uid: Option<u32>) -> Opti
                 prefs: config.join(XDG_DIR).join("prefs.json"),
                 recovery: state.join(XDG_DIR).join("recovery"),
                 socket_dir,
-                legacy_prefs: Some(fallback.join("prefs.json")),
+                legacy_prefs: vec![
+                    config.join(OLD_XDG_DIR).join("prefs.json"),
+                    home.join(OLD_FALLBACK_DIR).join("prefs.json"),
+                ],
             }
         }
         // Windows was resolved above, without HOME.
@@ -92,13 +101,13 @@ fn resolve_as(os: Os, env: Env, temp: &Path, pid: u32, uid: Option<u32>) -> Opti
             prefs: fallback.join("prefs.json"),
             recovery: fallback.join("recovery"),
             socket_dir,
-            legacy_prefs: None,
+            legacy_prefs: vec![home.join(OLD_FALLBACK_DIR).join("prefs.json")],
         },
     })
 }
 
-/// Windows: preferences in `%APPDATA%\sketchup-alt`, recovery files in
-/// `%LOCALAPPDATA%\sketchup-alt\recovery`. A variable counts only when set to an absolute
+/// Windows: preferences in `%APPDATA%\tenon`, recovery files in
+/// `%LOCALAPPDATA%\tenon\recovery`. A variable counts only when set to an absolute
 /// path; a missing one falls back to `%USERPROFILE%\AppData\Roaming` or `\Local`. None when
 /// either folder is still unknown.
 fn windows_paths(env: Env, temp: &Path) -> Option<Paths> {
@@ -114,7 +123,7 @@ fn windows_paths(env: Env, temp: &Path) -> Option<Paths> {
         prefs: windows_join(&roaming, &[XDG_DIR, "prefs.json"]),
         recovery: windows_join(&local, &[XDG_DIR, "recovery"]),
         socket_dir: temp.to_path_buf(),
-        legacy_prefs: None,
+        legacy_prefs: vec![windows_join(&roaming, &[OLD_XDG_DIR, "prefs.json"])],
     })
 }
 
@@ -154,7 +163,7 @@ pub fn default_socket(env: Env, temp: &Path, pid: u32) -> PathBuf {
 }
 
 fn socket_name(pid: u32) -> String {
-    format!("sketchup-alt-{pid}.sock")
+    format!("tenon-{pid}.sock")
 }
 
 fn home(env: Env) -> Option<PathBuf> {
@@ -190,7 +199,7 @@ fn socket_dir_as(
 }
 
 /// The temp folder (`std::env::temp_dir()`: `$TMPDIR`, else `/tmp`) unless it is the shared `/tmp` (Linux without a usable runtime folder) or
-/// too deep for a socket path; then `<home>/.sketchup-alt`. Without a home the temp folder is
+/// too deep for a socket path; then `<home>/.tenon`. Without a home the temp folder is
 /// kept and listening reports the error.
 fn choose_temp_or_fallback(temp: &Path, home: Option<&Path>, name: &str) -> PathBuf {
     let usable = temp != Path::new("/tmp") && temp.join(name).as_os_str().len() <= MAX_SOCKET_PATH;
@@ -274,25 +283,25 @@ mod tests {
         let p = resolve_as(Os::MacOs, &e, tmp, 7, Some(0)).unwrap();
         assert_eq!(
             p.prefs,
-            Path::new(abs("/Users/me/.sketchup-alt/prefs.json").as_str())
+            Path::new(abs("/Users/me/.tenon/prefs.json").as_str())
         );
         assert_eq!(
             p.recovery,
-            Path::new(abs("/Users/me/.sketchup-alt/recovery").as_str())
+            Path::new(abs("/Users/me/.tenon/recovery").as_str())
         );
         assert_eq!(p.socket_dir, tmp, "the per-user temp folder");
-        assert_eq!(p.legacy_prefs, None);
+        assert_eq!(
+            p.legacy_prefs,
+            [PathBuf::from(abs("/Users/me/.sketchup-alt/prefs.json"))]
+        );
         let long = PathBuf::from(abs(&format!("/{}", "x".repeat(100))));
         let p = resolve_as(Os::MacOs, &e, &long, 7, Some(0)).unwrap();
-        assert_eq!(
-            p.socket_dir,
-            Path::new(abs("/Users/me/.sketchup-alt").as_str())
-        );
+        assert_eq!(p.socket_dir, Path::new(abs("/Users/me/.tenon").as_str()));
         // The shared-/tmp rule compares the literal path, so pass it as is on every host.
         let p = resolve_as(Os::Other, &e, Path::new("/tmp"), 7, Some(0)).unwrap();
         assert_eq!(
             p.socket_dir,
-            Path::new(abs("/Users/me/.sketchup-alt").as_str()),
+            Path::new(abs("/Users/me/.tenon").as_str()),
             "/tmp is shared"
         );
     }
@@ -326,10 +335,15 @@ mod tests {
         .unwrap();
         assert_eq!(
             p.prefs.as_os_str(),
-            r"C:\Users\me\AppData\Roaming\sketchup-alt\prefs.json"
+            r"C:\Users\me\AppData\Roaming\tenon\prefs.json"
         );
-        assert_eq!(p.recovery.as_os_str(), r"D:\local\sketchup-alt\recovery");
-        assert_eq!(p.legacy_prefs, None);
+        assert_eq!(p.recovery.as_os_str(), r"D:\local\tenon\recovery");
+        assert_eq!(
+            p.legacy_prefs,
+            [PathBuf::from(
+                r"C:\Users\me\AppData\Roaming\sketchup-alt\prefs.json"
+            )]
+        );
         // Relative, drive-relative, rooted without a drive or empty: ignored for USERPROFILE.
         for bad in ["", "AppData", r"C:AppData", r"\AppData", r"\\.\C:\AppData"] {
             let p = at(&[
@@ -340,19 +354,19 @@ mod tests {
             .unwrap();
             assert_eq!(
                 p.prefs.as_os_str(),
-                r"C:\Users\me\AppData\Roaming\sketchup-alt\prefs.json",
+                r"C:\Users\me\AppData\Roaming\tenon\prefs.json",
                 "{bad:?}"
             );
             assert_eq!(
                 p.recovery.as_os_str(),
-                r"C:\Users\me\AppData\Local\sketchup-alt\recovery"
+                r"C:\Users\me\AppData\Local\tenon\recovery"
             );
         }
         // A share counts; a profile ending in a separator gets no second one.
         let p = at(&[("USERPROFILE", r"\\server\home\me\")]).unwrap();
         assert_eq!(
             p.prefs.as_os_str(),
-            r"\\server\home\me\AppData\Roaming\sketchup-alt\prefs.json"
+            r"\\server\home\me\AppData\Roaming\tenon\prefs.json"
         );
         // No usable profile: no paths, unless both folders are given.
         assert_eq!(at(&[]), None);
@@ -367,15 +381,18 @@ mod tests {
         let p = resolve_as(Os::Linux, &e, Path::new(abs("/tmp").as_str()), 7, None).unwrap();
         assert_eq!(
             p.prefs,
-            Path::new(abs("/home/me/.config/sketchup-alt/prefs.json").as_str())
+            Path::new(abs("/home/me/.config/tenon/prefs.json").as_str())
         );
         assert_eq!(
             p.recovery,
-            Path::new(abs("/home/me/.local/state/sketchup-alt/recovery").as_str())
+            Path::new(abs("/home/me/.local/state/tenon/recovery").as_str())
         );
         assert_eq!(
-            p.legacy_prefs.as_deref(),
-            Some(Path::new(abs("/home/me/.sketchup-alt/prefs.json").as_str()))
+            p.legacy_prefs,
+            [
+                PathBuf::from(abs("/home/me/.config/sketchup-alt/prefs.json")),
+                PathBuf::from(abs("/home/me/.sketchup-alt/prefs.json")),
+            ]
         );
         let e = env(&[
             ("HOME", abs("/home/me").as_str()),
@@ -383,14 +400,8 @@ mod tests {
             ("XDG_STATE_HOME", abs("/st").as_str()),
         ]);
         let p = resolve_as(Os::Linux, &e, Path::new(abs("/tmp").as_str()), 7, None).unwrap();
-        assert_eq!(
-            p.prefs,
-            Path::new(abs("/cfg/sketchup-alt/prefs.json").as_str())
-        );
-        assert_eq!(
-            p.recovery,
-            Path::new(abs("/st/sketchup-alt/recovery").as_str())
-        );
+        assert_eq!(p.prefs, Path::new(abs("/cfg/tenon/prefs.json").as_str()));
+        assert_eq!(p.recovery, Path::new(abs("/st/tenon/recovery").as_str()));
     }
 
     #[cfg(unix)]
@@ -405,15 +416,12 @@ mod tests {
                 ("XDG_RUNTIME_DIR", bad),
             ]);
             let p = resolve_as(Os::Linux, &e, Path::new("/tmp"), 7, Some(my_uid(&run))).unwrap();
-            assert_eq!(
-                p.prefs,
-                Path::new("/home/me/.config/sketchup-alt/prefs.json")
-            );
+            assert_eq!(p.prefs, Path::new("/home/me/.config/tenon/prefs.json"));
             assert_eq!(
                 p.recovery,
-                Path::new("/home/me/.local/state/sketchup-alt/recovery")
+                Path::new("/home/me/.local/state/tenon/recovery")
             );
-            assert_eq!(p.socket_dir, Path::new("/home/me/.sketchup-alt"));
+            assert_eq!(p.socket_dir, Path::new("/home/me/.tenon"));
         }
         for bad_home in ["", "home/me"] {
             let e = env(&[("HOME", bad_home)]);
@@ -438,8 +446,8 @@ mod tests {
                 .unwrap()
                 .socket_dir
         };
-        let fallback = PathBuf::from("/home/me/.sketchup-alt");
-        assert!(run.join("sketchup-alt-7.sock").as_os_str().len() <= MAX_SOCKET_PATH);
+        let fallback = PathBuf::from("/home/me/.tenon");
+        assert!(run.join("tenon-7.sock").as_os_str().len() <= MAX_SOCKET_PATH);
         assert_eq!(dir(Some(uid)), run, "private and ours");
         assert_eq!(dir(Some(uid.wrapping_add(1))), fallback, "someone else's");
         assert_eq!(dir(None), fallback, "owner unknown");

@@ -68,7 +68,7 @@ fn time_saving_and_opening_a_big_model() {
         run(&mut d, json!({"type": "import", "path": cube}));
     }
 
-    let path = scratch("big.skr");
+    let path = scratch("big.tnn");
     let (_, saved) = timed("save", || {
         run(&mut d, json!({"type": "save", "path": path}));
     });
@@ -79,7 +79,7 @@ fn time_saving_and_opening_a_big_model() {
         run(&mut e, json!({"type": "open", "path": path}));
     });
     // The same model saves to the same bytes.
-    let again = scratch("again.skr");
+    let again = scratch("again.tnn");
     run(&mut e, json!({"type": "save", "path": again}));
     assert!(std::fs::read(&again).unwrap() == bytes);
 

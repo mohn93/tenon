@@ -241,7 +241,7 @@ fn fixtures() -> Vec<(&'static str, Fixture)> {
             Fixture {
                 connected: 1,
                 log: Some(vec![
-                    "5 s ago  #1  execute save /a.skr  ok".into(),
+                    "5 s ago  #1  execute save /a.tnn  ok".into(),
                     "3 s ago  #2  query model  ok".into(),
                 ]),
                 ..Default::default()
@@ -257,7 +257,7 @@ fn fixtures() -> Vec<(&'static str, Fixture)> {
         (
             "the start card with two recent files",
             Fixture {
-                start: Some(vec!["/m/house.skr".into(), "/m/shed.skr".into()]),
+                start: Some(vec!["/m/house.tnn".into(), "/m/shed.tnn".into()]),
                 ..Default::default()
             },
         ),
@@ -306,7 +306,7 @@ fn every_control_has_a_name() {
     check("Settings, Input", &h);
     // Inside a group with the egui menus, each menu open in turn.
     let inside = || Fixture {
-        recent: vec!["/m/house.skr".into(), "/m/shed.skr".into()],
+        recent: vec!["/m/house.tnn".into(), "/m/shed.tnn".into()],
         ..house_fixture(&["i1"])
     };
     // A dock whose top area and Outliner both overflow, so both show their scroll bars.

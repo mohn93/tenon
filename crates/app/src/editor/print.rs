@@ -159,7 +159,7 @@ pub fn open_command(platform: ViewerOs, path: &Path) -> (OsString, Vec<OsString>
 #[cfg(not(target_arch = "wasm32"))]
 /// The temp file number `n` of process `pid` is printed to.
 pub fn print_file_name(pid: u32, n: u64) -> String {
-    format!("sketchup-alt-print-{pid}-{n}.pdf")
+    format!("tenon-print-{pid}-{n}.pdf")
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -192,7 +192,7 @@ pub fn remove_stale_prints(dir: &Path, now: std::time::SystemTime, owner: Option
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if !(name.starts_with("sketchup-alt-print-") && name.ends_with(".pdf")) {
+        if !(name.starts_with("tenon-print-") && name.ends_with(".pdf")) {
             continue;
         }
         // The entry itself, never what a link points to.
@@ -402,7 +402,7 @@ mod tests {
 
     #[test]
     fn the_viewer_is_opened_per_os_without_a_shell_string() {
-        let path = Path::new("/tmp/a b/sketchup-alt-print-1-0.pdf");
+        let path = Path::new("/tmp/a b/tenon-print-1-0.pdf");
         let (program, args) = open_command(ViewerOs::Mac, path);
         assert_eq!(program, "open");
         assert_eq!(args, [path.as_os_str()]);
@@ -416,13 +416,13 @@ mod tests {
 
     #[test]
     fn printed_files_are_named_by_process_and_number() {
-        assert_eq!(print_file_name(42, 3), "sketchup-alt-print-42-3.pdf");
+        assert_eq!(print_file_name(42, 3), "tenon-print-42-3.pdf");
         let a = temp_print_path();
         assert!(
             a.file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with(&format!("sketchup-alt-print-{}-", std::process::id()))
+                .starts_with(&format!("tenon-print-{}-", std::process::id()))
         );
     }
 
@@ -465,16 +465,16 @@ mod tests {
                 .unwrap();
             path
         };
-        let old = make("sketchup-alt-print-1-0.pdf", 25);
-        let fresh = make("sketchup-alt-print-1-1.pdf", 23);
+        let old = make("tenon-print-1-0.pdf", 25);
+        let fresh = make("tenon-print-1-1.pdf", 23);
         let other_name = make("notes.pdf", 100);
-        let other_ext = make("sketchup-alt-print-1-2.txt", 100);
-        let folder = dir.join("sketchup-alt-print-1-3.pdf");
+        let other_ext = make("tenon-print-1-2.txt", 100);
+        let folder = dir.join("tenon-print-1-3.pdf");
         std::fs::create_dir(&folder).unwrap();
         #[cfg(unix)]
         let link = {
             let target = make("target.dat", 100);
-            let link = dir.join("sketchup-alt-print-1-4.pdf");
+            let link = dir.join("tenon-print-1-4.pdf");
             std::os::unix::fs::symlink(&target, &link).unwrap();
             link
         };
@@ -486,7 +486,7 @@ mod tests {
         #[cfg(unix)]
         assert!(std::fs::symlink_metadata(&link).is_ok(), "a link is left");
         // Another user's file is left alone.
-        let theirs = make("sketchup-alt-print-2-0.pdf", 48);
+        let theirs = make("tenon-print-2-0.pdf", 48);
         let me = file_owner(&theirs).unwrap_or(0);
         if cfg!(unix) {
             assert_eq!(remove_stale_prints(&dir, now, Some(me.wrapping_add(1))), 0);

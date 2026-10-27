@@ -235,7 +235,7 @@ pub enum EditorCommand {
     /// Edit > Paste In Place: pastes the clip on the clipboard where it was copied from, in
     /// world coordinates (one `paste` step). `invalid_input` when the clipboard holds no clip.
     PasteInPlace {},
-    /// Brings out the Paste tool with the library item at `path` (a `.skr` file; see
+    /// Brings out the Paste tool with the library item at `path` (a `.tnn` file; see
     /// `save_to_library`), like `paste_clipboard` without `at`: the item's edges follow the
     /// cursor, its box's minimum corner on the snapped point under it, and the next click
     /// (`tool_input`) inserts it there as one `insert` step, with new definitions each time

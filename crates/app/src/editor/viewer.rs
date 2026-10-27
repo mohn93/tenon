@@ -391,7 +391,7 @@ mod tests {
         let bytes = maker.encode_model().expect("encoded");
         let mut e = Editor::new(DVec2::new(800.0, 600.0), 2.0);
         e.set_read_only(true);
-        assert!(e.open_bytes("shared.skr", &bytes));
+        assert!(e.open_bytes("shared.tnn", &bytes));
         assert!(
             !e.doc().hidden_geometry,
             "the viewer draws no hidden geometry"

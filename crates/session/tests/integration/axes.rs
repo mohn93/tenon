@@ -174,7 +174,7 @@ fn reset_axes_restores_the_world_axes_and_does_nothing_when_there() {
 fn moved_axes_are_saved_in_schema_15_and_older_files_are_unchanged() {
     let mut d = doc();
     crate_at(&mut d, [0.0, 0.0, 0.0]);
-    let plain = scratch("plain.skr");
+    let plain = scratch("plain.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": plain.to_str().unwrap()}),
@@ -197,7 +197,7 @@ fn moved_axes_are_saved_in_schema_15_and_older_files_are_unchanged() {
         json!({"type": "set_axes", "origin": [1, 2, 3], "x_axis": [0, 1, 0], "y_axis": [-1, 0, 0]}),
     )
     .unwrap();
-    let moved = scratch("moved.skr");
+    let moved = scratch("moved.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": moved.to_str().unwrap()}),
@@ -440,7 +440,7 @@ fn a_file_with_axes_beyond_the_limit_or_not_a_frame_is_refused() {
         json!({"type": "set_axes", "origin": [1, 2, 3], "x_axis": [0, 1, 0], "y_axis": [-1, 0, 0]}),
     )
     .unwrap();
-    let path = scratch("limit.skr");
+    let path = scratch("limit.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -452,7 +452,7 @@ fn a_file_with_axes_beyond_the_limit_or_not_a_frame_is_refused() {
             serde_json::from_reader(zip.by_name("document.json").unwrap()).unwrap()
         };
         f(&mut document);
-        let out = scratch("edited.skr");
+        let out = scratch("edited.tnn");
         let mut zip = zip::ZipWriter::new(std::fs::File::create(&out).unwrap());
         use std::io::Write;
         zip.start_file("document.json", zip::write::SimpleFileOptions::default())

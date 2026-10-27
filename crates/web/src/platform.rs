@@ -346,9 +346,9 @@ async fn save(kept: KeptFile, request: SaveRequest, files: Vec<Download>) -> Sav
     let Some(main) = files.first() else {
         return Ok(None);
     };
-    let name = names::download_name(&main.name, "model.skr");
+    let name = names::download_name(&main.name, "model.tnn");
     let single = files.len() == 1;
-    // A model's save (`.skr`); exports have their own formats.
+    // A model's save (`.tnn`); exports have their own formats.
     let model = names::writes_back(&main.name);
     if single && !request.ask {
         let handle = kept.borrow().for_save(request.write_back);
@@ -375,7 +375,7 @@ async fn save(kept: KeptFile, request: SaveRequest, files: Vec<Download>) -> Sav
         }
     }
     for file in &files {
-        files::download(&names::download_name(&file.name, "model.skr"), &file.bytes)?;
+        files::download(&names::download_name(&file.name, "model.tnn"), &file.bytes)?;
     }
     if model {
         kept.borrow_mut().saved(&name, None);

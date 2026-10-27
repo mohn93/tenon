@@ -201,7 +201,7 @@ pub enum Query {
     SectionPlanes {},
     /// How section planes are shown (see `set_section_display`).
     SectionDisplay {},
-    /// The library items in `folder`: the `.skr` files directly in it (no links, no
+    /// The library items in `folder`: the `.tnn` files directly in it (no links, no
     /// subfolders; at most 1000, sorted by name ignoring case), each with its name, what it
     /// holds (`component`, `material` or `model`), when it was written and, for a file that
     /// is no usable model, an `error`. `more` is true when the folder holds more.

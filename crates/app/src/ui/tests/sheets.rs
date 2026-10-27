@@ -608,7 +608,7 @@ fn the_update_sheet_says_what_the_check_found() {
 
 #[test]
 fn the_update_sheet_links_to_a_newer_release_without_fetching_it() {
-    let url = "https://github.com/mohn93/sketchup/releases/tag/v9.0.0";
+    let url = "https://github.com/mohn93/tenon/releases/tag/v9.0.0";
     let mut h = harness(update_fixture(Some(crate::update::Outcome::Available {
         version: "9.0.0".into(),
         url: url.into(),

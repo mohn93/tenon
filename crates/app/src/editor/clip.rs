@@ -9,7 +9,7 @@ use super::{Editor, Message};
 use crate::clipboard::Clipboard;
 
 /// What Paste says of a clipboard that holds no clip.
-pub const NOT_A_CLIP: &str = "The clipboard does not hold sketchup-alt geometry";
+pub const NOT_A_CLIP: &str = "The clipboard does not hold Tenon geometry";
 
 impl Editor {
     /// Makes Cut, Copy and Paste use `clipboard` (the window gives the system's).

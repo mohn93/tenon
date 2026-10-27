@@ -13,7 +13,7 @@
 
 **Tech Stack:** Rust 2024; `png` added to `render` as a dev-dependency only (already a workspace dependency used by `api`; no new crate).
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`: the Testing section and the milestone list (Task 1 adds the M8b line).
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md`: the Testing section and the milestone list (Task 1 adds the M8b line).
 
 ## Global Constraints
 
@@ -53,7 +53,7 @@
 | `Cargo.lock` | `png` in render's dependency list | 1 |
 | `docs/testing.md` | how tests skip without a GPU; golden tolerance, failure images, regenerating | 1 |
 | `crates/app/src/ui.rs` | toolbar `horizontal_wrapped`; toolbar click tests at several widths | 2 |
-| `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md` | status line, Testing pointer, M8b line | 1, 2 |
+| `docs/superpowers/specs/2026-10-10-tenon-design.md` | status line, Testing pointer, M8b line | 1, 2 |
 
 
 The code below was written and verified in a scratch copy of `dev` at bf371de. Each task was checked on its own with `cargo fmt --all --check`, clippy with `-D warnings`, and the full test suite. Workspace test totals after each task: 800, 801 (from 788). The golden PNGs are binary and are not reproduced here: Task 1 regenerates them on the implementer's machine with `UPDATE_GOLDEN=1`.
@@ -70,7 +70,7 @@ Code for new files is given in full. Changes to existing files are given as unif
 - Modify `crates/render/Cargo.toml` (`[dev-dependencies] png.workspace = true`)
 - Modify `Cargo.lock` (one line: `png` under `render`)
 - Create `docs/testing.md`
-- Modify `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md` (status line, Testing section pointer, M8b milestone line)
+- Modify `docs/superpowers/specs/2026-10-10-tenon-design.md` (status line, Testing section pointer, M8b milestone line)
 
 **Interfaces produced:**
 - `const WIDTH: u32 = 160; const HEIGHT: u32 = 120; const CHANNEL_TOLERANCE: u8 = 24; const MAX_DIFFERING: f64 = 0.005;`
@@ -691,12 +691,12 @@ Apply to `crates/render/Cargo.toml`:
 +png.workspace = true
 ```
 
-Apply to `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`:
+Apply to `docs/superpowers/specs/2026-10-10-tenon-design.md`:
 ```diff
---- a/docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
-+++ b/docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
+--- a/docs/superpowers/specs/2026-10-10-tenon-design.md
++++ b/docs/superpowers/specs/2026-10-10-tenon-design.md
 @@ -1,8 +1,8 @@
- # SketchUp Alternative — Design
+ # Tenon — Design
  
  Date: 2026-10-10
 -Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope; M4c scope; M5 split into M5a-c; M5b tools); 2026-10-12 (M5c files, M5d export, M6a circles, M6b rotate, M6c guides, M6d curves, M7a camera, M7b materials, M7c outliner, M8 split into M8a-d, M8a import)
@@ -771,7 +771,7 @@ Expected workspace totals after each task: 800, 801.
 ```bash
 git status
 git diff --stat
-git add crates/render/tests/golden.rs Cargo.lock crates/render/Cargo.toml docs/superpowers/specs/2026-10-10-sketchup-alt-design.md docs/testing.md crates/render/tests/golden/ Cargo.lock
+git add crates/render/tests/golden.rs Cargo.lock crates/render/Cargo.toml docs/superpowers/specs/2026-10-10-tenon-design.md docs/testing.md crates/render/tests/golden/ Cargo.lock
 git commit -m "Golden-image render tests: eight canonical scenes rendered headless at 160x120 and compared with stored PNGs within a channel and pixel-fraction tolerance; actual and diff images on failure, UPDATE_GOLDEN=1 regenerates; docs"
 ```
 
@@ -779,7 +779,7 @@ git commit -m "Golden-image render tests: eight canonical scenes rendered headle
 
 **Files:**
 - Modify `crates/app/src/ui.rs` (toolbar `horizontal` -> `horizontal_wrapped` with a comment; tests: `screen_of`, `toolbar_clicks`, `assert_every_toolbar_button`, rewritten `clicking_a_tool_button_reports_it`, new `a_narrow_window_wraps_the_toolbar_and_keeps_every_button`; `screen()` doc comment)
-- Modify `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md` (M8b line: toolbar sentence)
+- Modify `docs/superpowers/specs/2026-10-10-tenon-design.md` (M8b line: toolbar sentence)
 
 **Interfaces produced:**
 - `fn screen_of(width: f32) -> egui::RawInput`
@@ -945,10 +945,10 @@ Apply to `crates/app/src/ui.rs`:
      /// Clicks down the right panel at `x`, every 4 points; after each click, types `typed`
 ```
 
-Apply to `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`:
+Apply to `docs/superpowers/specs/2026-10-10-tenon-design.md`:
 ```diff
---- a/docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
-+++ b/docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
+--- a/docs/superpowers/specs/2026-10-10-tenon-design.md
++++ b/docs/superpowers/specs/2026-10-10-tenon-design.md
 @@ -202,9 +202,9 @@ Every milestone's acceptance includes: new capabilities are reachable as `sessio
  - **M7b**: materials: named sRGB colors (`m<n>` ids from the entity id counter) belonging to the whole model; each face side and each instance carries an optional material (none is the default material); an instance's material shows on face sides inside it without one (the nearest painted instance wins), and exploding bakes it onto them. Commands `add_material` (optional name, default "Material", "Material 2", ...; names distinct, not blank, at most 256 characters), `change_material` (name and/or color), `delete_material` (unpaints everything painted with it, one undo step) and `paint` (faces and instances of the open context, `side` front, back or both, null for the default); a `materials` query (with face and instance use counts); `front_material`/`back_material` on faces and `material` on instances in queries; `changes.materials` lists materials a command added, removed or changed. Paint follows geometry: split pieces keep it, merges keep the containing face's, copies/groups/components keep it, push/pull gives the cap and sides the pushed face's materials (swapped for a sheet pushed against its normal, so the side facing the pull ends up outside), a face turned over keeps each material on its side. `.skr` schema version 5 (versions 1-4 open unpainted); files painting with missing materials or with bad material names are refused. Rendering shows each side's color (selection tint on top); export writes OBJ with a `.mtl` beside it, glTF with one material per color (front side only; STL has no colors). Paint tool (`b`, last toolbar button: click a face to paint the side facing the viewer with the current material, a click on something selected paints the whole selection's faces and instances, an instance paints the instance; Cmd-click or Ctrl-click (either key on every system; Alt is the orbit modifier) picks up the clicked side's material) and a Materials list in the right panel under Entity Info (Default plus every material with a swatch; clicking one makes it current and switches to Paint; Add, Delete, a name field renaming on Enter, and a 12-color palette to recolor); Entity Info shows a face's front and back materials and a painted instance's. Opacity, textures and a free color picker are deferred.
  - **M7c**: outliner: an `outliner` query (the tree of placed groups and components, the root's instances down, each level in id order: `id`, `definition`, `kind`, `name` (the definition's; empty for an unnamed group), `material`, `children`; `open` marks the nodes on the open context's path and `selected` the selected instances of the open context; a component's contents appear under each of its instances with the same ids, so a node is named by its path from the root) and an `open_path` command (makes a path of instances from the root the open context from wherever it is, `[]` being the root; clears the selection unless the path is already open; not an undo step; non-instances `invalid_input`, misplaced instances `not_found`). In the window, an Outliner section in the right panel under Materials: a Model row (click: back to the root) and the tree with expand and collapse (nodes on the open path start expanded), groups shown by name or as "Group", components as "<Name>", selected rows highlighted and open ones bold. A click selects the node, first opening the context it is in (as SketchUp does); Shift-click or Cmd/Ctrl-click adds it to or removes it from the selection when it is in the open context; a double-click opens it for editing. Instance names, a filter box, sorting by name and drag-to-reparent are deferred.
@@ -973,7 +973,7 @@ Expected workspace totals after each task: 800, 801.
 ```bash
 git status
 git diff --stat
-git add crates/app/src/ui.rs docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
+git add crates/app/src/ui.rs docs/superpowers/specs/2026-10-10-tenon-design.md
 git commit -m "Toolbar wraps onto more rows in windows narrower than its buttons; ui tests click every toolbar button at 1280, 900 and 640 points; spec"
 ```
 

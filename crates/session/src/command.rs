@@ -1264,7 +1264,7 @@ pub enum Command {
         #[serde(default)]
         discard: bool,
     },
-    /// Replace the model and view with those saved in a `.skr` file. Clears undo history;
+    /// Replace the model and view with those saved in a `.tnn` file. Clears undo history;
     /// not an undo step. With changes not saved, fails (`unsaved_changes`) unless `discard`
     /// is true. A SketchUp file (`.skp`, or a file whose header is SketchUp's) opens as a new
     /// model never saved: its geometry and instances in the root, the view zoomed to them,
@@ -1274,18 +1274,18 @@ pub enum Command {
         #[serde(default)]
         discard: bool,
     },
-    /// Save the model and view as a `.skr` file at `path`, or at the path last opened or
+    /// Save the model and view as a `.tnn` file at `path`, or at the path last opened or
     /// saved when `path` is absent. Not an undo step. An existing file there that is not a
     /// model (an empty file is fine) is refused unless `overwrite` is true.
     Save {
         #[serde(default)]
         path: Option<String>,
-        /// Replace an existing file even when it is not a `.skr` model (without it such a
+        /// Replace an existing file even when it is not a `.tnn` model (without it such a
         /// file is refused; an empty or missing file is always fine).
         #[serde(default)]
         overwrite: bool,
     },
-    /// Save a library item to the `.skr` file `path` (named `<name>.skr`): `kind` `component`
+    /// Save a library item to the `.tnn` file `path` (named `<name>.tnn`): `kind` `component`
     /// saves the component instance `item` (a group is refused: make it a component first)
     /// at the origin with its rotation and scale kept, with the materials and tags it uses;
     /// `material` saves the material `item` alone, texture included; `model` saves the whole
@@ -1302,7 +1302,7 @@ pub enum Command {
         #[serde(default)]
         overwrite: bool,
     },
-    /// Insert the library item at `path` (see `save_to_library`; any `.skr` file is a model
+    /// Insert the library item at `path` (see `save_to_library`; any `.tnn` file is a model
     /// item) into the open context, as one undo step. A component or model: new definitions
     /// are always made, materials and tags are matched by name (missing ones are added),
     /// the minimum corner of its bounding box lands at `at`, or at the open context's origin

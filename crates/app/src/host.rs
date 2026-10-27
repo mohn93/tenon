@@ -152,10 +152,10 @@ fn ends_autosave(command: &Command) -> bool {
 pub fn recovery_path(dir: &Path, open_file: Option<&Path>, now: SystemTime) -> PathBuf {
     let stem = recovery::file_stem(open_file);
     let secs = now.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    let mut path = dir.join(format!("{stem}-{secs}.skr"));
+    let mut path = dir.join(format!("{stem}-{secs}.tnn"));
     let mut n = 2;
     while std::fs::symlink_metadata(&path).is_ok() {
-        path = dir.join(format!("{stem}-{secs}-{n}.skr"));
+        path = dir.join(format!("{stem}-{secs}-{n}.tnn"));
         n += 1;
     }
     path
@@ -922,10 +922,8 @@ mod tests {
     }
 
     fn recovery_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "sketchup-alt-recovery-{}-{name}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("tenon-recovery-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }
@@ -1026,7 +1024,7 @@ mod tests {
             &mut e,
             &dir,
             "execute",
-            json!({"type": "open", "path": "/no/such.skr", "discard": true}),
+            json!({"type": "open", "path": "/no/such.tnn", "discard": true}),
         );
         assert_eq!(r["error"]["data"]["kind"], "file", "{r}");
         assert!(files_in(&dir).is_empty());
@@ -1056,7 +1054,7 @@ mod tests {
             "batch",
             json!({"commands": [
                 {"type": "new", "discard": true},
-                {"type": "open", "path": "/no/such.skr", "discard": true}
+                {"type": "open", "path": "/no/such.tnn", "discard": true}
             ]}),
         );
         assert_eq!(r["error"]["data"]["index"], 1, "{r}");
@@ -1137,7 +1135,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn the_sketchup_alt_folder_is_made_private_with_the_recovery_folder_in_it() {
+    fn the_tenon_folder_is_made_private_with_the_recovery_folder_in_it() {
         let base = recovery_dir("home");
         let dir = base.join(crate::cli::FALLBACK_DIR).join("recovery");
         std::fs::create_dir_all(&base).unwrap();
@@ -1218,11 +1216,11 @@ mod tests {
             std::process::id(),
         )
         .unwrap();
-        assert_eq!(found.prefs, roaming.join("sketchup-alt").join("prefs.json"));
-        assert_eq!(found.recovery, local.join("sketchup-alt").join("recovery"));
+        assert_eq!(found.prefs, roaming.join("tenon").join("prefs.json"));
+        assert_eq!(found.recovery, local.join("tenon").join("recovery"));
         // Preferences: the folder and the file are the user's only.
         let prefs = crate::prefs::Prefs {
-            recent: vec![base.join("house.skr")],
+            recent: vec![base.join("house.tnn")],
             ..Default::default()
         };
         crate::prefs::save(&found.prefs, &prefs).unwrap();
@@ -1256,7 +1254,7 @@ mod tests {
     fn models_in(dir: &Path) -> Vec<PathBuf> {
         files_in(dir)
             .into_iter()
-            .filter(|p| p.extension().is_some_and(|x| x == "skr"))
+            .filter(|p| p.extension().is_some_and(|x| x == "tnn"))
             .collect()
     }
 
@@ -1307,7 +1305,7 @@ mod tests {
     fn an_agents_save_new_or_open_removes_the_autosave() {
         let dir = recovery_dir("clean-up");
         let session = Session::start(&dir).unwrap();
-        let saved = dir.with_extension("skr");
+        let saved = dir.with_extension("tnn");
         let mut e = editor();
         let autosaves = || {
             files_in(&dir)
@@ -1324,7 +1322,7 @@ mod tests {
             &dir,
             Some(&session),
             "execute",
-            json!({"type": "open", "path": "/no/such.skr", "discard": true}),
+            json!({"type": "open", "path": "/no/such.tnn", "discard": true}),
         );
         assert!(r["error"].is_object(), "{r}");
         assert_eq!(autosaves(), 2);
@@ -1387,16 +1385,16 @@ mod tests {
         let dir = recovery_dir("names");
         std::fs::create_dir_all(&dir).unwrap();
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        let a = recovery_path(&dir, Some(Path::new("/x/My house?.skr")), now);
-        assert_eq!(a, dir.join("My house_-1700000000.skr"));
+        let a = recovery_path(&dir, Some(Path::new("/x/My house?.tnn")), now);
+        assert_eq!(a, dir.join("My house_-1700000000.tnn"));
         std::fs::write(&a, "").unwrap();
         assert_eq!(
-            recovery_path(&dir, Some(Path::new("/x/My house?.skr")), now),
-            dir.join("My house_-1700000000-2.skr")
+            recovery_path(&dir, Some(Path::new("/x/My house?.tnn")), now),
+            dir.join("My house_-1700000000-2.tnn")
         );
         assert_eq!(
             recovery_path(&dir, None, now),
-            dir.join("untitled-1700000000.skr")
+            dir.join("untitled-1700000000.tnn")
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

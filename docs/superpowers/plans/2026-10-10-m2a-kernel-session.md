@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust 2024, glam 0.34.1 (with `serde` feature in `kernel`), serde 1.0.229, serde_json 1.0.151 (dev), existing wgpu/winit crates unchanged.
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md` (milestone M2, first half; section 1 Kernel, section 5 Agent control).
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md` (milestone M2, first half; section 1 Kernel, section 5 Agent control).
 
 ## Global Constraints
 

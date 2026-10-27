@@ -263,7 +263,7 @@ fn set_style_chooses_without_an_undo_step_or_a_change() {
     let a = add_style(&mut d, json!({"name": "A"}));
     let depth = ask(&d, json!({"type": "history"}))["undo_depth"].clone();
     let rev = d.revision();
-    let path = scratch("clean.skr");
+    let path = scratch("clean.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -359,7 +359,7 @@ fn scenes_capture_and_restore_the_chosen_style() {
 fn files_without_styles_keep_their_schema_and_bytes() {
     let mut d = doc();
     run(&mut d, json!({"type": "add_scene"})).unwrap();
-    let path = scratch("plain.skr");
+    let path = scratch("plain.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -384,7 +384,7 @@ fn a_model_with_styles_or_a_chosen_style_is_schema_18_and_reads_back() {
             "fog": {"start": 2.0, "end": 40.0, "color": {"rgb": [1, 2, 3]}}}}),
     )
     .unwrap();
-    let path = scratch("styled.skr");
+    let path = scratch("styled.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -414,7 +414,7 @@ fn a_model_with_styles_or_a_chosen_style_is_schema_18_and_reads_back() {
     // chooses a missing style is refused.
     let mut text = stored(&path);
     text["camera"]["style"] = json!("y99999");
-    let bad = scratch("bad.skr");
+    let bad = scratch("bad.tnn");
     {
         use std::io::Write;
         let mut zip = zip::ZipWriter::new(std::fs::File::create(&bad).unwrap());
@@ -536,9 +536,9 @@ fn library_items_save_and_insert_with_a_style_chosen() {
     .unwrap()["changes"]["materials"][0]
         .clone();
     run(&mut d, json!({"type": "set_style", "style": a})).unwrap();
-    let component = dir.join("c.skr");
-    let material = dir.join("m.skr");
-    let model = dir.join("model.skr");
+    let component = dir.join("c.tnn");
+    let material = dir.join("m.tnn");
+    let model = dir.join("model.tnn");
     for (path, params) in [
         (&component, json!({"kind": "component", "item": group})),
         (&material, json!({"kind": "material", "item": mat})),
@@ -620,7 +620,7 @@ fn ambient_occlusion_is_set_by_change_style_and_defaults_to_off() {
 fn a_style_with_ambient_occlusion_is_schema_21_and_default_ones_keep_18() {
     let mut d = doc();
     let a = add_style(&mut d, json!({"name": "A"}));
-    let path = scratch("ao.skr");
+    let path = scratch("ao.tnn");
     let save = |d: &mut Document| {
         run(d, json!({"type": "save", "path": path.to_str().unwrap()})).unwrap();
         stored(&path)
@@ -660,7 +660,7 @@ fn a_style_with_ambient_occlusion_is_schema_21_and_default_ones_keep_18() {
         .as_object_mut()
         .unwrap()
         .remove("ambient_occlusion");
-    let old = scratch("old-ao.skr");
+    let old = scratch("old-ao.tnn");
     {
         use std::io::Write;
         let mut zip = zip::ZipWriter::new(std::fs::File::create(&old).unwrap());

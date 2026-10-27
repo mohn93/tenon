@@ -1,4 +1,4 @@
-//! Library items: saving a component, material or model to a `.skr` file, listing a folder
+//! Library items: saving a component, material or model to a `.tnn` file, listing a folder
 //! of them and inserting one.
 
 use std::path::{Path, PathBuf};
@@ -170,7 +170,7 @@ fn a_component_from_a_turned_instance_in_a_group_reinserts_with_its_shape_materi
     let chair = turned_component(&mut d);
     let original = instance_info(&d, &chair);
     let revision = d.revision();
-    let file = dir.join("chair.skr");
+    let file = dir.join("chair.tnn");
     ok(
         &mut d,
         json!({"type": "save_to_library", "path": p(&file), "kind": "component", "item": chair}),
@@ -215,7 +215,7 @@ fn inserting_at_a_point_puts_the_minimum_corner_there() {
     let dir = folder("at");
     let mut d = doc();
     let chair = turned_component(&mut d);
-    let file = dir.join("chair.skr");
+    let file = dir.join("chair.tnn");
     ok(
         &mut d,
         json!({"type": "save_to_library", "path": p(&file), "kind": "component", "item": chair}),
@@ -237,7 +237,7 @@ fn inserting_a_component_twice_reuses_its_definition_and_brings_materials_and_ta
     let dir = folder("twice");
     let mut d = doc();
     let chair = turned_component(&mut d);
-    let file = dir.join("chair.skr");
+    let file = dir.join("chair.tnn");
     ok(
         &mut d,
         json!({"type": "save_to_library", "path": p(&file), "kind": "component", "item": chair}),
@@ -272,7 +272,7 @@ fn saving_refuses_groups_missing_items_wrong_kinds_and_bad_paths() {
     let mut d = doc();
     let ids = rectangle(&mut d, [0.0; 3], [1.0, 1.0, 0.0]);
     let group = instance_of(&ok(&mut d, json!({"type": "make_group", "ids": ids})));
-    let file = dir.join("g.skr");
+    let file = dir.join("g.tnn");
     let save = |d: &mut Document, extra: Value| {
         let mut c = json!({"type": "save_to_library", "path": p(&file)});
         for (k, v) in extra.as_object().unwrap() {
@@ -294,7 +294,7 @@ fn saving_refuses_groups_missing_items_wrong_kinds_and_bad_paths() {
     ] {
         assert!(save(&mut d, extra.clone()).is_err(), "{extra}");
     }
-    // Only .skr files, never a name with control characters.
+    // Only .tnn files, never a name with control characters.
     let txt = dir.join("g.txt");
     let c = json!({"type": "save_to_library", "path": p(&txt), "kind": "model"});
     assert_eq!(run(&mut d, c).unwrap_err().0, ErrorKind::InvalidInput);
@@ -308,7 +308,7 @@ fn saving_over_an_existing_item_needs_overwrite_and_never_replaces_the_open_mode
     let dir = folder("overwrite");
     let mut d = doc();
     rectangle(&mut d, [0.0; 3], [1.0, 1.0, 0.0]);
-    let file = dir.join("m.skr");
+    let file = dir.join("m.tnn");
     let save = |d: &mut Document, overwrite: bool| {
         run(
             d,
@@ -326,13 +326,13 @@ fn saving_over_an_existing_item_needs_overwrite_and_never_replaces_the_open_mode
     assert_eq!(names.len(), 1);
 
     // The model's own file, by its path or another spelling of it, is never written.
-    let own = dir.join("own.skr");
+    let own = dir.join("own.tnn");
     ok(&mut d, json!({"type": "save", "path": p(&own)}));
     let before = std::fs::read(&own).unwrap();
     for spelling in [
         own.clone(),
-        dir.join("sub/../own.skr"),
-        dir.join("./own.skr"),
+        dir.join("sub/../own.tnn"),
+        dir.join("./own.tnn"),
     ] {
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         let c = json!({"type": "save_to_library", "path": p(&spelling), "kind": "model",
@@ -355,7 +355,7 @@ fn a_material_item_keeps_its_texture_and_gets_a_free_name_when_another_has_it() 
                "texture": {"path": p(&png), "width": 0.5}}),
     );
     let tiles = out["changes"]["materials"][0].as_str().unwrap().to_string();
-    let file = dir.join("tiles.skr");
+    let file = dir.join("tiles.tnn");
     ok(
         &mut d,
         json!({"type": "save_to_library", "path": p(&file), "kind": "material", "item": tiles}),
@@ -411,7 +411,7 @@ fn a_model_item_inserts_the_whole_model_with_new_definitions() {
     let chair = turned_component(&mut d);
     let _ = chair;
     ok(&mut d, json!({"type": "close_instance"}));
-    let file = dir.join("house.skr");
+    let file = dir.join("house.tnn");
     ok(
         &mut d,
         json!({"type": "save_to_library", "path": p(&file), "kind": "model", "name": "House"}),
@@ -450,9 +450,9 @@ fn listing_names_kinds_and_sorts_by_name_ignoring_case() {
     );
     let zinc = d.scene().materials().next().unwrap().0.to_string();
     for (file, extra) in [
-        ("b.skr", json!({"kind": "model", "name": "Banana"})),
-        ("a.skr", json!({"kind": "component", "item": part})),
-        ("c.skr", json!({"kind": "material", "item": zinc})),
+        ("b.tnn", json!({"kind": "model", "name": "Banana"})),
+        ("a.tnn", json!({"kind": "component", "item": part})),
+        ("c.tnn", json!({"kind": "material", "item": zinc})),
     ] {
         let mut c = json!({"type": "save_to_library", "path": p(&dir.join(file))});
         for (k, v) in extra.as_object().unwrap() {
@@ -463,10 +463,10 @@ fn listing_names_kinds_and_sorts_by_name_ignoring_case() {
     // A plain model file with no library entry is a model named by its stem.
     ok(
         &mut d,
-        json!({"type": "save", "path": p(&dir.join("Plain.SKR"))}),
+        json!({"type": "save", "path": p(&dir.join("Plain.TNN"))}),
     );
     std::fs::write(dir.join("notes.txt"), "x").unwrap();
-    std::fs::create_dir(dir.join("nested.skr")).unwrap();
+    std::fs::create_dir(dir.join("nested.tnn")).unwrap();
     let listed = list(&dir);
     let rows: Vec<(String, String)> = listed["items"]
         .as_array()
@@ -500,19 +500,19 @@ fn listing_skips_links_and_huge_files_and_marks_damaged_ones() {
     rectangle(&mut d, [0.0; 3], [1.0, 1.0, 0.0]);
     ok(
         &mut d,
-        json!({"type": "save_to_library", "path": p(&dir.join("good.skr")), "kind": "model"}),
+        json!({"type": "save_to_library", "path": p(&dir.join("good.tnn")), "kind": "model"}),
     );
-    std::fs::write(dir.join("damaged.skr"), b"not a zip at all").unwrap();
-    std::fs::write(dir.join("empty.skr"), b"").unwrap();
-    let huge = std::fs::File::create(dir.join("huge.skr")).unwrap();
+    std::fs::write(dir.join("damaged.tnn"), b"not a zip at all").unwrap();
+    std::fs::write(dir.join("empty.tnn"), b"").unwrap();
+    let huge = std::fs::File::create(dir.join("huge.tnn")).unwrap();
     huge.set_len(300 * 1024 * 1024).unwrap();
     drop(huge);
     #[cfg(unix)]
     {
         let elsewhere = folder("hazards-elsewhere");
-        std::fs::copy(dir.join("good.skr"), elsewhere.join("far.skr")).unwrap();
-        std::os::unix::fs::symlink(elsewhere.join("far.skr"), dir.join("link.skr")).unwrap();
-        std::os::unix::fs::symlink(&elsewhere, dir.join("linkdir.skr")).unwrap();
+        std::fs::copy(dir.join("good.tnn"), elsewhere.join("far.tnn")).unwrap();
+        std::os::unix::fs::symlink(elsewhere.join("far.tnn"), dir.join("link.tnn")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, dir.join("linkdir.tnn")).unwrap();
     }
     let listed = list(&dir);
     let rows: Vec<(String, bool)> = listed["items"]
@@ -541,13 +541,13 @@ fn listing_two_thousand_files_is_bounded_and_fast() {
     let dir = folder("many");
     let mut d = doc();
     rectangle(&mut d, [0.0; 3], [1.0, 1.0, 0.0]);
-    let seed = dir.join("seed.skr");
+    let seed = dir.join("seed.tnn");
     ok(
         &mut d,
         json!({"type": "save_to_library", "path": p(&seed), "kind": "model"}),
     );
     for k in 0..2000 {
-        std::fs::copy(&seed, dir.join(format!("item-{k:04}.skr"))).unwrap();
+        std::fs::copy(&seed, dir.join(format!("item-{k:04}.tnn"))).unwrap();
     }
     let started = std::time::Instant::now();
     let listed = list(&dir);
@@ -568,9 +568,9 @@ fn listing_two_thousand_files_is_bounded_and_fast() {
 #[test]
 fn listing_a_file_or_a_missing_folder_is_an_error() {
     let dir = folder("notdir");
-    std::fs::write(dir.join("a.skr"), b"x").unwrap();
+    std::fs::write(dir.join("a.tnn"), b"x").unwrap();
     let d = doc();
-    for path in [dir.join("a.skr"), dir.join("missing")] {
+    for path in [dir.join("a.tnn"), dir.join("missing")] {
         let q: Query =
             serde_json::from_value(json!({"type": "library", "folder": p(&path)})).unwrap();
         assert!(d.query(&q).is_err(), "{path:?}");
@@ -581,9 +581,9 @@ fn listing_a_file_or_a_missing_folder_is_an_error() {
 fn inserting_refuses_damaged_files_other_files_and_oversized_ones() {
     let dir = folder("insert-refuse");
     let mut d = doc();
-    std::fs::write(dir.join("damaged.skr"), b"nope").unwrap();
-    std::fs::create_dir(dir.join("folder.skr")).unwrap();
-    for name in ["damaged.skr", "folder.skr", "missing.skr"] {
+    std::fs::write(dir.join("damaged.tnn"), b"nope").unwrap();
+    std::fs::create_dir(dir.join("folder.tnn")).unwrap();
+    for name in ["damaged.tnn", "folder.tnn", "missing.tnn"] {
         let r = run(
             &mut d,
             json!({"type": "insert_library_item", "path": p(&dir.join(name))}),
@@ -591,12 +591,12 @@ fn inserting_refuses_damaged_files_other_files_and_oversized_ones() {
         assert!(r.is_err(), "{name}");
     }
     assert_eq!(d.revision(), 0);
-    let huge = std::fs::File::create(dir.join("huge.skr")).unwrap();
+    let huge = std::fs::File::create(dir.join("huge.tnn")).unwrap();
     huge.set_len(300 * 1024 * 1024).unwrap();
     drop(huge);
     let r = run(
         &mut d,
-        json!({"type": "insert_library_item", "path": p(&dir.join("huge.skr"))}),
+        json!({"type": "insert_library_item", "path": p(&dir.join("huge.tnn"))}),
     );
     assert_eq!(r.unwrap_err().0, ErrorKind::InvalidInput);
 }
@@ -605,7 +605,7 @@ fn inserting_refuses_damaged_files_other_files_and_oversized_ones() {
 fn save_to_library_takes_batch_references_to_an_earlier_commands_ids() {
     let dir = folder("batch");
     let mut d = doc();
-    let file = dir.join("red.skr");
+    let file = dir.join("red.tnn");
     let commands: Vec<BatchCommand> = [
         json!({"type": "add_material", "name": "Red", "color": [200, 0, 0]}),
         json!({"type": "save_to_library", "path": p(&file), "kind": "material",
@@ -683,7 +683,7 @@ fn inserting_inside_a_turned_scaled_group_keeps_world_orientation_and_size() {
         &mut d,
         json!({"type": "make_component", "ids": inner, "name": "Tile"}),
     ));
-    let file = dir.join("tile.skr");
+    let file = dir.join("tile.tnn");
     ok(
         &mut d,
         json!({"type": "save_to_library", "path": p(&file), "kind": "component", "item": part}),
@@ -723,7 +723,7 @@ fn a_big_library_entry_is_ignored_and_a_file_with_too_many_entries_is_marked() {
     let dir = folder("entries");
     let mut d = doc();
     rectangle(&mut d, [0.0; 3], [1.0, 1.0, 0.0]);
-    let good = dir.join("good.skr");
+    let good = dir.join("good.tnn");
     ok(
         &mut d,
         json!({"type": "save_to_library", "path": p(&good), "kind": "model", "name": "Named"}),
@@ -745,7 +745,7 @@ fn a_big_library_entry_is_ignored_and_a_file_with_too_many_entries_is_marked() {
         }
         z.finish().unwrap();
     };
-    let big = dir.join("big.skr");
+    let big = dir.join("big.tnn");
     let mut padded = entries.clone();
     for (n, b) in &mut padded {
         if n == "library.json" {
@@ -753,7 +753,7 @@ fn a_big_library_entry_is_ignored_and_a_file_with_too_many_entries_is_marked() {
         }
     }
     write(&big, &padded);
-    let many = dir.join("many.skr");
+    let many = dir.join("many.tnn");
     let mut crowded: Vec<_> = entries
         .iter()
         .filter(|(n, _)| n != "library.json")
@@ -793,15 +793,29 @@ fn a_big_library_entry_is_ignored_and_a_file_with_too_many_entries_is_marked() {
 }
 
 #[test]
-fn the_skr_extension_is_matched_ignoring_case_when_saving_and_listing() {
+fn the_tnn_extension_is_matched_ignoring_case_when_saving_and_listing() {
     let dir = folder("case");
     let mut d = doc();
     rectangle(&mut d, [0.0; 3], [1.0, 1.0, 0.0]);
     ok(
         &mut d,
-        json!({"type": "save_to_library", "path": p(&dir.join("Big.SKR")), "kind": "model"}),
+        json!({"type": "save_to_library", "path": p(&dir.join("Big.TNN")), "kind": "model"}),
     );
     assert_eq!(list(&dir)["items"][0]["name"], "Big");
+}
+
+#[test]
+fn a_legacy_skr_item_is_listed() {
+    let dir = folder("legacy");
+    let mut d = doc();
+    rectangle(&mut d, [0.0; 3], [1.0, 1.0, 0.0]);
+    let saved = dir.join("Old.tnn");
+    ok(
+        &mut d,
+        json!({"type": "save_to_library", "path": p(&saved), "kind": "model"}),
+    );
+    std::fs::rename(&saved, dir.join("Old.skr")).unwrap();
+    assert_eq!(list(&dir)["items"][0]["name"], "Old");
 }
 
 #[test]
@@ -809,7 +823,7 @@ fn an_items_outline_is_its_edges_and_its_corner_a_material_has_none() {
     let dir = folder("outline");
     let mut d = doc();
     rectangle(&mut d, [1.0, 1.0, 0.0], [3.0, 4.0, 0.0]);
-    let model = dir.join("plate.skr");
+    let model = dir.join("plate.tnn");
     ok(
         &mut d,
         json!({"type": "save_to_library", "path": p(&model), "kind": "model"}),
@@ -822,7 +836,7 @@ fn an_items_outline_is_its_edges_and_its_corner_a_material_has_none() {
         &mut d,
         json!({"type": "add_material", "name": "Red", "color": [200, 30, 30]}),
     );
-    let material = dir.join("red.skr");
+    let material = dir.join("red.tnn");
     ok(
         &mut d,
         json!({"type": "save_to_library", "path": p(&material), "kind": "material",
@@ -830,7 +844,7 @@ fn an_items_outline_is_its_edges_and_its_corner_a_material_has_none() {
     );
     let err = session::library::outline(&material).unwrap_err();
     assert_eq!(err.kind, ErrorKind::InvalidInput);
-    let err = session::library::outline(&dir.join("none.skr")).unwrap_err();
+    let err = session::library::outline(&dir.join("none.tnn")).unwrap_err();
     assert_eq!(err.kind, ErrorKind::File);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -860,14 +874,14 @@ fn an_item_opened_and_saved_stays_an_item_and_a_new_model_forgets_it() {
         &mut d,
         json!({"type": "make_component", "ids": ids, "name": "Tile"}),
     ));
-    let item = dir.join("tile.skr");
+    let item = dir.join("tile.tnn");
     ok(
         &mut d,
         json!({"type": "save_to_library", "path": p(&item), "kind": "component",
                "item": instance, "name": "Pretty Tile"}),
     );
     assert_eq!(
-        listed(&dir, "tile.skr"),
+        listed(&dir, "tile.tnn"),
         ("component".into(), "Pretty Tile".into())
     );
     // Open the item, change it and save: still the same kind and name.
@@ -876,22 +890,22 @@ fn an_item_opened_and_saved_stays_an_item_and_a_new_model_forgets_it() {
     rectangle(&mut e, [5.0, 5.0, 0.0], [6.0, 6.0, 0.0]);
     ok(&mut e, json!({"type": "save"}));
     assert_eq!(
-        listed(&dir, "tile.skr"),
+        listed(&dir, "tile.tnn"),
         ("component".into(), "Pretty Tile".into())
     );
     // Save As to another path keeps it too.
-    let copy = dir.join("copy.skr");
+    let copy = dir.join("copy.tnn");
     ok(&mut e, json!({"type": "save", "path": p(&copy)}));
     assert_eq!(
-        listed(&dir, "copy.skr"),
+        listed(&dir, "copy.tnn"),
         ("component".into(), "Pretty Tile".into())
     );
     // A plain model saved from a new one is not an item with a kind, whatever was open before.
     ok(&mut e, json!({"type": "new", "discard": true}));
     rectangle(&mut e, [0.0; 3], [1.0, 1.0, 0.0]);
-    let plain = dir.join("plain.skr");
+    let plain = dir.join("plain.tnn");
     ok(&mut e, json!({"type": "save", "path": p(&plain)}));
-    assert_eq!(listed(&dir, "plain.skr"), ("model".into(), "plain".into()));
+    assert_eq!(listed(&dir, "plain.tnn"), ("model".into(), "plain".into()));
     // Opening a plain file after an item forgets the item's entry.
     let mut f = doc();
     ok(&mut f, json!({"type": "open", "path": p(&item)}));
@@ -899,9 +913,9 @@ fn an_item_opened_and_saved_stays_an_item_and_a_new_model_forgets_it() {
         &mut f,
         json!({"type": "open", "path": p(&plain), "discard": true}),
     );
-    let again = dir.join("again.skr");
+    let again = dir.join("again.tnn");
     ok(&mut f, json!({"type": "save", "path": p(&again)}));
-    assert_eq!(listed(&dir, "again.skr"), ("model".into(), "again".into()));
+    assert_eq!(listed(&dir, "again.tnn"), ("model".into(), "again".into()));
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -916,7 +930,7 @@ fn nesting_bomb(dir: &Path, levels: u64, width: u64) -> PathBuf {
         json!({"type": "make_component", "ids": ids, "name": "A"}),
     );
     let instance = instance_of(&made);
-    let good = dir.join("good.skr");
+    let good = dir.join("good.tnn");
     ok(
         &mut d,
         json!({"type": "save_to_library", "path": p(&good), "kind": "component",
@@ -955,7 +969,7 @@ fn nesting_bomb(dir: &Path, levels: u64, width: u64) -> PathBuf {
     doc["model"]["root"]["instances"] =
         json!([{"id": next, "definition": prev, "transform": identity(0.0)}]);
     doc["model"]["next_id"] = json!(next + 1);
-    let bomb = dir.join("bomb.skr");
+    let bomb = dir.join("bomb.tnn");
     let mut z = zip::ZipWriter::new(std::fs::File::create(&bomb).unwrap());
     let options = zip::write::SimpleFileOptions::default();
     z.start_file("document.json", options).unwrap();
@@ -996,7 +1010,7 @@ fn an_entry_with_a_kind_and_no_name_is_listed_under_the_file_stem_with_that_kind
     let dir = folder("nameless");
     let mut d = doc();
     rectangle(&mut d, [0.0; 3], [1.0, 1.0, 0.0]);
-    let file = dir.join("Plate.skr");
+    let file = dir.join("Plate.tnn");
     ok(
         &mut d,
         json!({"type": "save_to_library", "path": p(&file), "kind": "model"}),
@@ -1023,7 +1037,7 @@ fn an_entry_with_a_kind_and_no_name_is_listed_under_the_file_stem_with_that_kind
     }
     z.finish().unwrap();
     assert_eq!(
-        listed(&dir, "Plate.skr"),
+        listed(&dir, "Plate.tnn"),
         ("component".to_string(), "Plate".to_string())
     );
     assert!(session::library::read_item(&file).is_ok());
@@ -1040,7 +1054,7 @@ fn a_material_with_a_longest_name_still_gets_a_numbered_name_that_fits() {
         json!({"type": "add_material", "name": long, "color": [9, 9, 9]}),
     );
     let id = out["changes"]["materials"][0].as_str().unwrap().to_string();
-    let file = dir.join("long.skr");
+    let file = dir.join("long.tnn");
     ok(
         &mut d,
         json!({"type": "save_to_library", "path": p(&file), "kind": "material", "item": id}),
@@ -1095,7 +1109,7 @@ fn definition_names(d: &Document) -> Vec<(String, bool)> {
 #[test]
 fn inserting_the_same_component_reuses_its_definition_in_one_undo_step() {
     let dir = folder("reuse");
-    let file = dir.join("bolt.skr");
+    let file = dir.join("bolt.tnn");
     let mut d = saved_part("Cap bolt", [0.0; 3], [1.0, 1.0, 0.0], &file);
     let before = d.scene().definitions().count();
     assert_eq!(before, 1);
@@ -1118,10 +1132,10 @@ fn inserting_the_same_component_reuses_its_definition_in_one_undo_step() {
 #[test]
 fn a_different_component_of_the_same_name_is_added_under_a_free_name() {
     let dir = folder("rename");
-    let file = dir.join("bolt.skr");
+    let file = dir.join("bolt.tnn");
     let _ = saved_part("Cap bolt", [0.0; 3], [1.0, 1.0, 0.0], &file);
     // Same name, other content.
-    let mut other = saved_part("Cap bolt", [0.0; 3], [2.0, 1.0, 0.0], &dir.join("x.skr"));
+    let mut other = saved_part("Cap bolt", [0.0; 3], [2.0, 1.0, 0.0], &dir.join("x.tnn"));
     ok(
         &mut other,
         json!({"type": "insert_library_item", "path": p(&file)}),
@@ -1154,7 +1168,7 @@ fn a_different_component_of_the_same_name_is_added_under_a_free_name() {
 #[test]
 fn inserting_adds_no_wrapper_group_definition() {
     let dir = folder("wrapper");
-    let file = dir.join("bolt.skr");
+    let file = dir.join("bolt.tnn");
     let _ = saved_part("Cap bolt", [0.0; 3], [1.0, 1.0, 0.0], &file);
     let mut empty = doc();
     ok(
@@ -1167,7 +1181,7 @@ fn inserting_adds_no_wrapper_group_definition() {
 #[test]
 fn a_part_modelled_away_from_its_origin_is_held_by_the_bottom_centre_of_its_box() {
     let dir = folder("held");
-    let far = dir.join("far.skr");
+    let far = dir.join("far.tnn");
     let _ = saved_part("Far", [5.0, 5.0, 0.0], [7.0, 6.0, 0.0], &far);
     let outline = session::library::outline(&far).unwrap();
     assert_eq!(outline.base, glam::DVec3::new(6.0, 5.5, 0.0));
@@ -1186,7 +1200,7 @@ fn a_part_modelled_away_from_its_origin_is_held_by_the_bottom_centre_of_its_box(
         assert!((got - want).abs() < 1e-9, "{made}");
     }
     // Origin on the part: the corner, as before.
-    let near = dir.join("near.skr");
+    let near = dir.join("near.tnn");
     let _ = saved_part("Near", [0.0; 3], [2.0, 1.0, 0.0], &near);
     assert_eq!(
         session::library::outline(&near).unwrap().base,
@@ -1215,7 +1229,7 @@ fn opening_a_file_without_a_saved_view_frames_the_model_but_a_saved_view_is_kept
     let mut d = doc();
     rectangle(&mut d, lo.to_array(), hi.to_array());
     assert!(!frames(&d, lo, hi), "the default view misses it");
-    let file = dir.join("far.skr");
+    let file = dir.join("far.tnn");
     ok(&mut d, json!({"type": "save", "path": p(&file)}));
     let mut other = doc();
     ok(&mut other, json!({"type": "open", "path": p(&file)}));
@@ -1237,7 +1251,7 @@ fn opening_a_file_without_a_saved_view_frames_the_model_but_a_saved_view_is_kept
 #[test]
 fn opening_a_library_item_whose_saved_view_misses_it_frames_it() {
     let dir = folder("frame-item");
-    let file = dir.join("bolt.skr");
+    let file = dir.join("bolt.tnn");
     // A big model, seen from afar, holds a small part.
     let mut d = doc();
     rectangle(&mut d, [-200.0, -200.0, 0.0], [200.0, 200.0, 0.0]);
@@ -1260,7 +1274,7 @@ fn opening_a_library_item_whose_saved_view_misses_it_frames_it() {
     ));
     // A model item keeps its model's view unless that misses it: here it shows the big plate
     // and the small part is a speck, so only the saved (framing) one is kept.
-    let model = dir.join("all.skr");
+    let model = dir.join("all.tnn");
     ok(
         &mut d,
         json!({"type": "save_to_library", "path": p(&model), "kind": "model"}),
@@ -1285,12 +1299,12 @@ fn a_library_item_seen_as_a_speck_is_framed_on_open_but_a_plain_file_is_not() {
         json!({"type": "set_camera", "eye": [0, -500, 100], "target": [0, 0, 0]}),
     );
     assert!(!frames(&d, lo, hi));
-    let item = dir.join("item.skr");
+    let item = dir.join("item.tnn");
     ok(
         &mut d,
         json!({"type": "save_to_library", "path": p(&item), "kind": "model"}),
     );
-    let plain = dir.join("plain.skr");
+    let plain = dir.join("plain.tnn");
     ok(&mut d, json!({"type": "save", "path": p(&plain)}));
     let mut opened = doc();
     ok(&mut opened, json!({"type": "open", "path": p(&item)}));
@@ -1329,7 +1343,7 @@ fn a_textured_component_with_many_faces_is_matched_quickly() {
         &mut d,
         json!({"type": "make_component", "ids": all, "name": "Wall"}),
     ));
-    let file = dir.join("wall.skr");
+    let file = dir.join("wall.tnn");
     ok(
         &mut d,
         json!({"type": "save_to_library", "path": p(&file), "kind": "component", "item": part}),
@@ -1347,7 +1361,7 @@ fn a_textured_component_with_many_faces_is_matched_quickly() {
 #[test]
 fn inserting_inside_the_same_component_adds_it_under_a_free_name() {
     let dir = folder("inside");
-    let file = dir.join("chair.skr");
+    let file = dir.join("chair.tnn");
     let mut d = saved_part("Chair", [0.0; 3], [1.0, 1.0, 0.0], &file);
     let chair = instances(&d)[0]["id"].as_str().unwrap().to_string();
     ok(&mut d, json!({"type": "open_instance", "id": chair}));
@@ -1376,7 +1390,7 @@ fn nested_components_are_reused_and_a_numbered_twin_is_matched() {
         &mut d,
         json!({"type": "make_component", "ids": [instance_of(&inner)], "name": "Outer"}),
     ));
-    let file = dir.join("outer.skr");
+    let file = dir.join("outer.tnn");
     ok(
         &mut d,
         json!({"type": "save_to_library", "path": p(&file), "kind": "component", "item": outer}),
@@ -1389,9 +1403,9 @@ fn nested_components_are_reused_and_a_numbered_twin_is_matched() {
     assert_eq!(d.scene().definitions().count(), 2);
 
     // A model whose identical component is already named "Part#2".
-    let item = dir.join("part.skr");
+    let item = dir.join("part.tnn");
     let _ = saved_part("Part", [0.0; 3], [1.0, 1.0, 0.0], &item);
-    let mut twin = saved_part("Part#2", [0.0; 3], [1.0, 1.0, 0.0], &dir.join("t.skr"));
+    let mut twin = saved_part("Part#2", [0.0; 3], [1.0, 1.0, 0.0], &dir.join("t.tnn"));
     ok(
         &mut twin,
         json!({"type": "insert_library_item", "path": p(&item)}),

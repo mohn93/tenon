@@ -12,7 +12,7 @@ use crate::ui::theme::ThemeChoice;
 use crate::ui::{EdgeEffect, FLY_HELP, LibrarySave, UiAction, View, step_name};
 
 /// The title of the native app menu (macOS), which holds Settings... and Quit.
-pub const APP_MENU: &str = "sketchup-alt";
+pub const APP_MENU: &str = "Tenon";
 
 /// The File submenu that lists the recent files: the one submenu whose items change.
 pub const OPEN_RECENT: &str = "Open Recent";
@@ -512,7 +512,7 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
             // does. `native_menu` puts its standard items around them.
             entries: vec![
                 settings(),
-                bound_item("Quit sketchup-alt", Bound::Quit, UiAction::Quit).entry(),
+                bound_item("Quit Tenon", Bound::Quit, UiAction::Quit).entry(),
             ],
         });
     }

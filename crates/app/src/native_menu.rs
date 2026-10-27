@@ -51,13 +51,13 @@ impl NativeMenu {
                     match slot {
                         AppSlot::About => {
                             let about = AboutMetadata {
-                                name: Some("sketchup-alt".into()),
+                                name: Some("Tenon".into()),
                                 version: Some(crate::update::version_label()),
                                 ..Default::default()
                             };
                             append(
                                 &submenu,
-                                &PredefinedMenuItem::about(Some("About sketchup-alt"), Some(about)),
+                                &PredefinedMenuItem::about(Some("About Tenon"), Some(about)),
                             );
                         }
                         AppSlot::Separator => append(&submenu, &PredefinedMenuItem::separator()),

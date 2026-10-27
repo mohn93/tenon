@@ -31,7 +31,7 @@
 
 **Tech Stack:** Rust 2024; egui, egui-winit, egui-wgpu, egui_kittest `=0.36.2`; wgpu `=30.0.1`; egui-phosphor `=0.14.0`; muda (native menus, as pinned); glam. No new dependencies.
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`, "Interface milestones", M11d (and M11b's Edit menu line, which names Select All and Select None).
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md`, "Interface milestones", M11d (and M11b's Edit menu line, which names Select All and Select None).
 
 The previous plans define what this one consumes:
 - `docs/superpowers/plans/2026-10-17-m11c-viewport-feedback.md`: `Tool::hovered`, `ToolOutput::info`, the `covered` bit, the `Area` pattern of the gizmo and `ui::tests::drawn_texts`.
@@ -78,7 +78,7 @@ The design audits (`interaction.md` F5-F8 and P5-P8, `ia.md` F7 and P5) only exp
   - `ui::draw` appends actions on every pass, so anything applied from an action must be harmless twice. `DismissStart` and `OpenRecent` are harmless twice: `OpenRecent` runs `settle_changes` first and opening the same file twice gives the same model.
 - Agent API parity: every new behaviour has a command or a `tool_input` path, and `docs/agent-api.md` is updated in Task 12.
 - The renderer (`crates/render`) is not touched. CLASSIC renders stay byte-identical. Task 13 checks that `git diff --stat <base>..HEAD -- crates/render` is empty. Only if it is not does Task 13 run the two-worktree golden `cmp`.
-- Prefs are window chrome. The API and headless mode never read or write them, and tests never write under `~/.sketchup-alt`.
+- Prefs are window chrome. The API and headless mode never read or write them, and tests never write under `~/.tenon`.
 - Git:
   - Work on `dev`. Other agents may share the checkout, so run `git status` and `git diff` first and stage only the files you changed. Never `git add -A` or `git add .`.
   - Short plain commit messages, no attribution lines. Never push or merge.
@@ -1003,7 +1003,7 @@ Expected: compile errors.
 - [ ] **Step 4: Run the tests**
 
 Run: `cargo test -p app`
-Expected: PASS. No test writes under the real `~/.sketchup-alt`.
+Expected: PASS. No test writes under the real `~/.tenon`.
 
 - [ ] **Step 5: Commit**
 

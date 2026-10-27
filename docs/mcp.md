@@ -39,20 +39,20 @@ The binary is `target/release/app`. Use its absolute path below.
 
 ## Headless setup
 
-The server keeps its own model, which starts empty or with a `.skr` file given as the last
+The server keeps its own model, which starts empty or with a `.tnn` file given as the last
 argument (a SketchUp `.skp` file opens as a new model, not saved anywhere). Pass `--api-root DIR` (repeatable) to keep every file the agent opens, saves, imports or
 exports inside those folders.
 
 Claude Code:
 
 ```bash
-claude mcp add sketchup-alt -- /path/to/app --mcp --api-root ~/Models
+claude mcp add tenon -- /path/to/app --mcp --api-root ~/Models
 ```
 
 Claude Desktop on macOS (`~/Library/Application Support/Claude/claude_desktop_config.json`; Claude Desktop has no Linux build, use Claude Code there):
 
 ```json
-{"mcpServers": {"sketchup-alt": {"command": "/path/to/app", "args": ["--mcp", "--api-root", "/Users/you/Models"]}}}
+{"mcpServers": {"tenon": {"command": "/path/to/app", "args": ["--mcp", "--api-root", "/Users/you/Models"]}}}
 ```
 
 Claude Desktop does not expand `~`; use absolute paths there.
@@ -62,11 +62,11 @@ Claude Desktop does not expand `~`; use absolute paths there.
 Start the window on a fixed socket, then point the MCP server at it:
 
 ```bash
-/path/to/app --socket ~/.sketchup-alt/main.sock
-claude mcp add sketchup-alt-live -- /path/to/app --mcp --live ~/.sketchup-alt/main.sock
+/path/to/app --socket ~/.tenon/main.sock
+claude mcp add tenon-live -- /path/to/app --mcp --live ~/.tenon/main.sock
 ```
 
-`~/.sketchup-alt` is created with mode 0700 if missing. On Linux, `$XDG_RUNTIME_DIR` (usually `/run/user/<uid>`) is a good place for a fixed socket: `--socket "$XDG_RUNTIME_DIR/sketchup-alt.sock"`. The window must be running when the client
+`~/.tenon` is created with mode 0700 if missing. On Linux, `$XDG_RUNTIME_DIR` (usually `/run/user/<uid>`) is a good place for a fixed socket: `--socket "$XDG_RUNTIME_DIR/tenon.sock"`. The window must be running when the client
 starts the server: a socket that cannot be reached stops it with exit code 1. If the window quits
 later, every call fails with code `-32003` (connection lost) until the client restarts the server.
 `--live` takes no FILE or `--api-root`; open files and set `--api-root` on the window.
@@ -74,8 +74,8 @@ later, every call fails with code `-32003` (connection lost) until the client re
 On Windows, use a pipe name instead of a socket path (a bare name gets the `\\.\pipe\` prefix):
 
 ```powershell
-app.exe --socket sketchup-alt-main
-claude mcp add sketchup-alt-live -- C:\path\to\app.exe --mcp --live sketchup-alt-main
+app.exe --socket tenon-main
+claude mcp add tenon-live -- C:\path\to\app.exe --mcp --live tenon-main
 ```
 
 Pipe names are visible to every user on the machine, and any of them could create a fixed name

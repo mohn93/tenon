@@ -8,16 +8,16 @@
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The short git hash of the commit this program was built from, when the build knew it.
-pub const GIT_HASH: Option<&str> = option_env!("SKETCHUP_ALT_GIT_HASH");
+pub const GIT_HASH: Option<&str> = option_env!("TENON_GIT_HASH");
 
 /// A release's page: this and its tag. A link of any other shape is not trusted.
-const RELEASE_TAG_PREFIX: &str = "https://github.com/mohn93/sketchup/releases/tag/";
+const RELEASE_TAG_PREFIX: &str = "https://github.com/mohn93/tenon/releases/tag/";
 
 #[cfg(not(target_arch = "wasm32"))]
-const LATEST_URL: &str = "https://api.github.com/repos/mohn93/sketchup/releases/latest";
+const LATEST_URL: &str = "https://api.github.com/repos/mohn93/tenon/releases/latest";
 
 /// Where the releases are listed, for the person to open.
-pub const RELEASES_PAGE: &str = "https://github.com/mohn93/sketchup/releases";
+pub const RELEASES_PAGE: &str = "https://github.com/mohn93/tenon/releases";
 
 /// The version with the build's commit, as About shows it: `0.1.0 (3fbb7ed)`.
 pub fn version_label() -> String {
@@ -170,10 +170,7 @@ pub fn check() -> Outcome {
     let response = agent
         .get(LATEST_URL)
         .header("Accept", "application/vnd.github+json")
-        .header(
-            "User-Agent",
-            concat!("sketchup-alt/", env!("CARGO_PKG_VERSION")),
-        )
+        .header("User-Agent", concat!("tenon/", env!("CARGO_PKG_VERSION")))
         .call();
     let mut response = match response {
         Ok(r) => r,
@@ -224,7 +221,7 @@ mod tests {
 
     #[test]
     fn a_newer_release_is_offered_with_its_page() {
-        let url = "https://github.com/mohn93/sketchup/releases/tag/v0.3.0";
+        let url = "https://github.com/mohn93/tenon/releases/tag/v0.3.0";
         assert_eq!(
             interpret(200, &release("v0.3.0", url), "0.2.0"),
             Outcome::Available {
@@ -236,7 +233,7 @@ mod tests {
 
     #[test]
     fn the_same_or_an_older_release_is_up_to_date() {
-        let url = "https://github.com/mohn93/sketchup/releases/tag/v0.2.0";
+        let url = "https://github.com/mohn93/tenon/releases/tag/v0.2.0";
         assert_eq!(
             interpret(200, &release("v0.2.0", url), "0.2.0"),
             Outcome::UpToDate
@@ -264,20 +261,20 @@ mod tests {
             Outcome::Available { url, .. } => url,
             other => panic!("{other:?}"),
         };
-        let good = "https://github.com/mohn93/sketchup/releases/tag/v9.0.0-rc.1+b2";
+        let good = "https://github.com/mohn93/tenon/releases/tag/v9.0.0-rc.1+b2";
         assert_eq!(offered(good), good);
         for bad in [
-            "https://github.com/mohn93/sketchup-evil/releases/tag/v9.0.0",
-            "https://github.com/mohn93/sketchup@evil.example/releases/tag/v9.0.0",
-            "https://github.com/mohn93/sketchup/releases/tag/../../../evil/repo",
-            "https://github.com/mohn93/sketchup/releases/tag/%2e%2e",
-            "https://github.com/mohn93/sketchup/releases/tag/..",
-            "https://github.com/mohn93/sketchup/releases/tag/v9\\@evil.example",
-            "https://github.com/mohn93/sketchup/releases/tag/v9 x",
-            "https://github.com/mohn93/sketchup/releases/tag/v9?x=1",
-            "https://github.com/mohn93/sketchup/releases/tag/",
-            "https://github.com/mohn93/sketchup/pulls",
-            "http://github.com/mohn93/sketchup/releases/tag/v9.0.0",
+            "https://github.com/mohn93/tenon-evil/releases/tag/v9.0.0",
+            "https://github.com/mohn93/tenon@evil.example/releases/tag/v9.0.0",
+            "https://github.com/mohn93/tenon/releases/tag/../../../evil/repo",
+            "https://github.com/mohn93/tenon/releases/tag/%2e%2e",
+            "https://github.com/mohn93/tenon/releases/tag/..",
+            "https://github.com/mohn93/tenon/releases/tag/v9\\@evil.example",
+            "https://github.com/mohn93/tenon/releases/tag/v9 x",
+            "https://github.com/mohn93/tenon/releases/tag/v9?x=1",
+            "https://github.com/mohn93/tenon/releases/tag/",
+            "https://github.com/mohn93/tenon/pulls",
+            "http://github.com/mohn93/tenon/releases/tag/v9.0.0",
         ] {
             assert_eq!(offered(bad), RELEASES_PAGE, "{bad}");
         }

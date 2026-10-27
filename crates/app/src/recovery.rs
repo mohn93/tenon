@@ -33,7 +33,14 @@ pub struct Session {
 const MAX_SIDECAR_BYTES: u64 = 16 * 1024;
 
 /// The end of an autosave model's file name.
-const AUTOSAVE_SUFFIX: &str = ".autosave.skr";
+const AUTOSAVE_SUFFIX: &str = ".autosave.tnn";
+/// The end an autosave model's file name had before the rename to Tenon; still listed.
+const LEGACY_AUTOSAVE_SUFFIX: &str = ".autosave.skr";
+
+/// Whether `name` ends like an autosave model's file name.
+fn is_autosave_name(name: &str) -> bool {
+    name.ends_with(AUTOSAVE_SUFFIX) || name.ends_with(LEGACY_AUTOSAVE_SUFFIX)
+}
 
 /// What a sidecar holds.
 #[derive(Debug, Serialize, Deserialize)]
@@ -50,7 +57,7 @@ struct Sidecar {
 }
 
 /// Makes sure the recovery folder `dir` exists and is private, as the app's other private
-/// folders (0700, not a link; the `~/.sketchup-alt` fallback folder too, and on Linux and
+/// folders (0700, not a link; the `~/.tenon` fallback folder too, and on Linux and
 /// Windows missing parents are created).
 pub fn ensure_folder(dir: &Path) -> io::Result<()> {
     if let Some(parent) = crate::cli::private_dir_for(dir) {
@@ -82,11 +89,14 @@ fn valid_id(id: &str) -> bool {
             .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
 }
 
-/// The session ids an autosave model named `name` (`<stem>-<id>.autosave.skr`) could have
+/// The session ids an autosave model named `name` (`<stem>-<id>.autosave.tnn`) could have
 /// been written by: the stem may end in digits too, so both the last two and the last three
 /// `-` parts are tried.
 fn ids_in_name(name: &str) -> Vec<String> {
-    let Some(base) = name.strip_suffix(AUTOSAVE_SUFFIX) else {
+    let Some(base) = name
+        .strip_suffix(AUTOSAVE_SUFFIX)
+        .or_else(|| name.strip_suffix(LEGACY_AUTOSAVE_SUFFIX))
+    else {
         return Vec::new();
     };
     let parts: Vec<&str> = base.split('-').collect();
@@ -433,7 +443,7 @@ pub fn list(dir: &Path, own: &Session, include_discarded: bool) -> Vec<Entry> {
 /// whose sidecar cannot be read, or whose model is missing, a link or open to other users, is
 /// listed with an `error` (it can only be discarded), unless its name says it belongs to a
 /// running session. Lock files of ended sessions with no entries seen are removed, and so are
-/// temporary files (`.sketchup-alt-*.partial`, `.session-*.locking`) a day old.
+/// temporary files (`.tenon-*.partial`, `.session-*.locking`) a day old.
 pub fn list_newest(dir: &Path, own: &Session, include_discarded: bool, max: usize) -> Listing {
     let Ok(read) = std::fs::read_dir(dir) else {
         return Listing::default();
@@ -452,14 +462,17 @@ pub fn list_newest(dir: &Path, own: &Session, include_discarded: bool, max: usiz
             if valid_id(id) {
                 locks.push(id.to_string());
             }
-        } else if name.ends_with(".skr.json") {
-            if include_discarded || name.ends_with(".autosave.skr.json") {
+        } else if name.ends_with(".tnn.json") || name.ends_with(".skr.json") {
+            if include_discarded
+                || name.ends_with(".autosave.tnn.json")
+                || name.ends_with(".autosave.skr.json")
+            {
                 let written = std::fs::symlink_metadata(item.path())
                     .and_then(|m| m.modified())
                     .unwrap_or(UNIX_EPOCH);
                 sidecars.push((written, item.path()));
             }
-        } else if name.ends_with(AUTOSAVE_SUFFIX) {
+        } else if is_autosave_name(name) {
             autosaves.push(item.path());
         } else if is_temp_name(name) {
             remove_if_stale(&item.path(), now);
@@ -516,10 +529,7 @@ pub fn list_newest(dir: &Path, own: &Session, include_discarded: bool, max: usiz
                     continue;
                 }
                 with_entries.extend(ids);
-                let kind = if file_name
-                    .as_deref()
-                    .is_some_and(|n| n.ends_with(AUTOSAVE_SUFFIX))
-                {
+                let kind = if file_name.as_deref().is_some_and(is_autosave_name) {
                     Kind::Autosave
                 } else {
                     Kind::Discarded
@@ -580,9 +590,9 @@ pub fn list_newest(dir: &Path, own: &Session, include_discarded: bool, max: usiz
 }
 
 /// Whether `name` is a temporary file's that the app writes in the recovery folder: a write's
-/// `.sketchup-alt-<pid>-<n>.partial` or a starting session's `.session-<id>.locking`.
+/// `.tenon-<pid>-<n>.partial` or a starting session's `.session-<id>.locking`.
 fn is_temp_name(name: &str) -> bool {
-    (name.starts_with(".sketchup-alt-") && name.ends_with(".partial"))
+    (name.starts_with(".tenon-") && name.ends_with(".partial"))
         || (name.starts_with(".session-") && name.ends_with(".locking"))
 }
 
@@ -621,10 +631,8 @@ mod tests {
 
     /// A fresh private folder for one test.
     fn folder(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "sketchup-alt-recovery-test-{}-{name}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("tenon-recovery-test-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }
@@ -702,7 +710,7 @@ mod tests {
         let dir = folder("overwrite");
         let s = Session::start(&dir).unwrap();
         let mut d = doc();
-        let original = Path::new("/x/My house?.skr");
+        let original = Path::new("/x/My house?.tnn");
         s.write_autosave(&d, Some(original)).unwrap();
         d.execute(Command::AddEdge {
             start: [0.0; 3],
@@ -710,7 +718,7 @@ mod tests {
         })
         .unwrap();
         s.write_autosave(&d, Some(original)).unwrap();
-        let model = dir.join(format!("My house_-{}.autosave.skr", s.id()));
+        let model = dir.join(format!("My house_-{}.autosave.tnn", s.id()));
         let lock = format!("session-{}.lock", s.id());
         let model_name = model.file_name().unwrap().to_string_lossy().into_owned();
         let mut expected = vec![model_name.clone(), format!("{model_name}.json"), lock];
@@ -719,7 +727,7 @@ mod tests {
         let note = sidecar(&model);
         assert_eq!(note["kind"], "autosave");
         assert_eq!(note["session"], s.id());
-        assert_eq!(note["original"], "/x/My house?.skr");
+        assert_eq!(note["original"], "/x/My house?.tnn");
         assert!(note["saved"].as_u64().unwrap() > 1_700_000_000);
         let mut back = Document::new(DVec2::new(800.0, 600.0));
         back.execute(Command::Open {
@@ -738,11 +746,11 @@ mod tests {
         assert_eq!(names(&dir), [format!("session-{}.lock", s.id())]);
         s.write_autosave(&d, None).unwrap();
         assert!(
-            dir.join(format!("untitled-{}.autosave.skr", s.id()))
+            dir.join(format!("untitled-{}.autosave.tnn", s.id()))
                 .is_file()
         );
         // A new name replaces the old pair: one autosave per session.
-        s.write_autosave(&d, Some(Path::new("/y/barn.skr")))
+        s.write_autosave(&d, Some(Path::new("/y/barn.tnn")))
             .unwrap();
         assert_eq!(names(&dir).len(), 3, "{:?}", names(&dir));
         drop(s);
@@ -754,7 +762,7 @@ mod tests {
         let dir = folder("two");
         let a = Session::start(&dir).unwrap();
         let b = Session::start(&dir).unwrap();
-        a.write_autosave(&doc(), Some(Path::new("/x/house.skr")))
+        a.write_autosave(&doc(), Some(Path::new("/x/house.tnn")))
             .unwrap();
         b.write_autosave(&doc(), None).unwrap();
         assert!(list(&dir, &a, true).is_empty(), "own and live");
@@ -765,7 +773,7 @@ mod tests {
         let e = &found[0];
         assert_eq!(e.kind, Kind::Autosave);
         assert_eq!(e.name, "house");
-        assert_eq!(e.original.as_deref(), Some(Path::new("/x/house.skr")));
+        assert_eq!(e.original.as_deref(), Some(Path::new("/x/house.tnn")));
         assert_eq!(e.error, None);
         assert!(e.saved > UNIX_EPOCH + Duration::from_secs(1_700_000_000));
         assert!(opens(&e.model));
@@ -803,9 +811,9 @@ mod tests {
     fn discarded_files_are_listed_only_when_asked() {
         let dir = folder("discarded");
         let a = Session::start(&dir).unwrap();
-        let kept = dir.join("house-1700000000.skr");
+        let kept = dir.join("house-1700000000.tnn");
         doc().write_copy(&kept).unwrap();
-        a.note_discarded(&kept, Some(Path::new("/x/house.skr")));
+        a.note_discarded(&kept, Some(Path::new("/x/house.tnn")));
         assert_eq!(sidecar(&kept)["kind"], "discarded");
         assert_eq!(sidecar(&kept)["session"], a.id());
         // Clearing the autosave never touches discarded files.
@@ -827,16 +835,16 @@ mod tests {
     fn an_adopted_entry_becomes_this_sessions_autosave() {
         let dir = folder("adopt");
         let a = Session::start(&dir).unwrap();
-        a.write_autosave(&doc(), Some(Path::new("/x/house.skr")))
+        a.write_autosave(&doc(), Some(Path::new("/x/house.tnn")))
             .unwrap();
         crash(a);
         let b = Session::start(&dir).unwrap();
         let entry = list(&dir, &b, false).remove(0);
         let model = b.adopt(&entry).unwrap();
-        assert_eq!(model, dir.join(format!("house-{}.autosave.skr", b.id())));
+        assert_eq!(model, dir.join(format!("house-{}.autosave.tnn", b.id())));
         assert!(!entry.model.exists());
         assert_eq!(sidecar(&model)["session"], b.id());
-        assert_eq!(sidecar(&model)["original"], "/x/house.skr");
+        assert_eq!(sidecar(&model)["original"], "/x/house.tnn");
         assert!(opens(&model));
         assert!(list(&dir, &b, true).is_empty(), "now our own");
         // Crashing again offers it again.
@@ -859,7 +867,7 @@ mod tests {
         let dir = folder("broken");
         let a = Session::start(&dir).unwrap();
         a.write_autosave(&doc(), None).unwrap();
-        let model = dir.join(format!("untitled-{}.autosave.skr", a.id()));
+        let model = dir.join(format!("untitled-{}.autosave.tnn", a.id()));
         crash(a);
         let b = Session::start(&dir).unwrap();
         // The model is gone.
@@ -869,7 +877,7 @@ mod tests {
         assert!(found[0].error.as_deref().unwrap().contains("missing"));
         discard(&found[0]).unwrap();
         // A sidecar that is not valid.
-        let bad = dir.join("odd.autosave.skr.json");
+        let bad = dir.join("odd.autosave.tnn.json");
         session::file::replace_private(&bad, b"{not json").unwrap();
         let found = list(&dir, &b, false);
         assert_eq!(found.len(), 1);
@@ -877,8 +885,16 @@ mod tests {
         assert_eq!(found[0].kind, Kind::Autosave);
         discard(&found[0]).unwrap();
         assert!(!bad.exists());
+        // An autosave note written before the rename is listed too.
+        let old = dir.join("odd.autosave.skr.json");
+        session::file::replace_private(&old, b"{not json").unwrap();
+        let found = list(&dir, &b, false);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].kind, Kind::Autosave);
+        discard(&found[0]).unwrap();
+        assert!(!old.exists());
         // A time no clock reaches.
-        let late = dir.join("late.autosave.skr.json");
+        let late = dir.join("late.autosave.tnn.json");
         let note = format!(
             "{{\"kind\": \"autosave\", \"session\": \"1-2\", \"saved\": {}}}",
             u64::MAX
@@ -888,7 +904,7 @@ mod tests {
         assert_eq!(found.len(), 1);
         discard(&found[0]).unwrap();
         // A partial file is never an entry.
-        std::fs::write(dir.join(".sketchup-alt-1-0.partial"), b"x").unwrap();
+        std::fs::write(dir.join(".tenon-1-0.partial"), b"x").unwrap();
         assert!(list(&dir, &b, true).is_empty());
         drop(b);
         let _ = std::fs::remove_dir_all(&dir);
@@ -900,8 +916,8 @@ mod tests {
         let dir = folder("links");
         let a = Session::start(&dir).unwrap();
         a.write_autosave(&doc(), None).unwrap();
-        let model = dir.join(format!("untitled-{}.autosave.skr", a.id()));
-        let note = dir.join(format!("untitled-{}.autosave.skr.json", a.id()));
+        let model = dir.join(format!("untitled-{}.autosave.tnn", a.id()));
+        let note = dir.join(format!("untitled-{}.autosave.tnn.json", a.id()));
         crash(a);
         let b = Session::start(&dir).unwrap();
         // The sidecar open to others: not listed.
@@ -922,7 +938,7 @@ mod tests {
         std::fs::set_permissions(&model, std::fs::Permissions::from_mode(0o644)).unwrap();
         let found = list(&dir, &b, true);
         assert!(found[0].error.as_deref().unwrap().contains("other users"));
-        let real = outside.join("model.skr");
+        let real = outside.join("model.tnn");
         std::fs::rename(&model, &real).unwrap();
         std::os::unix::fs::symlink(&real, &model).unwrap();
         let found = list(&dir, &b, true);
@@ -996,13 +1012,13 @@ mod tests {
         let dir = folder("no-sidecar");
         let a = Session::start(&dir).unwrap();
         let b = Session::start(&dir).unwrap();
-        a.write_autosave(&doc(), Some(Path::new("/x/a-12.skr")))
+        a.write_autosave(&doc(), Some(Path::new("/x/a-12.tnn")))
             .unwrap();
-        let model = dir.join(format!("a-12-{}.autosave.skr", a.id()));
+        let model = dir.join(format!("a-12-{}.autosave.tnn", a.id()));
         std::fs::remove_file(sidecar_path(&model)).unwrap();
         assert!(list(&dir, &b, true).is_empty(), "its session is live");
         // A discarded file from before sidecars: never listed.
-        doc().write_copy(&dir.join("house-1700000000.skr")).unwrap();
+        doc().write_copy(&dir.join("house-1700000000.tnn")).unwrap();
         crash(a);
         let found = list(&dir, &b, true);
         assert_eq!(found.len(), 1, "{found:?}");
@@ -1075,9 +1091,9 @@ mod tests {
         let dir = folder("bounded");
         let a = Session::start(&dir).unwrap();
         for (k, name) in ["old", "middle", "new"].into_iter().enumerate() {
-            let kept = dir.join(format!("{name}-170000000{k}.skr"));
+            let kept = dir.join(format!("{name}-170000000{k}.tnn"));
             doc().write_copy(&kept).unwrap();
-            a.note_discarded(&kept, Some(Path::new(&format!("/x/{name}.skr"))));
+            a.note_discarded(&kept, Some(Path::new(&format!("/x/{name}.tnn"))));
             age(&sidecar_path(&kept), 3000 - 1000 * k as u64);
         }
         crash(a);
@@ -1101,7 +1117,7 @@ mod tests {
         let dir = folder("start-names");
         let b = Session::start(&dir).unwrap();
         // An unreadable note of a discarded file: listed only with the discarded work.
-        let kept = dir.join("house-1700000000.skr");
+        let kept = dir.join("house-1700000000.tnn");
         doc().write_copy(&kept).unwrap();
         crate::prefs::create_private_file(&sidecar_path(&kept)).unwrap();
         assert!(list(&dir, &b, false).is_empty());
@@ -1115,9 +1131,9 @@ mod tests {
         let dir = folder("live-broken");
         let a = Session::start(&dir).unwrap();
         let b = Session::start(&dir).unwrap();
-        a.write_autosave(&doc(), Some(Path::new("/x/house.skr")))
+        a.write_autosave(&doc(), Some(Path::new("/x/house.tnn")))
             .unwrap();
-        let model = dir.join(format!("house-{}.autosave.skr", a.id()));
+        let model = dir.join(format!("house-{}.autosave.tnn", a.id()));
         std::fs::write(sidecar_path(&model), b"not json").unwrap();
         assert!(list(&dir, &b, true).is_empty(), "a is running");
         crash(a);
@@ -1133,9 +1149,9 @@ mod tests {
         let dir = folder("stale-temp");
         let b = Session::start(&dir).unwrap();
         let day = 24 * 60 * 60;
-        let stale_partial = dir.join(".sketchup-alt-9-1.partial");
+        let stale_partial = dir.join(".tenon-9-1.partial");
         let stale_locking = dir.join(".session-9-1.locking");
-        let fresh = dir.join(".sketchup-alt-9-2.partial");
+        let fresh = dir.join(".tenon-9-2.partial");
         let other = dir.join(".other-9.partial");
         for path in [&stale_partial, &stale_locking, &fresh, &other] {
             crate::prefs::create_private_file(path).unwrap();

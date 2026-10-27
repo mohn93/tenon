@@ -1,10 +1,10 @@
-//! Library items: `.skr` files that carry a `library.json` entry saying what they hold (one
-//! component, one material or a whole model) and its name. Any `.skr` file is an item: one
+//! Library items: `.tnn` files that carry a `library.json` entry saying what they hold (one
+//! component, one material or a whole model) and its name. Any `.tnn` file is an item: one
 //! without the entry is a model named by its file name.
 //!
 //! Library files are untrusted. Listing reads the archive's directory and the small
 //! `library.json` entry only, never follows links and stays within [`MAX_LISTED`] items;
-//! reading an item for insertion goes through the `.skr` reader's checks.
+//! reading an item for insertion goes through the `.tnn` reader's checks.
 
 use std::fmt;
 use std::path::Path;
@@ -145,7 +145,7 @@ pub struct LibraryItem {
 pub struct LibraryListing {
     /// At most [`MAX_LISTED`], sorted by name ignoring case.
     pub items: Vec<LibraryItem>,
-    /// True when the folder holds more `.skr` files than were listed.
+    /// True when the folder holds more `.tnn` files than were listed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub more: bool,
 }
@@ -184,21 +184,22 @@ pub(crate) fn encode_info(kind: LibraryKind, name: &str) -> Result<Vec<u8>, Comm
     .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
 }
 
-pub(crate) fn is_skr(name: &str) -> bool {
-    name.len() > ".skr".len()
+/// Whether `name` is a model file's: a stem and `.tnn`, or the legacy `.skr`.
+pub(crate) fn is_tnn(name: &str) -> bool {
+    name.len() > ".tnn".len()
         && name
-            .get(name.len() - ".skr".len()..)
-            .is_some_and(|e| e.eq_ignore_ascii_case(".skr"))
+            .get(name.len() - ".tnn".len()..)
+            .is_some_and(|e| e.eq_ignore_ascii_case(".tnn") || e.eq_ignore_ascii_case(".skr"))
 }
 
 fn stem(name: &str) -> String {
-    name[..name.len() - ".skr".len()]
+    name[..name.len() - ".tnn".len()]
         .chars()
         .take(MAX_NAME_CHARS)
         .collect()
 }
 
-/// The `library.json` entry of the `.skr` file at `path` when it has a valid one (kind known, a
+/// The `library.json` entry of the `.tnn` file at `path` when it has a valid one (kind known, a
 /// usable name when it has one): what a save of a model opened from an item writes back.
 pub(crate) fn info_of(path: &Path) -> Option<Vec<u8>> {
     let bytes = file::read_entry(path, INFO_ENTRY, MAX_INFO_BYTES).ok()??;
@@ -221,7 +222,7 @@ fn describe(path: &Path, file_name: &str) -> Result<(LibraryKind, String), Strin
     Ok(info.unwrap_or((LibraryKind::Model, stem(file_name))))
 }
 
-/// The `.skr` files directly in `folder`, sorted by name ignoring case, at most
+/// The `.tnn` files directly in `folder`, sorted by name ignoring case, at most
 /// [`MAX_LISTED`]. Links, folders and files over [`MAX_ITEM_BYTES`] are left out; a file that
 /// is not a model archive is listed with its `error`. With more than [`MAX_LISTED`] files the
 /// first by file name are listed (and `more` is set), so the work stays bounded.
@@ -240,7 +241,7 @@ pub fn list(folder: &Path) -> Result<LibraryListing, CommandError> {
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
-        if !is_skr(&name) {
+        if !is_tnn(&name) {
             continue;
         }
         let Ok(meta) = std::fs::symlink_metadata(entry.path()) else {
@@ -280,7 +281,7 @@ pub fn list(folder: &Path) -> Result<LibraryListing, CommandError> {
     Ok(LibraryListing { items, more })
 }
 
-/// Reads the item at `path` with every check opening a `.skr` file makes: a regular file of
+/// Reads the item at `path` with every check opening a `.tnn` file makes: a regular file of
 /// at most [`MAX_ITEM_BYTES`]; every item also passes the clip caps (nesting depth, expanded
 /// instances, placed faces), so nothing walking its placements can run away.
 pub fn read_item(path: &Path) -> Result<LibraryContent, CommandError> {
@@ -302,7 +303,7 @@ pub fn read_item(path: &Path) -> Result<LibraryContent, CommandError> {
     let file_name = path
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("item.skr");
+        .unwrap_or("item.tnn");
     let (kind, name) = describe(path, file_name).map_err(file_error)?;
     let opened = file::read(path).map_err(file_error)?;
     // Every kind passes the caps: a material item places nothing, so it always passes, and a

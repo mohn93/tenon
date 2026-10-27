@@ -4,7 +4,7 @@
 use super::*;
 
 impl Editor {
-    /// Opens a `.skr` file, or a SketchUp file as a new model never saved, from its `bytes`
+    /// Opens a `.tnn` file, or a SketchUp file as a new model never saved, from its `bytes`
     /// (`name` is the file's name), dropping unsaved changes (the window asks about them
     /// first). False if it cannot be opened; the status then says why.
     pub fn open_bytes(&mut self, name: &str, bytes: &[u8]) -> bool {
@@ -72,7 +72,7 @@ impl Editor {
         }
     }
 
-    /// The model as the bytes of a `.skr` file; the model stays as it is until
+    /// The model as the bytes of a `.tnn` file; the model stays as it is until
     /// `saved_as` says they were kept. None if it cannot be encoded; the status then says why.
     pub fn encode_model(&mut self) -> Option<Vec<u8>> {
         self.message = None;

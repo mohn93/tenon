@@ -1,4 +1,4 @@
-"""Connection to a running sketchup-alt app: newline-delimited JSON-RPC 2.0."""
+"""Connection to a running tenon app: newline-delimited JSON-RPC 2.0."""
 import base64
 import json
 import os
@@ -88,15 +88,15 @@ class _WinPipe:
 class Client:
     """``Client(socket_path=None, timeout=60)``.
 
-    The path defaults to ``$SKETCHUP_ALT_SOCKET``. On Windows it is a pipe name
+    The path defaults to ``$TENON_SOCKET``. On Windows it is a pipe name
     (a bare name becomes ``\\\\.\\pipe\\name``). ``timeout`` (seconds) bounds each
     wait for a reply; it raises ``TimeoutError``. Not thread safe.
     """
 
     def __init__(self, socket_path=None, timeout=60):
-        path = socket_path or os.environ.get("SKETCHUP_ALT_SOCKET")
+        path = socket_path or os.environ.get("TENON_SOCKET")
         if not path:
-            raise ValueError("give socket_path or set SKETCHUP_ALT_SOCKET")
+            raise ValueError("give socket_path or set TENON_SOCKET")
         self.socket_path = path
         self.timeout = timeout
         self._buf = bytearray()

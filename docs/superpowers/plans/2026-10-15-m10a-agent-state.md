@@ -12,7 +12,7 @@
 
 **Tech Stack:** Rust 2024; serde, schemars, serde_json; no new external dependencies (the `api` crate gains path dependencies on `tools` and `kernel`).
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md` ("Agent control milestones", M10a; section 5 for the API).
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md` ("Agent control milestones", M10a; section 5 for the API).
 
 ## Global Constraints
 
@@ -22,7 +22,7 @@
 - From the spec: queries `pick` (a pixel of a view, given width, height and an optional camera like `render_view`'s, or a ray `{origin, direction}`; hits front to back: entity id with its instance path from the root, point, normal and distance), `infer` (a pixel or a model point, optionally `from` a point; kind, point, the entities involved and the axis lock), `editor` (tool and phase with points so far, paint material, fly mode, viewport size, status text, measurements box text, import units, soften angle, open dialog); commands `set_tool {tool}`, `set_paint_material {material}`, `set_import_units {units}`, `cancel`; `history` lists undo and redo step labels; `subscribe` also sends `selection`, `camera` and `editor` notifications when they change, whoever changed them, coalesced to at most one of each per frame; method `quit {discard}` ends the app (window or headless), refusing with unsaved changes unless `discard`; every window action has a command or is window chrome listed in agent-api.md.
 - Keep the interfaces M10b and M10c build on clean: `Phase`, `EditorState`, `Host::editor`/`editor_command`, `Hub::notify_state`, `AppHost`.
 - Git: work on `dev`; other agents may share the checkout: run `git status` and `git diff` first and stage only the files you changed (never `git add -A` or `git add .`); short plain commit messages, no attribution lines.
-- Do not launch the app window. Tests that start the binary use their own scratch sockets; never touch `~/.sketchup-alt/house.sock` or `h.sock`.
+- Do not launch the app window. Tests that start the binary use their own scratch sockets; never touch `~/.tenon/house.sock` or `h.sock`.
 
 ## Spec notes (rulings made in this plan)
 
@@ -4845,7 +4845,7 @@ git commit -m "App: agents read and set the editor; headless runs the editor and
 
 **Files:**
 - Modify: `crates/app/src/app.rs` (with a test), `crates/app/src/host.rs` (`CLOSE_WAIT` moves here), `crates/app/src/headless.rs`
-- Docs: `docs/agent-api.md`, `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`
+- Docs: `docs/agent-api.md`, `docs/superpowers/specs/2026-10-10-tenon-design.md`
 
 **Interfaces:**
 - Consumes: everything above.
@@ -5160,8 +5160,8 @@ Expected: PASS. The window itself is not launched: its wiring is the same calls 
 ```
 
 ```diff
---- a/docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
-+++ b/docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
+--- a/docs/superpowers/specs/2026-10-10-tenon-design.md
++++ b/docs/superpowers/specs/2026-10-10-tenon-design.md
 @@ -7,7 +7,7 @@ Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10
  
  A desktop 3D modeler in Rust with SketchUp-style direct modeling: draw edges, faces form automatically, push/pull faces, inference snapping, groups and components. macOS first; Windows and Linux supported through wgpu without dedicated work.
@@ -5180,7 +5180,7 @@ Expected: clean; all pass; release build succeeds.
 
 ```bash
 git status && git diff
-git add crates/app/src/app.rs crates/app/src/host.rs crates/app/src/headless.rs docs/agent-api.md docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
+git add crates/app/src/app.rs crates/app/src/host.rs crates/app/src/headless.rs docs/agent-api.md docs/superpowers/specs/2026-10-10-tenon-design.md
 git commit -m "App: the window notifies once a frame and quits on request; window actions listed"
 ```
 

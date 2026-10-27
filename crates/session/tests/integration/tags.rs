@@ -424,7 +424,7 @@ fn tags_are_saved_and_opened_with_their_entities() {
         json!({"type": "set_tag", "ids": [e[1]], "tag": hidden}),
     )
     .unwrap();
-    let path = scratch("tags.skr");
+    let path = scratch("tags.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -452,7 +452,7 @@ fn tags_are_saved_and_opened_with_their_entities() {
     assert_eq!(tag_of(&opened, &e[2]), Value::Null);
 
     // An entity on a tag the file lacks is refused.
-    let broken = scratch("broken-tag.skr");
+    let broken = scratch("broken-tag.tnn");
     std::fs::copy(&path, &broken).unwrap();
     edit_file(&broken, |doc| {
         doc["model"]["root"]["faces"][0]["tag"] = json!(999_999);
@@ -470,7 +470,7 @@ fn tags_are_saved_and_opened_with_their_entities() {
 fn a_model_without_tags_keeps_its_old_schema_and_old_files_open_untagged() {
     let mut d = doc();
     let (f, e) = square(&mut d);
-    let path = scratch("untagged.skr");
+    let path = scratch("untagged.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -698,7 +698,7 @@ fn color_by_tag_is_a_view_setting_saved_with_the_camera() {
     assert_eq!(camera(&d)["color_by_tag"], true);
 
     // Saved with the camera, at the tags' schema even without a tag; opened back.
-    let path = scratch("color-by-tag.skr");
+    let path = scratch("color-by-tag.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-tenon">
+    <comment>Tenon model</comment>
+    <glob pattern="*.tnn"/>
+    <!-- The extension models had before the project was renamed Tenon. -->
+    <glob pattern="*.skr"/>
+  </mime-type>
+</mime-info>

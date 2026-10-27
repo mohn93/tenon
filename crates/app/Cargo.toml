@@ -63,7 +63,7 @@ windows-sys = { version = "=0.61.2", features = [
 egui_kittest.workspace = true
 image.workspace = true
 
-# The Windows icon and version resource, embedded only when SKETCHUP_ALT_WINRES is set (the
+# The Windows icon and version resource, embedded only when TENON_WINRES is set (the
 # packaging workflow), so ordinary builds do not depend on the resource compiler.
 [target.'cfg(windows)'.build-dependencies]
 winresource = "=0.1.34"

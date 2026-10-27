@@ -181,7 +181,7 @@ pub struct Download {
 /// The unsaved-changes question.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnsavedPrompt {
-    /// `Do you want to save changes to "house.skr"?`
+    /// `Do you want to save changes to "house.tnn"?`
     pub question: String,
     /// What happens if the answer is not Save.
     pub detail: &'static str,

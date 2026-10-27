@@ -38,15 +38,15 @@ fn relative_paths_land_in_the_first_root() {
     let (root, _) = folders("relative");
     let mut h = host(&root);
     edge(&mut h);
-    let r = call(&mut h, "execute", json!({"type": "save", "path": "a.skr"}));
+    let r = call(&mut h, "execute", json!({"type": "save", "path": "a.tnn"}));
     assert!(r["result"].is_object(), "{r}");
-    assert!(root.join("a.skr").exists());
-    let r = call(&mut h, "execute", json!({"type": "open", "path": "a.skr"}));
+    assert!(root.join("a.tnn").exists());
+    let r = call(&mut h, "execute", json!({"type": "open", "path": "a.tnn"}));
     assert!(r["result"].is_object(), "{r}");
     let file = call(&mut h, "query", json!({"type": "file"}));
     let real = session::fspath::canonical(&root).unwrap();
     assert_eq!(file["result"]["api_roots"], json!([real]));
-    assert_eq!(file["result"]["path"], json!(real.join("a.skr")));
+    assert_eq!(file["result"]["path"], json!(real.join("a.tnn")));
 }
 
 #[test]
@@ -61,8 +61,8 @@ fn paths_outside_the_roots_are_refused() {
     .unwrap();
     std::fs::write(outside.join("t.png"), "x").unwrap();
     let cases = [
-        json!({"type": "save", "path": outside.join("a.skr")}),
-        json!({"type": "save", "path": "../outside/a.skr"}),
+        json!({"type": "save", "path": outside.join("a.tnn")}),
+        json!({"type": "save", "path": "../outside/a.tnn"}),
         json!({"type": "export", "path": outside.join("a.stl")}),
         json!({"type": "import", "path": outside.join("model.obj")}),
         json!({"type": "open", "path": "../outside/model.obj"}),
@@ -80,7 +80,7 @@ fn paths_outside_the_roots_are_refused() {
             "{r}"
         );
     }
-    assert!(!outside.join("a.skr").exists() && !outside.join("a.stl").exists());
+    assert!(!outside.join("a.tnn").exists() && !outside.join("a.stl").exists());
 }
 
 #[cfg(unix)]
@@ -94,7 +94,7 @@ fn links_out_of_the_roots_are_followed_and_refused() {
     let r = call(
         &mut h,
         "execute",
-        json!({"type": "save", "path": "door/a.skr"}),
+        json!({"type": "save", "path": "door/a.tnn"}),
     );
     assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
     let r = call(
@@ -104,22 +104,22 @@ fn links_out_of_the_roots_are_followed_and_refused() {
     );
     assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
     // A link as the file to write is refused even when it points inside.
-    std::fs::write(root.join("real.skr"), "").unwrap();
-    std::os::unix::fs::symlink(root.join("real.skr"), root.join("link.skr")).unwrap();
+    std::fs::write(root.join("real.tnn"), "").unwrap();
+    std::os::unix::fs::symlink(root.join("real.tnn"), root.join("link.tnn")).unwrap();
     let r = call(
         &mut h,
         "execute",
-        json!({"type": "save", "path": "link.skr"}),
+        json!({"type": "save", "path": "link.tnn"}),
     );
     assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
     // A missing file is a file error naming the path given.
     let r = call(
         &mut h,
         "execute",
-        json!({"type": "open", "path": "nope.skr"}),
+        json!({"type": "open", "path": "nope.tnn"}),
     );
     assert_eq!(r["error"]["data"]["kind"], "file", "{r}");
-    assert!(r["error"]["message"].as_str().unwrap().contains("nope.skr"));
+    assert!(r["error"]["message"].as_str().unwrap().contains("nope.tnn"));
 }
 
 #[test]
@@ -131,7 +131,7 @@ fn a_batch_with_a_path_outside_runs_nothing() {
         "batch",
         json!({"commands": [
             {"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]},
-            {"type": "save", "path": outside.join("a.skr")}
+            {"type": "save", "path": outside.join("a.tnn")}
         ]}),
     );
     assert_eq!(r["error"]["code"], codes::BATCH_FAILED, "{r}");
@@ -321,7 +321,7 @@ fn outside_paths_get_one_answer_whether_they_exist_or_not() {
     let (root, outside) = folders("oracle");
     let mut h = host(&root);
     edge(&mut h);
-    std::fs::write(outside.join("secret.skr"), "x").unwrap();
+    std::fs::write(outside.join("secret.tnn"), "x").unwrap();
     std::fs::create_dir(outside.join("locked")).unwrap();
     std::fs::write(outside.join("locked/in.obj"), "v 0 0 0\n").unwrap();
     std::fs::create_dir(outside.join("exists")).unwrap();
@@ -335,18 +335,18 @@ fn outside_paths_get_one_answer_whether_they_exist_or_not() {
     )
     .unwrap();
     let paths = [
-        outside.join("secret.skr"),
-        outside.join("nope.skr"),
-        outside.join("nodir/nope.skr"),
+        outside.join("secret.tnn"),
+        outside.join("nope.tnn"),
+        outside.join("nodir/nope.tnn"),
         outside.join("locked/in.obj"),
         outside.join("locked/nope.obj"),
         // Out and back into the root through an outside folder that exists or not.
-        outside.join("exists/../../root/a.skr"),
-        outside.join("missing/../../root/a.skr"),
-        outside.join("locked/x/../../../root/a.skr"),
+        outside.join("exists/../../root/a.tnn"),
+        outside.join("missing/../../root/a.tnn"),
+        outside.join("locked/x/../../../root/a.tnn"),
         // A dangling link in the root, its target outside missing or not.
-        root.join("dangling/a.skr"),
-        root.join("dangling-made/a.skr"),
+        root.join("dangling/a.tnn"),
+        root.join("dangling-made/a.tnn"),
     ];
     let mut messages = std::collections::BTreeSet::new();
     for path in &paths {
@@ -378,9 +378,9 @@ fn outside_paths_get_one_answer_whether_they_exist_or_not() {
     // A part missing within a root is a file error, wherever the rest would lead: it says
     // nothing of what lies outside.
     for path in [
-        "missing/nope.skr",
-        "missing/../../outside/secret.skr",
-        "missing/../../outside/nope.skr",
+        "missing/nope.tnn",
+        "missing/../../outside/secret.tnn",
+        "missing/../../outside/nope.tnn",
     ] {
         let r = call(&mut h, "execute", json!({"type": "open", "path": path}));
         assert_eq!(r["error"]["data"]["kind"], "file", "{r}");
@@ -405,8 +405,8 @@ fn a_root_as_the_target_is_a_folder_and_a_nul_is_invalid() {
         assert!(message.contains("is a folder"), "{c}: {message}");
     }
     for c in [
-        json!({"type": "save", "path": "a\u{0}b.skr"}),
-        json!({"type": "open", "path": "a\u{0}b.skr"}),
+        json!({"type": "save", "path": "a\u{0}b.tnn"}),
+        json!({"type": "open", "path": "a\u{0}b.tnn"}),
         json!({"type": "export", "path": "a\u{0}b.stl"}),
     ] {
         let r = call(&mut h, "execute", c.clone());
@@ -449,7 +449,7 @@ fn library_save_list_and_insert_stay_inside_the_roots() {
     let r = call(
         &mut h,
         "execute",
-        json!({"type": "save_to_library", "path": "lib/chair.skr", "kind": "model"}),
+        json!({"type": "save_to_library", "path": "lib/chair.tnn", "kind": "model"}),
     );
     // The folder must exist: writing never creates it.
     assert_eq!(r["error"]["data"]["kind"], "file", "{r}");
@@ -457,7 +457,7 @@ fn library_save_list_and_insert_stay_inside_the_roots() {
     let r = call(
         &mut h,
         "execute",
-        json!({"type": "save_to_library", "path": "lib/chair.skr", "kind": "model",
+        json!({"type": "save_to_library", "path": "lib/chair.tnn", "kind": "model",
                "name": "Chair"}),
     );
     assert!(r["result"].is_object(), "{r}");
@@ -466,21 +466,21 @@ fn library_save_list_and_insert_stay_inside_the_roots() {
     let r = call(
         &mut h,
         "execute",
-        json!({"type": "insert_library_item", "path": "lib/chair.skr", "at": [5, 0, 0]}),
+        json!({"type": "insert_library_item", "path": "lib/chair.tnn", "at": [5, 0, 0]}),
     );
     assert!(r["result"].is_object(), "{r}");
 
-    std::fs::write(outside.join("far.skr"), "").unwrap();
+    std::fs::write(outside.join("far.tnn"), "").unwrap();
     let outside_text = outside.display().to_string();
     let refused = [
         (
             "execute",
             json!({"type": "save_to_library", "kind": "model",
-                           "path": outside.join("a.skr")}),
+                           "path": outside.join("a.tnn")}),
         ),
         (
             "execute",
-            json!({"type": "insert_library_item", "path": outside.join("far.skr")}),
+            json!({"type": "insert_library_item", "path": outside.join("far.tnn")}),
         ),
         ("query", json!({"type": "library", "folder": outside_text})),
         ("query", json!({"type": "library", "folder": "../outside"})),
@@ -496,11 +496,11 @@ fn library_save_list_and_insert_stay_inside_the_roots() {
             "{r}"
         );
     }
-    assert!(!outside.join("a.skr").exists());
+    assert!(!outside.join("a.tnn").exists());
     // A link in the folder to a file elsewhere is not listed.
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(outside.join("far.skr"), root.join("lib/far.skr")).unwrap();
+        std::os::unix::fs::symlink(outside.join("far.tnn"), root.join("lib/far.tnn")).unwrap();
         std::os::unix::fs::symlink(&outside, root.join("door")).unwrap();
         let listed = call(&mut h, "query", json!({"type": "library", "folder": "lib"}));
         assert_eq!(

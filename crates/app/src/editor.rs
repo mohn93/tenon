@@ -1693,7 +1693,7 @@ impl Editor {
         self.run_selection_command(Command::New { discard: true })
     }
 
-    /// Opens a `.skr` file, or a SketchUp file as a new model never saved, dropping unsaved
+    /// Opens a `.tnn` file, or a SketchUp file as a new model never saved, dropping unsaved
     /// changes (the window asks about them first). False if it cannot be opened; the status
     /// then says why. A SketchUp file's status lists what it made.
     pub fn open_file(&mut self, path: &Path) -> bool {
@@ -5321,8 +5321,7 @@ mod tests {
 
     /// A path for a test file, unique to this process.
     fn temp_file(name: &str) -> std::path::PathBuf {
-        let path =
-            std::env::temp_dir().join(format!("sketchup-alt-editor-{}-{name}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("tenon-editor-{}-{name}", std::process::id()));
         let _ = std::fs::remove_file(&path);
         path
     }
@@ -5335,7 +5334,7 @@ mod tests {
         e.key(EditorKey::Escape);
         assert!(!e.save_file(None), "a model never saved needs a path");
         assert!(e.status().contains("give a path"), "{}", e.status());
-        let path = temp_file("square.skr");
+        let path = temp_file("square.tnn");
         assert!(e.save_file(Some(&path)));
         assert!(e.status().contains("Saved"), "{}", e.status());
         assert!(!e.doc().is_modified());
@@ -5346,9 +5345,9 @@ mod tests {
         assert_eq!(stats(&e), (4, 1));
         assert_eq!(e.doc().path(), Some(path.as_path()));
 
-        let missing = temp_file("missing.skr");
+        let missing = temp_file("missing.tnn");
         assert!(!e.open_file(&missing));
-        assert!(e.status().contains("missing.skr"), "{}", e.status());
+        assert!(e.status().contains("missing.tnn"), "{}", e.status());
         assert_eq!(stats(&e), (4, 1), "a failed open leaves the model");
         let _ = std::fs::remove_file(&path);
     }
@@ -5361,7 +5360,7 @@ mod tests {
         e.key(EditorKey::Escape);
         assert!(e.add_material());
         assert!(e.current_material().is_some());
-        let path = temp_file("material.skr");
+        let path = temp_file("material.tnn");
         assert!(e.save_file(Some(&path)));
         // The file holds the material, so only the reset can make the choice go away.
         assert!(e.open_file(&path));
@@ -5447,7 +5446,7 @@ mod tests {
         assert_eq!(formats.len(), EXPORT_FORMATS.len());
         assert!(formats.contains(&("OBJ", "obj")));
         // A failed export changes nothing.
-        assert!(!e.export_file(&temp_file("suggest.skr")));
+        assert!(!e.export_file(&temp_file("suggest.tnn")));
         assert_eq!(e.export_formats()[0], ("STL", "stl"));
         let _ = std::fs::remove_file(&path);
     }
@@ -6176,10 +6175,8 @@ mod tests {
         let mut e = editor();
         e.add_material();
         let id = e.current_material().unwrap();
-        let png = std::env::temp_dir().join(format!(
-            "sketchup-alt-editor-{}-red-blue.png",
-            std::process::id()
-        ));
+        let png =
+            std::env::temp_dir().join(format!("tenon-editor-{}-red-blue.png", std::process::id()));
         std::fs::write(&png, RED_BLUE_PNG).unwrap();
         e.load_texture(id, &png);
         let m = e.doc().scene().material(id).unwrap();
@@ -6858,7 +6855,7 @@ mod tests {
     fn a_recovered_model_opens_untitled_with_unsaved_changes() {
         let mut e = editor();
         ground_square(&mut e);
-        let path = temp_file("recovered.autosave.skr");
+        let path = temp_file("recovered.autosave.tnn");
         e.doc().write_copy(&path).unwrap();
         e.new_model();
         let documents = e.documents();
@@ -6881,7 +6878,7 @@ mod tests {
         assert_eq!(e.documents(), documents + 1);
         assert_eq!(stats(&e).1, 1);
         assert!(
-            e.status().contains("recovered.autosave.skr"),
+            e.status().contains("recovered.autosave.tnn"),
             "{}",
             e.status()
         );

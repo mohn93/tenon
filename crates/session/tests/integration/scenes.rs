@@ -547,7 +547,7 @@ fn scenes_are_saved_and_opened_in_order() {
     add_scene(&mut d, json!({"name": "Zeta"}));
     add_scene(&mut d, json!({"name": "Alpha", "camera": false}));
     add_scene(&mut d, json!({"name": "Mid", "tags": false}));
-    let path = scratch("scenes.skr");
+    let path = scratch("scenes.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -598,12 +598,12 @@ fn scenes_are_saved_and_opened_in_order() {
     // A scene hiding a tag the file lacks is refused, as is a view beyond the limit.
     for (name, f) in [
         (
-            "broken-tag.skr",
+            "broken-tag.tnn",
             Box::new(|doc: &mut Value| doc["model"]["pages"][0]["tags"] = json!([999_999]))
                 as Box<dyn Fn(&mut Value)>,
         ),
         (
-            "far.skr",
+            "far.tnn",
             Box::new(|doc: &mut Value| {
                 doc["model"]["pages"][0]["view"]["eye"] = json!([2e6, 0, 0])
             }),
@@ -625,7 +625,7 @@ fn scenes_are_saved_and_opened_in_order() {
 fn a_model_without_scenes_keeps_its_schema_and_older_files_open_without_scenes() {
     let mut d = doc();
     add_tag(&mut d, "Walls");
-    let path = scratch("no-scenes.skr");
+    let path = scratch("no-scenes.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -763,7 +763,7 @@ fn a_camera_beyond_the_coordinate_limit_is_not_stored() {
         json!({"type": "update_scene", "scene": kept, "camera": true}),
     )
     .unwrap();
-    let path = scratch("far-camera.skr");
+    let path = scratch("far-camera.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -960,7 +960,7 @@ fn scene_positions_are_saved_and_older_files_open() {
     let (a, b) = two_groups(&mut d);
     add_scene(&mut d, json!({"name": "P", "positions": [b]}));
     shift(&mut d, &b, 1.5);
-    let path = scratch("positions.skr");
+    let path = scratch("positions.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -986,7 +986,7 @@ fn scene_positions_are_saved_and_older_files_open() {
     let mut plain = doc();
     two_groups(&mut plain);
     add_scene(&mut plain, json!({}));
-    let old = scratch("no-positions.skr");
+    let old = scratch("no-positions.tnn");
     run(
         &mut plain,
         json!({"type": "save", "path": old.to_str().unwrap()}),
@@ -1041,7 +1041,7 @@ fn set_scene_transition_is_validated_one_undo_step_and_no_op_when_unchanged() {
 fn the_scene_transition_is_saved_and_the_schema_is_20_only_when_it_is_not_the_default() {
     let mut d = doc();
     two_groups(&mut d);
-    let plain = scratch("transition-default.skr");
+    let plain = scratch("transition-default.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": plain.to_str().unwrap()}),
@@ -1058,7 +1058,7 @@ fn the_scene_transition_is_saved_and_the_schema_is_20_only_when_it_is_not_the_de
         json!({"type": "set_scene_transition", "on": false, "seconds": 3.0}),
     )
     .unwrap();
-    let path = scratch("transition.skr");
+    let path = scratch("transition.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),

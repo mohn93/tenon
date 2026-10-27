@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust 2024, earcutr 0.5.0 (new), wgpu 30.0.1, winit 0.30.13, glam 0.34.1, serde 1.0.229.
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md` (milestone M2, second half; sections 2 Tools and inference, 3 Rendering, 4 App shell, 5 acceptance rule).
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md` (milestone M2, second half; sections 2 Tools and inference, 3 Rendering, 4 App shell, 5 acceptance rule).
 
 ## Global Constraints
 
@@ -2547,7 +2547,7 @@ impl ApplicationHandler for App {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("sketchup-alt")
+            .with_title("tenon")
             .with_inner_size(LogicalSize::new(1280.0, 800.0));
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         let state = State::new(window);

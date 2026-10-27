@@ -88,7 +88,7 @@ fn both_are_off_by_default_and_view_settings_not_edits() {
 fn they_are_saved_with_the_camera_at_schema_14_and_only_when_on() {
     let mut d = doc();
     square(&mut d);
-    let path = scratch("flags.skr");
+    let path = scratch("flags.tnn");
     save(&mut d, &path);
     let plain = stored(&path);
     assert_eq!(plain["schema_version"], 5);
@@ -138,7 +138,7 @@ fn a_scene_stores_both_and_going_to_it_restores_them() {
     // A scene with a view flag needs schema 14 even when nothing is hidden, and keeps it.
     run(&mut d, json!({"type": "set_x_ray", "on": false}));
     run(&mut d, json!({"type": "set_hidden_geometry", "on": false}));
-    let path = scratch("scene-flags.skr");
+    let path = scratch("scene-flags.tnn");
     save(&mut d, &path);
     assert_eq!(stored(&path)["schema_version"], 14);
     let mut opened = doc();

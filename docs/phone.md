@@ -5,7 +5,7 @@ local network. The web build and the phone viewer itself do not have this item.
 
 ## How it works
 
-1. The sheet seals a copy of the open model (the bytes a `.skr` save would write; the model is
+1. The sheet seals a copy of the open model (the bytes a `.tnn` save would write; the model is
    not marked saved) with a random key and id, using ChaCha20-Poly1305 (`session::share`). The
    sealed data is the model's name (the document's file name without its extension, or
    "Untitled"; at most 256 bytes of UTF-8) and the model, so the name is encrypted too.
@@ -47,7 +47,7 @@ offers Share the new version, which makes a new link and code and stops the old 
   says "Connect this computer to Wi-Fi to share". A firewall may ask to allow incoming
   connections the first time.
 - The viewer must be built: run `scripts/build-web.sh`. The app looks for the viewer in a
-  `viewer` folder next to the executable, then in `$SKETCHUP_ALT_VIEWER`, then in the source
+  `viewer` folder next to the executable, then in `$TENON_VIEWER`, then in the source
   tree's `web/dist`. Otherwise the sheet says "The phone viewer is not built: run
   scripts/build-web.sh".
 

@@ -728,11 +728,11 @@ pub fn resolve_viewer_dir(
         .find(|d| d.join("index.html").is_file())
 }
 
-/// [`resolve_viewer_dir`] for this process: next to the executable, `$SKETCHUP_ALT_VIEWER`, and
+/// [`resolve_viewer_dir`] for this process: next to the executable, `$TENON_VIEWER`, and
 /// the source tree's `web/dist` (development).
 pub fn viewer_dir() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok();
-    let alt = std::env::var_os("SKETCHUP_ALT_VIEWER").map(PathBuf::from);
+    let alt = std::env::var_os("TENON_VIEWER").map(PathBuf::from);
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/dist");
     resolve_viewer_dir(
         exe.as_deref().and_then(Path::parent),
@@ -752,7 +752,7 @@ pub struct Sharing {
 }
 
 impl Sharing {
-    /// Seals `model` (the bytes of a `.skr` file) and its `name` and serves it from `dir`, advertised at `ip`.
+    /// Seals `model` (the bytes of a `.tnn` file) and its `name` and serves it from `dir`, advertised at `ip`.
     /// `taken_at` is what the model was taken from, for [`Sharing::stale`]. Err: what the sheet
     /// says.
     pub fn begin(

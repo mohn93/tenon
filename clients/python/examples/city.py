@@ -19,7 +19,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from sketchup_alt import Model, Transform, session  # noqa: E402
+from tenon import Model, Transform, session  # noqa: E402
 
 BLOCK = 40.0  # block side, meters
 ROAD = 12.0  # road width
@@ -168,7 +168,7 @@ class City:
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--socket", help="socket of a running app (default: start a headless one)")
-    ap.add_argument("--app", help="app binary to start (default: SKETCHUP_ALT_APP or the repo's target/)")
+    ap.add_argument("--app", help="app binary to start (default: TENON_APP or the repo's target/)")
     ap.add_argument("--out", default=".", help="directory for city.png (default: here)")
     ap.add_argument("--quick", action="store_true", help="a 2 x 2 grid and a small image (for tests)")
     ap.add_argument("--size", type=int, help="blocks along each side (default 5, quick 2)")

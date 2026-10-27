@@ -547,7 +547,7 @@ fn batch_references_name_section_planes() {
 fn files_without_planes_or_section_settings_keep_their_schema() {
     let mut d = doc();
     cube(&mut d);
-    let path = scratch("plain.skr");
+    let path = scratch("plain.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -569,7 +569,7 @@ fn planes_the_active_one_and_the_display_survive_save_and_open() {
         json!({"type": "set_section_display", "planes": false, "fill": false}),
     )
     .unwrap();
-    let path = scratch("sections.skr");
+    let path = scratch("sections.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -605,7 +605,7 @@ fn non_default_display_alone_writes_schema_13_and_defaults_are_not_written() {
         json!({"type": "set_section_display", "cuts": false}),
     )
     .unwrap();
-    let path = scratch("display.skr");
+    let path = scratch("display.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -635,7 +635,7 @@ fn a_schema_12_file_opens_with_no_planes_and_default_display() {
         json!({"type": "add_note", "anchor": [0, 0, 0], "position": [1, 1, 1], "text": "a"}),
     )
     .unwrap();
-    let path = scratch("twelve.skr");
+    let path = scratch("twelve.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -665,13 +665,13 @@ fn a_schema_12_file_opens_with_no_planes_and_default_display() {
 fn a_file_with_a_plane_past_the_limit_or_a_bad_active_plane_does_not_open() {
     let mut d = doc();
     plane(&mut d, [1.0, 1.0, 1.0], [0.0, 0.0, 1.0], true);
-    let path = scratch("bad.skr");
+    let path = scratch("bad.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
     )
     .unwrap();
-    for (name, edit) in [("far.skr", 0), ("ghost.skr", 1)] {
+    for (name, edit) in [("far.tnn", 0), ("ghost.tnn", 1)] {
         let copy = scratch(name);
         std::fs::copy(&path, &copy).unwrap();
         edit_file(&copy, |doc| {
@@ -964,7 +964,7 @@ fn fill_color_is_a_display_setting_saved_only_when_not_dark() {
         ask(&d, json!({"type": "section_display"}))["fill_color"],
         "material"
     );
-    let path = scratch("fill-color.skr");
+    let path = scratch("fill-color.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -1009,7 +1009,7 @@ fn fill_color_is_a_display_setting_saved_only_when_not_dark() {
 fn an_instance_left_whole_writes_schema_22_and_round_trips() {
     let mut d = doc();
     let g = grouped_cube(&mut d);
-    let path = scratch("whole.skr");
+    let path = scratch("whole.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),

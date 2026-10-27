@@ -1,4 +1,4 @@
-//! Library items: saving the selection's component, a material or the model to a `.skr` file
+//! Library items: saving the selection's component, a material or the model to a `.tnn` file
 //! with a `library.json` entry, and inserting an item.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -19,10 +19,10 @@ use crate::fspath::{canonical, same};
 use crate::library::{self, LibraryKind, LibraryRef};
 
 impl Document {
-    /// Writes a library item to the `.skr` file at `path`: a component (the instance `item`,
+    /// Writes a library item to the `.tnn` file at `path`: a component (the instance `item`,
     /// at the origin with its rotation and scale kept), a material (`item`, alone, texture
     /// included) or the whole model. `name` defaults to the component's or material's name,
-    /// or the file's. Refuses a path that is not a `.skr` file, the open model's own file and
+    /// or the file's. Refuses a path that is not a `.tnn` file, the open model's own file and
     /// an existing file unless `overwrite`. Changes nothing in the model.
     pub fn save_to_library(
         &self,
@@ -36,9 +36,9 @@ impl Document {
         let target = Path::new(path);
         super::files::check_nul(target)?;
         let file_name = target.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if !library::is_skr(file_name) {
+        if !library::is_tnn(file_name) {
             return Err(invalid(format!(
-                "{path} is not a library file: it must be named <name>.skr"
+                "{path} is not a library file: it must be named <name>.tnn"
             )));
         }
         if let Some(name) = name {

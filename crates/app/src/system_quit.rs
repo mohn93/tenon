@@ -59,7 +59,7 @@ pub fn install(wake: impl Fn() + 'static) {
         );
         let replies = ffi::class_addMethod(
             class,
-            sel!(sketchupAltReplyToTerminate:),
+            sel!(tenonReplyToTerminate:),
             std::mem::transmute::<extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject), Imp>(
                 send_reply,
             ),
@@ -107,7 +107,7 @@ pub fn reply(terminate: bool) {
     unsafe {
         let _: () = msg_send![
             &*delegate,
-            performSelector: sel!(sketchupAltReplyToTerminate:),
+            performSelector: sel!(tenonReplyToTerminate:),
             withObject: answer,
             afterDelay: 0.0f64,
             inModes: &*modes
@@ -115,7 +115,7 @@ pub fn reply(terminate: bool) {
     }
 }
 
-/// `sketchupAltReplyToTerminate:`: sends the answer `reply` deferred; `answer` is nil for no.
+/// `tenonReplyToTerminate:`: sends the answer `reply` deferred; `answer` is nil for no.
 extern "C-unwind" fn send_reply(_: &AnyObject, _: Sel, answer: *mut AnyObject) {
     if let Some(mtm) = MainThreadMarker::new() {
         NSApplication::sharedApplication(mtm).replyToApplicationShouldTerminate(!answer.is_null());

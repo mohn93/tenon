@@ -118,7 +118,7 @@ pub struct Activity {
     pub at: Instant,
     pub connection: u64,
     /// `connected`, `disconnected`, or the request: method, command or query type, and the
-    /// path of a file command (`execute save /a/house.skr`), at most 160 characters.
+    /// path of a file command (`execute save /a/house.tnn`), at most 160 characters.
     pub request: String,
     /// The error message when the reply was an error.
     pub error: Option<String>,

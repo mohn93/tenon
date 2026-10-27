@@ -285,7 +285,7 @@ impl State {
         self.open_sheet(Sheet::SaveToLibrary { save, suggested });
     }
 
-    /// The save sheet's Save: writes `<folder>/<name>.skr`, or asks before replacing a file.
+    /// The save sheet's Save: writes `<folder>/<name>.tnn`, or asks before replacing a file.
     pub(super) fn library_save_named(&mut self, save: LibrarySave, name: &str) {
         let Some(folder) = self.library_folder().map(Path::to_path_buf) else {
             return;

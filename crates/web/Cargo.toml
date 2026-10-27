@@ -2,7 +2,7 @@
 name = "web"
 version.workspace = true
 edition.workspace = true
-description = "sketchup-alt in a browser canvas"
+description = "Tenon in a browser canvas"
 
 [lib]
 # cdylib is what wasm-bindgen turns into the page's module; rlib lets the native gate test the

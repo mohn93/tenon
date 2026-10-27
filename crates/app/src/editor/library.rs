@@ -117,7 +117,7 @@ mod tests {
 
     fn folder(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "sketchup-alt-editor-library-{name}-{}",
+            "tenon-editor-library-{name}-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
@@ -170,7 +170,7 @@ mod tests {
     #[test]
     fn a_placed_item_follows_the_cursor_and_a_click_inserts_it_as_one_step() {
         let dir = folder("place");
-        let path = dir.join("tile.skr");
+        let path = dir.join("tile.tnn");
         let mut e = with_component();
         save_tile(&mut e, &path);
         e.select_tool(ToolKind::Rectangle);
@@ -220,7 +220,7 @@ mod tests {
     #[test]
     fn inside_a_turned_scaled_group_the_preview_is_where_and_as_large_as_the_insert() {
         let dir = folder("turned");
-        let path = dir.join("tile.skr");
+        let path = dir.join("tile.tnn");
         let mut e = with_component();
         save_tile(&mut e, &path);
         e.execute(Command::Select {
@@ -284,7 +284,7 @@ mod tests {
     #[test]
     fn escape_cancels_a_placed_item() {
         let dir = folder("escape");
-        let path = dir.join("tile.skr");
+        let path = dir.join("tile.tnn");
         let mut e = with_component();
         save_tile(&mut e, &path);
         let before = definitions(&e);
@@ -299,7 +299,7 @@ mod tests {
     #[test]
     fn a_material_item_inserts_and_becomes_the_paint_material() {
         let dir = folder("material");
-        let path = dir.join("red.skr");
+        let path = dir.join("red.tnn");
         let mut e = Editor::new(DVec2::new(800.0, 600.0), 1.0);
         assert!(e.add_material());
         let source = e.current_material().unwrap();
@@ -332,12 +332,12 @@ mod tests {
     fn a_refused_insert_or_save_says_why_in_the_status() {
         let dir = folder("refused");
         let mut e = with_component();
-        let missing = dir.join("none.skr");
+        let missing = dir.join("none.tnn");
         assert!(e.place_library_item(&missing).is_err());
         assert!(e.status_parts().message.is_some(), "the status says why");
         assert!(!e.pasting());
         assert!(e.insert_library_item(&missing).is_err());
-        let path = dir.join("tile.skr");
+        let path = dir.join("tile.tnn");
         save_tile(&mut e, &path);
         assert!(e.status_parts().message.unwrap().contains("Saved Tile"));
         // An existing file is replaced only with overwrite.

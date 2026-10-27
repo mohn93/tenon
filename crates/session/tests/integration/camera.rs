@@ -460,7 +460,7 @@ fn the_view_and_projection_are_saved_with_the_model() {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("session-camera-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("top.skr");
+    let path = dir.join("top.tnn");
     let mut d = doc();
     block(&mut d);
     run(&mut d, json!({"type": "standard_view", "view": "top"})).unwrap();

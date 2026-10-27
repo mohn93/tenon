@@ -389,7 +389,7 @@ fn materials_and_paint_are_saved_and_older_files_still_open() {
         json!({"type": "paint", "ids": ["f25"], "material": red, "side": "both"}),
     )
     .unwrap();
-    let path = scratch("painted.skr");
+    let path = scratch("painted.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -428,7 +428,7 @@ fn materials_and_paint_are_saved_and_older_files_still_open() {
         f.remove("front");
         f.remove("back");
     }
-    let old_path = scratch("v4.skr");
+    let old_path = scratch("v4.tnn");
     let mut zip = zip::ZipWriter::new(std::fs::File::create(&old_path).unwrap());
     zip.start_file("document.json", zip::write::SimpleFileOptions::default())
         .unwrap();
@@ -446,7 +446,7 @@ fn materials_and_paint_are_saved_and_older_files_still_open() {
     // A face painted with a material the file lacks does not open.
     let mut broken = document;
     broken["model"]["materials"] = json!([]);
-    let broken_path = scratch("broken.skr");
+    let broken_path = scratch("broken.tnn");
     let mut zip = zip::ZipWriter::new(std::fs::File::create(&broken_path).unwrap());
     zip.start_file("document.json", zip::write::SimpleFileOptions::default())
         .unwrap();
@@ -536,7 +536,7 @@ fn opacity_is_saved_as_version_6_and_opaque_models_stay_version_5() {
         json!({"type": "paint", "ids": ["f25"], "material": glass}),
     )
     .unwrap();
-    let path = scratch("glass.skr");
+    let path = scratch("glass.tnn");
     run(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),

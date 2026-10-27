@@ -1,6 +1,6 @@
 * text=auto eol=lf
 *.skp binary
-*.skr binary
+*.tnn binary
 *.png binary
 *.jpg binary
 *.jpeg binary

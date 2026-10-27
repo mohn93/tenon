@@ -1,4 +1,4 @@
-//! Window preferences kept between sessions in `~/.sketchup-alt/prefs.json`. They are window
+//! Window preferences kept between sessions in `~/.tenon/prefs.json`. They are window
 //! chrome: never part of a model, never read or written by the API or in headless mode.
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -122,7 +122,8 @@ pub fn path_in(home: &Path) -> PathBuf {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrefsFile {
     pub path: PathBuf,
-    pub legacy: Option<PathBuf>,
+    /// Earlier locations, newest first: the first that exists is read while `path` does not.
+    pub legacy: Vec<PathBuf>,
 }
 
 /// The prefs of `file`: those at `file.path`, or, when nothing is there yet, those at the
@@ -145,10 +146,11 @@ fn source_of(file: &PrefsFile) -> &Path {
         std::fs::symlink_metadata(&file.path),
         Err(e) if e.kind() == io::ErrorKind::NotFound
     );
-    match &file.legacy {
-        Some(legacy) if missing => legacy,
-        _ => &file.path,
+    if !missing {
+        return &file.path;
     }
+    let exists = |p: &&PathBuf| std::fs::symlink_metadata(p).is_ok();
+    file.legacy.iter().find(exists).unwrap_or(&file.path)
 }
 
 /// The text of the prefs file `file` names (see `load_file`), for a platform to hand to
@@ -338,8 +340,7 @@ mod tests {
 
     /// A fresh folder standing in for HOME.
     fn home(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("sketchup-alt-prefs-{}-{name}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tenon-prefs-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -347,17 +348,42 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn the_first_legacy_file_that_exists_is_read() {
+        let home = home("legacy-list");
+        let newest = home.join("newest/prefs.json");
+        let older = home.join("older/prefs.json");
+        let kept = Prefs {
+            recent: vec![PathBuf::from("/a/older.tnn")],
+            ..Prefs::default()
+        };
+        save(&older, &kept).unwrap();
+        let file = PrefsFile {
+            path: home.join("new/prefs.json"),
+            legacy: vec![newest.clone(), older],
+        };
+        assert_eq!(load_file(&file), kept, "a missing first one is skipped");
+        let first = Prefs {
+            recent: vec![PathBuf::from("/a/newest.tnn")],
+            ..Prefs::default()
+        };
+        save(&newest, &first).unwrap();
+        assert_eq!(load_file(&file), first);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn old_prefs_are_read_once() {
         let home = home("legacy");
         let old = path_in(&home);
-        let new = home.join(".config/sketchup-alt/prefs.json");
+        let new = home.join(".config/tenon/prefs.json");
         std::fs::create_dir_all(home.join(".config")).unwrap();
         let file = PrefsFile {
             path: new.clone(),
-            legacy: Some(old.clone()),
+            legacy: vec![old.clone()],
         };
         let kept = Prefs {
-            recent: vec![PathBuf::from("/a/b.skr")],
+            recent: vec![PathBuf::from("/a/b.tnn")],
             ..Prefs::default()
         };
         save(&old, &kept).unwrap();
@@ -367,7 +393,7 @@ mod tests {
         assert_eq!(loaded, kept);
         assert!(!new.exists(), "reading does not write");
         // The next save goes to the new place (made, with its missing parents, private).
-        loaded.recent.push(PathBuf::from("/c.skr"));
+        loaded.recent.push(PathBuf::from("/c.tnn"));
         save(&new, &loaded).unwrap();
         assert_eq!(
             std::fs::read(&old).unwrap(),
@@ -386,7 +412,7 @@ mod tests {
         std::fs::remove_file(&new).unwrap();
         let only_new = PrefsFile {
             path: new,
-            legacy: None,
+            legacy: Vec::new(),
         };
         assert_eq!(load_file(&only_new), Prefs::default());
         let _ = std::fs::remove_dir_all(home);
@@ -622,19 +648,19 @@ mod tests {
     #[test]
     fn recent_files_round_trip_newest_first() {
         let mut recent = Vec::new();
-        for p in ["/a/1.skr", "/a/2.skr", "/a/1.skr"] {
+        for p in ["/a/1.tnn", "/a/2.tnn", "/a/1.tnn"] {
             remember_recent(&mut recent, Path::new(p));
         }
         // `absolute` also gives a rooted path its drive on Windows.
         let abs = |p: &str| std::path::absolute(p).unwrap();
-        assert_eq!(recent, [abs("/a/1.skr"), abs("/a/2.skr")]);
+        assert_eq!(recent, [abs("/a/1.tnn"), abs("/a/2.tnn")]);
         let mut recent = Vec::new();
         for i in 1..=12 {
-            remember_recent(&mut recent, Path::new(&format!("/a/{i}.skr")));
+            remember_recent(&mut recent, Path::new(&format!("/a/{i}.tnn")));
         }
         let want: Vec<PathBuf> = (3..=12)
             .rev()
-            .map(|i| abs(&format!("/a/{i}.skr")))
+            .map(|i| abs(&format!("/a/{i}.tnn")))
             .collect();
         assert_eq!(recent, want, "the last ten, newest first");
         let home = home("recent");
@@ -656,18 +682,18 @@ mod tests {
         // A rooted path with no drive is not absolute on Windows.
         let drive = if cfg!(windows) { "C:" } else { "" };
         let mut list = vec![
-            "rel.skr".to_string(),
-            format!("{drive}/x/a.skr"),
-            format!("{drive}/x/a.skr"),
+            "rel.tnn".to_string(),
+            format!("{drive}/x/a.tnn"),
+            format!("{drive}/x/a.tnn"),
         ];
-        list.extend((0..12).map(|i| format!("{drive}/y/{i}.skr")));
+        list.extend((0..12).map(|i| format!("{drive}/y/{i}.tnn")));
         std::fs::write(
             &path,
             serde_json::to_vec(&json!({ "recent": list })).unwrap(),
         )
         .unwrap();
-        let mut want = vec![PathBuf::from(format!("{drive}/x/a.skr"))];
-        want.extend((0..9).map(|i| PathBuf::from(format!("{drive}/y/{i}.skr"))));
+        let mut want = vec![PathBuf::from(format!("{drive}/x/a.tnn"))];
+        want.extend((0..9).map(|i| PathBuf::from(format!("{drive}/y/{i}.tnn"))));
         assert_eq!(load(&path).recent, want);
         std::fs::remove_dir_all(home).unwrap();
     }
@@ -702,7 +728,7 @@ mod tests {
         std::fs::write(&path, b"{\"theme\": \"dark\"}").unwrap();
         assert!(load(&path).recent.is_empty());
         // A wrong type is an invalid file, as for any key.
-        std::fs::write(&path, b"{\"theme\": \"dark\", \"recent\": \"/a.skr\"}").unwrap();
+        std::fs::write(&path, b"{\"theme\": \"dark\", \"recent\": \"/a.tnn\"}").unwrap();
         assert_eq!(load(&path), Prefs::default());
         std::fs::remove_dir_all(home).unwrap();
     }
@@ -786,7 +812,7 @@ mod tests {
     fn m11d_prefs_load_with_defaults_for_the_new_keys() {
         let home = home("m11d");
         // A rooted path with no drive is not absolute on Windows.
-        let house = format!("{}/a/house.skr", if cfg!(windows) { "C:" } else { "" });
+        let house = format!("{}/a/house.tnn", if cfg!(windows) { "C:" } else { "" });
         let path = path_in(&home);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
@@ -921,19 +947,19 @@ mod tests {
     #[test]
     fn a_relative_path_is_remembered_absolute() {
         let mut recent = Vec::new();
-        remember_recent(&mut recent, Path::new("x.skr"));
-        assert_eq!(recent, [std::path::absolute("x.skr").unwrap()]);
+        remember_recent(&mut recent, Path::new("x.tnn"));
+        assert_eq!(recent, [std::path::absolute("x.tnn").unwrap()]);
         assert!(recent[0].is_absolute());
     }
 
     #[test]
     fn the_card_lists_only_files_that_exist() {
         let home = home("recent-existing");
-        let (a, b) = (home.join("a.skr"), home.join("b.skr"));
+        let (a, b) = (home.join("a.tnn"), home.join("b.tnn"));
         std::fs::write(&a, b"").unwrap();
         std::fs::write(&b, b"").unwrap();
         // A folder is not a file either.
-        let list = vec![home.join("gone.skr"), b.clone(), home.clone(), a.clone()];
+        let list = vec![home.join("gone.tnn"), b.clone(), home.clone(), a.clone()];
         assert_eq!(existing(&list, 5), [b.clone(), a]);
         assert_eq!(existing(&list, 1), [b]);
         std::fs::remove_dir_all(home).unwrap();

@@ -5,20 +5,20 @@ use super::*;
 use crate::navigation::TrackpadScroll;
 use crate::ui::theme::UiScale;
 
-/// A crashed autosave of house.skr, and an agent's discard of an untitled model whose copy
+/// A crashed autosave of house.tnn, and an agent's discard of an untitled model whose copy
 /// cannot be used.
 fn rows() -> Vec<RecoverRow> {
     vec![
         RecoverRow {
-            model: PathBuf::from("/r/house-1-2.autosave.skr"),
+            model: PathBuf::from("/r/house-1-2.autosave.tnn"),
             name: "house".into(),
-            original: Some(PathBuf::from("/m/house.skr")),
+            original: Some(PathBuf::from("/m/house.tnn")),
             saved: "5 min ago".into(),
             discarded: false,
             error: None,
         },
         RecoverRow {
-            model: PathBuf::from("/r/untitled-3-4.skr"),
+            model: PathBuf::from("/r/untitled-3-4.tnn"),
             name: "Untitled".into(),
             original: None,
             saved: "2 h ago".into(),
@@ -42,7 +42,7 @@ fn the_recover_window_lists_each_model_with_open_and_discard() {
     let texts = drawn_texts(&h);
     for text in [
         "house",
-        "/m/house.skr",
+        "/m/house.tnn",
         "Autosaved 5 min ago",
         "Untitled",
         "Discarded by an agent 2 h ago",
@@ -56,7 +56,7 @@ fn the_recover_window_lists_each_model_with_open_and_discard() {
     assert_eq!(
         click(&mut h, "Open"),
         [UiAction::OpenRecovered(PathBuf::from(
-            "/r/house-1-2.autosave.skr"
+            "/r/house-1-2.autosave.tnn"
         ))]
     );
     h.get_all_by_label("Discard").nth(1).unwrap().click();
@@ -64,7 +64,7 @@ fn the_recover_window_lists_each_model_with_open_and_discard() {
     assert_eq!(
         h.state_mut().take(),
         [UiAction::DiscardRecovered(Some(PathBuf::from(
-            "/r/untitled-3-4.skr"
+            "/r/untitled-3-4.tnn"
         )))]
     );
     assert_eq!(
@@ -121,7 +121,7 @@ fn discarding_asks_first() {
         sheet: Some(Sheet::DiscardRecovered {
             models: names
                 .iter()
-                .map(|n| PathBuf::from(format!("/r/{n}.skr")))
+                .map(|n| PathBuf::from(format!("/r/{n}.tnn")))
                 .collect(),
             names: names.iter().map(|n| n.to_string()).collect(),
         }),

@@ -167,7 +167,7 @@ fn mcp_headless_session() {
     let mut mcp = Mcp::start(&[]);
     let [init, initialized] = handshake();
     let reply = mcp.ask(&init);
-    assert_eq!(reply["result"]["serverInfo"]["name"], "sketchup-alt");
+    assert_eq!(reply["result"]["serverInfo"]["name"], "tenon");
     mcp.send(&initialized);
     let tools = mcp.ask(&req(2, "tools/list", json!({})));
     assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 7);
@@ -185,7 +185,7 @@ fn mcp_headless_session() {
 #[test]
 fn mcp_opens_a_file_given() {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-    let path = dir.join(format!("mcp-open-{}.skr", std::process::id()));
+    let path = dir.join(format!("mcp-open-{}.tnn", std::process::id()));
     let _ = std::fs::remove_file(&path);
     let path_text = path.to_str().unwrap();
 

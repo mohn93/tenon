@@ -14,20 +14,20 @@ JSON object per line (UTF-8, `\n`-terminated).
 | `cargo run -p app -- --headless --socket PATH` | No window; socket at `PATH` |
 | `cargo run -p app -- --api-root DIR [--api-root DIR2]` | Any mode: the API reads and writes files only inside these folders (see Access and safety) |
 
-Any of these can end with a `.skr` file to open at start, e.g.
-`cargo run -p app -- --headless --stdio house.skr`. In headless mode a file that cannot be opened
+Any of these can end with a `.tnn` file to open at start, e.g.
+`cargo run -p app -- --headless --stdio house.tnn`. In headless mode a file that cannot be opened
 stops the app with exit code 1 and a message on stderr.
 
-The default socket is `sketchup-alt-<pid>.sock`. On macOS it is in the temp directory, or in
-`~/.sketchup-alt/` (created with mode 0700) when the temp directory path is too long for a Unix
+The default socket is `tenon-<pid>.sock`. On macOS it is in the temp directory, or in
+`~/.tenon/` (created with mode 0700) when the temp directory path is too long for a Unix
 socket or is the shared `/tmp`. On Linux it is in `$XDG_RUNTIME_DIR` when that is an absolute path
 to a folder you own that others cannot write to, else in `$TMPDIR` when that is set to a short
-folder other than `/tmp`, else in `~/.sketchup-alt/`. The socket is readable only by the current user. Try it by hand
+folder other than `/tmp`, else in `~/.tenon/`. The socket is readable only by the current user. Try it by hand
 with `nc -U PATH`. The window removes the socket file on a normal quit. The default name includes the process id, so a socket left behind
 by a killed app is never reused; agents that start the app should pass `--socket PATH` (a fixed
 path is replaced on the next start).
 
-On Windows the API listens on a named pipe instead: `\\.\pipe\sketchup-alt-<pid>` by default.
+On Windows the API listens on a named pipe instead: `\\.\pipe\tenon-<pid>` by default.
 `--socket NAME` and `--live NAME` take a pipe name; a bare name such as `main` becomes
 `\\.\pipe\main`. Only the current user can open the pipe (its access list names that user
 alone), clients on other machines are refused, and a name another program is already listening
@@ -173,9 +173,9 @@ Modeling commands, each one undo step:
 | `{"type": "move", "ids": ["f8"], "offset": [0, 0, 1]}` | Moves vertices, edges and faces (their vertices), instances, guides, dimensions and notes by `offset` (an instance must keep its bounding box, or its origin when it holds nothing, a guide its point and an annotation its points, within the coordinate limit; so must copies). An annotation's fixed points, offset and text position move; its vertex anchors move with their vertices (only when those are moved too), and a dimension whose two ends the move brings together is removed (undo brings it back). Faces that share only some moved vertices stretch and may tilt but must stay flat: a move that would bend one is `invalid_input` naming that face. A move that would collapse an edge, turn a face over, make a face cross itself, push a hole out of its face or land a vertex on another is `invalid_input` naming the ids. Moved geometry does not merge with what it ends up touching. Unknown ids are `not_found`. |
 | `{"type": "copy", "ids": ["f8"], "offset": [3, 0, 0], "count": 4}` | Copies edges, faces, instances, guides, dimensions and notes `count` times (default 1, at most 1,000); copy k is shifted by `k * offset`. Copies are drawn like new edges, so they merge with what they touch: a copy has the faces its original had, made even where their sides already exist as bare edges, plus faces it closes together with existing edges. A copy drawn on a face splits it and every piece stays a face (also under an opening of the copy); elsewhere an opening in a copied face stays open and a loop the original had no face in gets none. Copied faces keep the orientation of their originals. A copied component instance places the same definition; a copied group gets a definition of its own. A copied dimension or note anchored to a vertex copied with it anchors to that vertex's copy; its other vertex anchors become fixed points where the copy puts them, and a radial dimension whose circle is not copied keeps it as a fixed circle. Vertex ids are `invalid_input`. |
 | `{"type": "copy_along_path", "ids": ["i4"], "path": ["e2", "e3"], "count": 5, "align": true}` | Copies the same kinds as `copy`, under its rules (merging, annotations, group definitions), at positions along `path`, a chain of edges as for `follow_me` (connected, unbranched, open or closed; else `invalid_input`), as one undo step; `placed` lists the instances made. Exactly one of `count` (at least 1) or `spacing` (above 0). Positions are arc lengths from the path's start, which is the end of an open path nearest the centre of the box around `ids` (a closed path: the path vertex nearest it, walked in the chain's order). `count` N on an open path: N positions evenly from the start to the end inclusive (1 is the start alone); on a closed path N evenly around (k * length / N). `spacing` s: 0, s, 2s, ... up to the length, the end of an open path included (within 1e-9); a closed path stops short of coming back to its start. Copy k is the originals moved by the path point's offset from the start and, with `align` (default true), turned about that point by the smallest rotation taking the path direction at the start to the direction there (at a vertex, the edge leaving it; at the end of an open path, the edge arriving). A position at the start makes no copy; when none is left (`count` 1, a `spacing` beyond the length) nothing changes: an empty outcome and no undo step. At most 10,000 copies, else `invalid_input`; so are both or neither of `count` and `spacing`, empty `ids` or `path`, a non-edge in `path`, and copies beyond the coordinate limit. Unknown ids are `not_found`. A batch can refer to both `ids` and `path`. |
-| `{"type": "paste", "clip": "sketchup-alt clip 1\n...", "at": [3, 0, 0]}` | Pastes clip text (what Copy puts on the clipboard; see Clipboard) into the open context, as one undo step labelled `paste`, and selects what it pasted. With `at` (a point of the open context), the clip's base point lands there, moved only (not turned); without it (Paste In Place), the clip lands where it was copied from in world coordinates, wherever it is pasted. Edges and faces merge with what they touch, as `copy`'s do, and painted faces keep their texture positions. Materials and tags are matched by name: an existing one of the same name is used, a missing one is added (textures included). A component instance copied from this same document (since it was created, opened or imported as a new model) places its definition when that still exists; otherwise it places the definition an earlier paste of a clip from the same source made for it, while that still exists (the document remembers these until a new model is created or opened, and does not save them; an undone paste's definitions are gone, so pasting again makes new ones); otherwise, and for every group, a new definition is made (nested ones included). Text that is not a clip, is damaged, holds a model a `.skr` file could not hold, decodes to over 64 MiB, nests instances more than 32 deep, places over 100,000 instances or shows over 20,000,000 faces (a nested instance or face counted once for every placement of what holds it), or lands beyond the coordinate limit is `invalid_input` and changes nothing. |
-| `{"type": "save_to_library", "path": "/abs/lib/chair.skr", "kind": "component", "item": "i4", "name": "Chair", "overwrite": false}` | Saves a library item (see Library items). `kind` `component`: `item` is a component instance of the open context (a group is `invalid_input`, "Make it a component first"); `material`: `item` is a material id; `model`: no `item`, the whole model. `name` defaults to the component's or material's name, or the file's stem. The path must end in `.skr`, must not be the open model's own file, and an existing file is replaced only with `overwrite` (else `invalid_input`). Not an undo step; the model and its revision do not change. `item` takes a batch reference. Not allowed in an atomic batch. |
-| `{"type": "insert_library_item", "path": "/abs/lib/chair.skr", "at": [3, 0, 0]}` | Inserts a library item into the open context as one undo step labelled `insert`. A component or model item: the file is read with every check `open` makes and the clip limits `paste` has, a component of the item that the model already has (same name but for a trailing `#<number>`, and the same geometry, materials, tags and nested definitions; none with guides, dimensions, notes or section planes) is placed as it is, any other whose name the model uses is added as "<name>#2", "<name>#3"... (groups are always copied), so inserting twice adds instances, not definitions; its materials and tags are matched by name as `paste` does, its world orientation and size are kept (inside a turned or scaled group it is not turned or scaled again) and the minimum corner of its world bounding box lands at the world point of `at` (a point of the open context; the bottom centre of the box instead when the item's origin lies farther from the box than a quarter of its diagonal, as for a part modelled away from its own origin; `place_library_item`'s preview is held the same way) or, without it, of the open context's origin, and what it made becomes the selection. A material item: added to the model; a material of the same name and the same color, opacity, emission, metalness, roughness and texture is reused, otherwise it is added as "<name> 2", "<name> 3"... (the lowest free name); the outcome's `material` is its id. A name too long for "<name> N" is shortened to fit the 256-character limit before the number. Reusing an identical material changes nothing, so it makes no undo step and no change is reported, so it cannot be referenced by `$N` in a batch; the outcome's `material` names it. Inserting a model item inserts its geometry as `paste` does: its scenes and camera are not brought in. Component and model items must pass the clip limits (nesting depth, expanded instances, placed faces) before anything walks them: every read of an item (insert, `place_library_item`, the window's thumbnails and Open from the Library tab) is refused with `invalid_input` otherwise, though `open` of the same file is unchanged. Any `.skr` file is a model item. |
+| `{"type": "paste", "clip": "tenon clip 1\n...", "at": [3, 0, 0]}` | Pastes clip text (what Copy puts on the clipboard; see Clipboard) into the open context, as one undo step labelled `paste`, and selects what it pasted. With `at` (a point of the open context), the clip's base point lands there, moved only (not turned); without it (Paste In Place), the clip lands where it was copied from in world coordinates, wherever it is pasted. Edges and faces merge with what they touch, as `copy`'s do, and painted faces keep their texture positions. Materials and tags are matched by name: an existing one of the same name is used, a missing one is added (textures included). A component instance copied from this same document (since it was created, opened or imported as a new model) places its definition when that still exists; otherwise it places the definition an earlier paste of a clip from the same source made for it, while that still exists (the document remembers these until a new model is created or opened, and does not save them; an undone paste's definitions are gone, so pasting again makes new ones); otherwise, and for every group, a new definition is made (nested ones included). Text that is not a clip, is damaged, holds a model a `.tnn` file could not hold, decodes to over 64 MiB, nests instances more than 32 deep, places over 100,000 instances or shows over 20,000,000 faces (a nested instance or face counted once for every placement of what holds it), or lands beyond the coordinate limit is `invalid_input` and changes nothing. |
+| `{"type": "save_to_library", "path": "/abs/lib/chair.tnn", "kind": "component", "item": "i4", "name": "Chair", "overwrite": false}` | Saves a library item (see Library items). `kind` `component`: `item` is a component instance of the open context (a group is `invalid_input`, "Make it a component first"); `material`: `item` is a material id; `model`: no `item`, the whole model. `name` defaults to the component's or material's name, or the file's stem. The path must end in `.tnn`, must not be the open model's own file, and an existing file is replaced only with `overwrite` (else `invalid_input`). Not an undo step; the model and its revision do not change. `item` takes a batch reference. Not allowed in an atomic batch. |
+| `{"type": "insert_library_item", "path": "/abs/lib/chair.tnn", "at": [3, 0, 0]}` | Inserts a library item into the open context as one undo step labelled `insert`. A component or model item: the file is read with every check `open` makes and the clip limits `paste` has, a component of the item that the model already has (same name but for a trailing `#<number>`, and the same geometry, materials, tags and nested definitions; none with guides, dimensions, notes or section planes) is placed as it is, any other whose name the model uses is added as "<name>#2", "<name>#3"... (groups are always copied), so inserting twice adds instances, not definitions; its materials and tags are matched by name as `paste` does, its world orientation and size are kept (inside a turned or scaled group it is not turned or scaled again) and the minimum corner of its world bounding box lands at the world point of `at` (a point of the open context; the bottom centre of the box instead when the item's origin lies farther from the box than a quarter of its diagonal, as for a part modelled away from its own origin; `place_library_item`'s preview is held the same way) or, without it, of the open context's origin, and what it made becomes the selection. A material item: added to the model; a material of the same name and the same color, opacity, emission, metalness, roughness and texture is reused, otherwise it is added as "<name> 2", "<name> 3"... (the lowest free name); the outcome's `material` is its id. A name too long for "<name> N" is shortened to fit the 256-character limit before the number. Reusing an identical material changes nothing, so it makes no undo step and no change is reported, so it cannot be referenced by `$N` in a batch; the outcome's `material` names it. Inserting a model item inserts its geometry as `paste` does: its scenes and camera are not brought in. Component and model items must pass the clip limits (nesting depth, expanded instances, placed faces) before anything walks them: every read of an item (insert, `place_library_item`, the window's thumbnails and Open from the Library tab) is refused with `invalid_input` otherwise, though `open` of the same file is unchanged. Any `.tnn` file is a model item. |
 | `{"type": "rotate", "ids": ["f8"], "center": [0, 0, 0], "angle": 90}` | Turns vertices, edges and faces (their vertices), instances, guides and annotations (as `move` moves them) by `angle` degrees about the line through `center` along `axis` (default `[0,0,1]`), counter-clockwise looking down the axis (right-hand rule), under the rules of `move`: faces that share only some turned vertices must stay flat, and so on; geometry turned whole keeps its shape. Multiples of 90 degrees are exact. An instance turns with its transform. The `axis` is a direction of any length; a zero or non-finite one and whole turns (0, 360, ..., or within 1e-9 degrees of one) without `copies` change nothing (an empty outcome, no undo step; unknown ids are still `not_found`). With `"copies": n` (1 to 1,000) the originals stay and n copies are made under the rules of `copy`, copy k turned by `k * angle` (a radial array; vertex ids are then `invalid_input`, and so is a whole-turn angle (the copies would coincide), and so is a count where a copy would complete a whole turn and land on the original, e.g. angle 90 with 4 copies). Vertices on the axis do not move, and a rotation that moves nothing changes nothing. |
 | `{"type": "scale", "ids": ["f8"], "origin": [0, 0, 0], "factors": [2, 1, 1]}` | Scales vertices, edges and faces (their vertices), instances, guides and annotations (as `move` moves them; a fixed circle keeps its area, and a radial dimension scaled with a circle that the scale makes an ellipse keeps that circle, scaled) by `factors` along model X, Y and Z about `origin`, under the rules of `move`: faces that share only some scaled vertices must stay flat, and an edge scaled shorter than the merge tolerance is `invalid_input`. Each factor must be finite and between 1e-4 and 1e4 in size, else `invalid_input`; all three exactly 1 changes nothing (an empty outcome, no undo step). A negative factor mirrors: faces scaled whole keep facing out (their loops are reversed), also a face lying on the mirror plane, which is turned over though none of its vertices move (a ground rectangle scaled `[1, 1, -1]` about z = 0 then faces down); a face that would fold over is `invalid_input`. Scaling that would bring two vertices, or a face's sides or holes, within the merge tolerance of each other is `invalid_input`, and so is squeezing an instance so flat that its transform's determinant falls below 1e-12 (naming it). An instance's transform is scaled (also non-uniformly, and along model axes when it is turned), and a guide line turns with the scaled direction. No copies. Empty `ids` is `invalid_input`; unknown ids are `not_found`. |
 | `{"type": "offset", "ids": ["f8"], "distance": 0.1}` | Draws a copy of a face's loops, or of a chain of edges, moved `distance` meters sideways in its plane, as one undo step; what it draws merges with what it touches like any drawn edge (an inward offset splits the face into the inner face and a ring around it). `ids` is one face, or edges forming one unbranched chain in one plane (open, or closed into a loop). For a face, a positive `distance` offsets inward (the outer loop shrinks, the holes grow) and a negative one outward (only the outer loop: the holes stay as they are); `toward` is not allowed. For edges, `toward` (a point in the edges' plane, not on them or straight ahead of an end; for a straight chain it picks the plane too) is required and picks the side, and `distance` must be positive; the ends of an open chain move square to their own edge (an arc's ends move along its radii, so its offset is an arc around the same center). An edge offset may touch or cross the original edges (a chain that bends back on itself), which are then split as a hand drawing splits them. Corners are mitred; a corner on the outside of a turn whose miter would reach farther than 4 times the distance is bevelled (two corners). A loop or chain whose edges are all on one curve gives a new curve of the same kind (a circle gives a circle of as many segments, an arc an arc, a polygon a polygon). `distance` must be finite and at least 0.01 mm in size, else `invalid_input`; so is an offset the shape is too small for ("the offset distance is too large for this shape": a side would reverse or vanish, the offset would cross itself, or, for a face, a new loop would leave the face or meet another loop; outward, the new outer loop must enclose the face), edges that fall apart or branch, edges not in one plane, and anything but one face or edges. Unknown ids are `not_found`. |
@@ -255,23 +255,23 @@ shape too.
 
 ### Clipboard
 
-Copy turns a selection into clip text: the line `sketchup-alt clip 1`, then base64 (standard
+Copy turns a selection into clip text: the line `tenon clip 1`, then base64 (standard
 alphabet; line breaks are ignored) of a zip archive holding `model.json`, the selected edges,
 faces, instances, guides, dimensions and notes with every definition, material and tag they use, written as a
-`.skr` file writes its document (textures as entries beside it), and `clip.json`
+`.tnn` file writes its document (textures as entries beside it), and `clip.json`
 `{"base": [x, y, z], "source": "<token>"}`. The clip is stored in world coordinates (what was
 copied inside an open group is placed by the group's transform); `base` is the minimum corner of
 its bounding box, and `source` names the document it came from. `paste` reads it with every
-check opening a `.skr` file makes. The window's Edit menu and the editor commands
+check opening a `.tnn` file makes. The window's Edit menu and the editor commands
 `copy_selection`, `cut_selection`, `paste_clipboard` and `paste_in_place` (see Editor) put clip
 text on the app's clipboard and paste from it; in the window that is the system clipboard, so
 clips pass between app processes.
 
 ### Library items
 
-A library item is a `.skr` file with one more archive entry, `library.json`
+A library item is a `.tnn` file with one more archive entry, `library.json`
 `{"kind": "component" | "material" | "model", "name": "..."}`; readers that do not look for it
-ignore it, and a `.skr` file without it is a model item named by its file name. A component item's
+ignore it, and a `.tnn` file without it is a model item named by its file name. A component item's
 root holds one instance of the component at the origin, with the rotation and scale it had
 (the translation is removed), and the materials and tags it uses; a material item holds only
 that material (texture included); a model item is the whole model. `save_to_library` writes them
@@ -280,7 +280,7 @@ remembers its `library.json`, and every save of it (`save`, to its own path or a
 entry back, so the saved file is still the same kind and name; `new` and opening a file without
 the entry forget it. A recovered copy (autosave) keeps the entry too.
 
-The `library` query lists a folder: the `.skr` files directly in it (no subfolders), sorted by
+The `library` query lists a folder: the `.tnn` files directly in it (no subfolders), sorted by
 name ignoring case, at most 1000 (`more` is true when the folder holds more; then the first
 1000 by file name are listed). Links (symbolic links, and on Windows any reparse point),
 folders and files over 256 MiB are left out. Only the archive's directory and `library.json`
@@ -290,7 +290,7 @@ otherwise the item is a `model` named by its file stem; a file that is not a mod
 listed with an `error`. `modified` is the file's time in seconds since 1970 and `size` its size in bytes. A path that is not a
 folder is `file`, except under `--api-root`, where it is `invalid_input` (as every other
 roots refusal is). A file with more than 10,000 archive entries is listed with an `error`, and a
-`library.json` over 16 KiB is ignored (the file is a model named by its stem). The `.skr`
+`library.json` over 16 KiB is ignored (the file is a model named by its stem). The `.tnn`
 extension is matched ignoring case. With `--api-root` the folder, `save_to_library`'s path and
 `insert_library_item`'s path must lie within the roots (the root itself is a folder to list); so
 must `place_library_item`'s.
@@ -309,8 +309,8 @@ changes. A click on a component or model tile is `place_library_item`; a click o
 `insert_library_item` and the material becomes `set_paint_material`'s. The tile's context menu has
 Insert (`insert_library_item` at the open context's origin), Open (`open` with the file, asking
 about unsaved changes first) and Delete from Library (after a confirmation the file is removed, only
-when it is a regular `.skr` file directly in the folder and not a link). Saving asks for a name in a
-sheet and writes `<folder>/<name>.skr` as `save_to_library` does (characters a file name may not
+when it is a regular `.tnn` file directly in the folder and not a link). Saving asks for a name in a
+sheet and writes `<folder>/<name>.tnn` as `save_to_library` does (characters a file name may not
 hold become `_`; an existing file asks before it is replaced): Entity Info's Save to Library for one
 selected component instance, the Materials panel's Save to Library for the chosen material, the
 context bar's Save Component to Library button, and File > Save Model to Library.... They need a
@@ -450,7 +450,7 @@ only the face (its edges stay shown), hiding an edge never changes the faces it 
 hiding an instance hides everything placed through it, at any depth. Component instances each
 have their own flag; geometry inside a definition is shared by every instance of it. Copies,
 clipboard and library items, groups made from or exploded into hidden entities (an exploded
-hidden instance leaves its contents hidden), split edges and `.skr` files keep the flag.
+hidden instance leaves its contents hidden), split edges and `.tnn` files keep the flag.
 
 A hidden entity is treated as one on a hidden tag (see Tags): not drawn (nor in `render_view`),
 not met by `pick`, not selected by a `select` box, not snapped to by `infer` or the tools, not
@@ -961,7 +961,7 @@ The texture limits apply: at most 16 MiB and 8192 pixels on each side (so an 819
 refused, saying so), and 2^28 pixels over all textures; a file that cannot be read or decoded is a
 `file` error naming the path, bad `data` is `invalid_input`. A height outside 0.001 to 1000 m for
 the given width, a blank `name`, an `x_axis` along the normal, or both or neither of `path` and
-`data` is `invalid_input`. The picture is kept in a saved `.skr` with its image bytes and exported
+`data` is `invalid_input`. The picture is kept in a saved `.tnn` with its image bytes and exported
 as a textured face (glTF, OBJ). In the window, File > Import of a `.png`, `.jpg` or `.jpeg` brings out the Image tool (`place_image`, below): a click sets a corner, moving sizes the picture keeping its proportions, a click or a typed width places it. Scale resizes a placed picture. `place_image` (`path` or `data`, as `import_image`) refuses before the tool comes out, with the message `import_image` would give, an image that is broken, over the side or file limits, or that would take the model's textures over the pixel budget (`invalid_input` or `file`, status line in the window); the Image tool's `data` takes base64 as `import_image` does.
 
 ### Materials
@@ -999,15 +999,15 @@ like any other.
 #### Textures
 
 A texture is a PNG or JPEG file of at most 16 MiB and 8192 pixels on each side, read when the
-command runs; the model keeps its own copy (the file is saved inside `.skr`), so the file may
+command runs; the model keeps its own copy (the file is saved inside `.tnn`), so the file may
 change or go away later. A model holds at most 256 textures, and their images together at most
-2^28 pixels (268435456, 1 GiB decoded, four full size 8192 x 8192 images; an image shared by materials counts once). The renderer shows an image from a copy resampled to at most 2048 pixels a side, and to less when the GPU's largest texture is smaller (WebGL2 and some integrated GPUs allow 2048 or 4096); the model and the `.skr` keep the original bytes, and exports use them. `texture` is `{"path", "width",
+2^28 pixels (268435456, 1 GiB decoded, four full size 8192 x 8192 images; an image shared by materials counts once). The renderer shows an image from a copy resampled to at most 2048 pixels a side, and to less when the GPU's largest texture is smaller (WebGL2 and some integrated GPUs allow 2048 or 4096); the model and the `.tnn` keep the original bytes, and exports use them. `texture` is `{"path", "width",
 "height"}`: `width` and `height` are the meters one copy of the image covers on the model, each
 from 0.001 to 1000 (`invalid_input` otherwise). A new image without `width` is 1 m wide (or as
 wide as the texture it replaces), and without `height` keeps the image's proportions (limited to the same 0.001 to 1000 range).
 A file
 that cannot be read, is not a PNG or JPEG, is too large, or would take the textures over the
-total pixel limit gives the error kind `file`, naming the path; nothing changes. Opening a `.skr`
+total pixel limit gives the error kind `file`, naming the path; nothing changes. Opening a `.tnn`
 whose textures hold more than that total is a `file` error too, checked from the images' headers
 before any is decoded.
 
@@ -1061,7 +1061,7 @@ selected face's texture a further quarter counter-clockwise: `rotate_by: 90`, on
 `density` (kg/m3, 1 to 30000, absent when unknown) weighs solids painted with the material: the
 `mass_properties` query multiplies the volume of a solid by it (which material counts for a solid
 is described there). Common values: steel 7850, cast
-iron 7200, aluminium 2700, copper 8960, brass 8500, rubber 1200. `.skr` files keep it (schema
+iron 7200, aluminium 2700, copper 8960, brass 8500, rubber 1200. `.tnn` files keep it (schema
 version 26, written only when some material has a density); `.skp` import and export ignore it.
 Entity Info shows Mass (kg) and the Center of gravity of a selected solid with a density.
 
@@ -1081,7 +1081,7 @@ not black. Glowing sides stay
 unshaded, textured and see-through materials take part (the texture is the base color), and the
 lights of glowing faces add only to the diffuse part. `.skp` import and export ignore the
 finish (the format has no such fields; imported materials are matte and the finish is not
-written); `.skr` files keep it, and the `glb` export does not write it.
+written); `.tnn` files keep it, and the `glb` export does not write it.
 
 #### Lights
 
@@ -1806,10 +1806,10 @@ itself; the click that places the item is the `insert` step); each returns
 | `{"type": "duplicate"}` | Starts Move copying the selection, as Edit > Duplicate (Cmd+D) does: with the cursor in the view the base point is the point under it, so the copy follows the cursor; otherwise Move waits for a base point. With nothing selected it is `invalid_input`. The copy is made by the next click or typed distance (one `copy` step). |
 | `{"type": "copy_selection"}` | Edit > Copy (Cmd+C): puts the selection on the app's clipboard as clip text (see Clipboard); the window's is the system clipboard, so another app process can paste it. With nothing selected it is `invalid_input`; a clipboard that cannot be written is `file`. Not an undo step. (It is named apart from `copy`, which copies by an offset.) |
 | `{"type": "cut_selection"}` | Edit > Cut (Cmd+X): `copy_selection`, then erases the selection as one undo step labelled `cut`. Nothing is erased when the copy fails. |
-| `{"type": "paste_clipboard", "at": [3, 0, 0]}` | Edit > Paste (Cmd+V). With `at` (a point of the open context), runs `paste` with the clipboard's clip there. Without it the Paste tool comes out: the clip's edges follow the cursor, its base point on the snapped point under it, and the next click (`tool_input`) pastes there as one `paste` step (the pasted entities become the selection; see `selection`); then (even when the paste changed nothing, landing exactly on what is there), or on Escape or `cancel`, the tool used before comes back (`editor.tool` stays that tool meanwhile, with `phase` `active` and the prompt `Click where to paste (Esc cancels)`; the snap marker and `snap_label` show even when that tool is Select). Typed distances are not taken. With `at` too the pasted entities become the selection. Text that is not a clip is `invalid_input` with the message `The clipboard does not hold sketchup-alt geometry`, and changes nothing; a clip `paste` refuses (damaged, over 64 MiB, nested more than 32 deep, over 100,000 instances or 20,000,000 faces with nesting counted, or landing beyond the coordinate limit) is `invalid_input` with why, before the Paste tool comes out, and changes nothing; a clipboard that cannot be read is `file` (`Could not read the clipboard: ...`). |
+| `{"type": "paste_clipboard", "at": [3, 0, 0]}` | Edit > Paste (Cmd+V). With `at` (a point of the open context), runs `paste` with the clipboard's clip there. Without it the Paste tool comes out: the clip's edges follow the cursor, its base point on the snapped point under it, and the next click (`tool_input`) pastes there as one `paste` step (the pasted entities become the selection; see `selection`); then (even when the paste changed nothing, landing exactly on what is there), or on Escape or `cancel`, the tool used before comes back (`editor.tool` stays that tool meanwhile, with `phase` `active` and the prompt `Click where to paste (Esc cancels)`; the snap marker and `snap_label` show even when that tool is Select). Typed distances are not taken. With `at` too the pasted entities become the selection. Text that is not a clip is `invalid_input` with the message `The clipboard does not hold Tenon geometry`, and changes nothing; a clip `paste` refuses (damaged, over 64 MiB, nested more than 32 deep, over 100,000 instances or 20,000,000 faces with nesting counted, or landing beyond the coordinate limit) is `invalid_input` with why, before the Paste tool comes out, and changes nothing; a clipboard that cannot be read is `file` (`Could not read the clipboard: ...`). |
 | `{"type": "paste_in_place"}` | Edit > Paste In Place: runs `paste` with the clipboard's clip and no `at`, so it lands where it was copied from in world coordinates, and the pasted entities become the selection (see `selection`). Refused as `paste_clipboard` is. |
-| `{"type": "place_library_item", "path": "/abs/lib/chair.skr"}` | The Library tab's tile click: the Paste tool comes out with the library item at `path` (a component or model item; see Library items) instead of the clipboard's clip, as `paste_clipboard` without `at` does. The item's edges follow the cursor by the minimum corner of its box (inside a turned or scaled group they are drawn in world axes and size too, so the preview is what the insert makes), and the next click (`tool_input`) runs `insert_library_item` there as one undo step labelled `insert`, with new definitions each time, then the tool used before comes back; Escape or `cancel` puts it away with nothing inserted. `editor.tool` stays the tool used before, with `phase` `active` and the prompt `Click where to paste (Esc cancels)`. `path` follows the read rules (`--api-root`). `invalid_input` for a material item (use `insert_library_item`), and for a file that is not a valid item or is too large, before the tool comes out. |
-| `{"type": "export_pdf", "path": "/abs/plan.pdf", "paper": "a3", "landscape": true, "scale": 100, "dpi": 150, "cut_list": false, "overwrite": false}` | File > Export PDF...: renders the current view (camera, lighting, display settings and section cuts; nothing selected or highlighted) with the GPU on white paper, without the ground grid and axes, and with no group open (the model as it looks closed) and writes a PDF 1.4, one page per sheet. `paper`: `a4` (default), `a3`, `letter`, `legal`, `tabloid`; `landscape` defaults to true; `dpi` 72 to 300 (default 150). Without `scale` the view, its aspect kept, is fitted on one sheet inside 10 mm margins. With `scale` (1:N, a parallel view; a perspective view is `invalid_input`, "Switch to parallel projection to print at scale") the extent of the print as drawn (no group open, only the geometry kept by section cuts, and the shown dimensions and notes, so one placed outside the model widens the print) is printed along the view at exactly 1:N, tiled across ceil(w/W) x ceil(h/H) sheets (more than 100 is `invalid_input` naming the count), with trim marks at each tile's corners, a scale bar (1, 2 or 5 times a power of ten of the display unit: feet for feet and inches, inches for inches, metres otherwise, labelled in the model's length format) and a "Sheet r,c of R x C" footer. Dimension and note text is placed as PDF text over the image. The bytes are the same for the same model and view on the same GPU. Path rules are the export's: `--api-root`, `.skr` and the open model's own file refused, an existing file that is not a PDF refused unless `overwrite`; they are checked before rendering. Result: `{"editor": ..., "pdf": {"sheets": n, "warnings": [...]}, "revision": r}`. Without a GPU adapter (headless on a machine without one) it is `invalid_input`, "printing needs a GPU adapter". Not an undo step. With `cut_list: true` the cut list (see Cut list) is added as pages after the view's sheets and `pdf.sheets` counts them. |
+| `{"type": "place_library_item", "path": "/abs/lib/chair.tnn"}` | The Library tab's tile click: the Paste tool comes out with the library item at `path` (a component or model item; see Library items) instead of the clipboard's clip, as `paste_clipboard` without `at` does. The item's edges follow the cursor by the minimum corner of its box (inside a turned or scaled group they are drawn in world axes and size too, so the preview is what the insert makes), and the next click (`tool_input`) runs `insert_library_item` there as one undo step labelled `insert`, with new definitions each time, then the tool used before comes back; Escape or `cancel` puts it away with nothing inserted. `editor.tool` stays the tool used before, with `phase` `active` and the prompt `Click where to paste (Esc cancels)`. `path` follows the read rules (`--api-root`). `invalid_input` for a material item (use `insert_library_item`), and for a file that is not a valid item or is too large, before the tool comes out. |
+| `{"type": "export_pdf", "path": "/abs/plan.pdf", "paper": "a3", "landscape": true, "scale": 100, "dpi": 150, "cut_list": false, "overwrite": false}` | File > Export PDF...: renders the current view (camera, lighting, display settings and section cuts; nothing selected or highlighted) with the GPU on white paper, without the ground grid and axes, and with no group open (the model as it looks closed) and writes a PDF 1.4, one page per sheet. `paper`: `a4` (default), `a3`, `letter`, `legal`, `tabloid`; `landscape` defaults to true; `dpi` 72 to 300 (default 150). Without `scale` the view, its aspect kept, is fitted on one sheet inside 10 mm margins. With `scale` (1:N, a parallel view; a perspective view is `invalid_input`, "Switch to parallel projection to print at scale") the extent of the print as drawn (no group open, only the geometry kept by section cuts, and the shown dimensions and notes, so one placed outside the model widens the print) is printed along the view at exactly 1:N, tiled across ceil(w/W) x ceil(h/H) sheets (more than 100 is `invalid_input` naming the count), with trim marks at each tile's corners, a scale bar (1, 2 or 5 times a power of ten of the display unit: feet for feet and inches, inches for inches, metres otherwise, labelled in the model's length format) and a "Sheet r,c of R x C" footer. Dimension and note text is placed as PDF text over the image. The bytes are the same for the same model and view on the same GPU. Path rules are the export's: `--api-root`, `.tnn` and the open model's own file refused, an existing file that is not a PDF refused unless `overwrite`; they are checked before rendering. Result: `{"editor": ..., "pdf": {"sheets": n, "warnings": [...]}, "revision": r}`. Without a GPU adapter (headless on a machine without one) it is `invalid_input`, "printing needs a GPU adapter". Not an undo step. With `cut_list: true` the cut list (see Cut list) is added as pages after the view's sheets and `pdf.sheets` counts them. |
 | `{"type": "set_dialog", "dialog": "soften_edges"}` | Opens the Soften Edges window over the view (`null` or absent closes it), as Edit > Soften Edges... and its close button do. |
 | `{"type": "set_soften_angle", "angle": 30}` | The Soften Edges window's angle, in whole degrees (0 to 180; above 180 is `invalid_input`, a negative or fractional angle `-32602`), which its Soften button uses. |
 
@@ -2061,8 +2061,8 @@ larger than the detail loses sharpness, and redrawn only when the sun or the cas
 
 ### Files
 
-Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
-(`"sketchup-alt"`), `schema_version` (29 when a scene stores joint values (written in the scene as `joints`, a list of `id`, `value` and `slide`; older builds refuse the file), else 28 when the model has a cam follower (written in the model as `cam_followers`; older builds refuse the file), else 27 when the model has a coupling between joints (written in the model as `couplings`; older builds refuse the file), else 26 when a material has a `density` (written in the material, only then; older builds refuse the file), else 25 when the model has a joint (written in the model as `joints`; older builds refuse the file), else 24 when the scene transition is not the default (written in the model as `transition`, with `on` and `seconds`; older builds refuse the file), else 23 when a scene stores instance positions (written in the scene as `positions`, a list of `id` and `transform`; older builds refuse the file), else 22 when `set_section_display` chose the `material` fill color (written in the camera as `section_fill_color`) or an instance is not cut by section planes (written as `"section_cut": false` on the instance; older builds refuse the file), else 21 when a style has `ambient_occlusion` other than the default (written in the style's `settings` only then; older builds refuse the file), else 20 when the view or a scene's view is lit by `studio` (written as `"lighting": "studio"` in the camera and `"studio": true` in a scene's view; older builds refuse the file), else 19 when a material has a `metalness` above 0 or a `roughness` below 1 (written in the material only then; older builds refuse the file), else 18 when the model has a style or the view or a scene's view chooses one (written as `styles` in the model and `style` in the view and scene views; older builds refuse the file), else 17 when the display units use `feet` or have a `length_snap` other than 0, an `angle_precision` other than 1 or an `angle_snap` other than 15 (older builds refuse the fields), else 16 when the location is not the default (written in the model as `location` with `latitude`, `longitude`, `north_angle` and `utc_offset`) or the view or a scene's view has shadow settings other than the defaults (written as `shadows`, with `on`, `year`, `month`, `day`, `minutes`, `light`, `dark` and `on_ground`), else 15 when the model axes are not the world axes (written as `axes` with `origin`, `x`, `y` and `z` in the model), else 14 when something is hidden or the view has `x_ray` or `hidden_geometry` on, else 13 when the model has a section plane or `set_section_display` has turned something off (written in the view as `section_planes`, `section_cuts` and `section_fill`, only when false), else 12 when the model has a dimension or a note, or display units other than meters with 3 decimals, else 11 when the model has a scene, else 10 when the model has a tag or the view colors faces by tag, else 9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
+Models are saved as `.tnn` files (the extension before the rename to Tenon, `.skr`, still opens and counts as a model file: `export` and `import` refuse it, library listings include it): a zip archive holding `document.json`, which records `format`
+(`"sketchup-alt"`, the name the project had before Tenon, kept so files stay readable), `schema_version` (29 when a scene stores joint values (written in the scene as `joints`, a list of `id`, `value` and `slide`; older builds refuse the file), else 28 when the model has a cam follower (written in the model as `cam_followers`; older builds refuse the file), else 27 when the model has a coupling between joints (written in the model as `couplings`; older builds refuse the file), else 26 when a material has a `density` (written in the material, only then; older builds refuse the file), else 25 when the model has a joint (written in the model as `joints`; older builds refuse the file), else 24 when the scene transition is not the default (written in the model as `transition`, with `on` and `seconds`; older builds refuse the file), else 23 when a scene stores instance positions (written in the scene as `positions`, a list of `id` and `transform`; older builds refuse the file), else 22 when `set_section_display` chose the `material` fill color (written in the camera as `section_fill_color`) or an instance is not cut by section planes (written as `"section_cut": false` on the instance; older builds refuse the file), else 21 when a style has `ambient_occlusion` other than the default (written in the style's `settings` only then; older builds refuse the file), else 20 when the view or a scene's view is lit by `studio` (written as `"lighting": "studio"` in the camera and `"studio": true` in a scene's view; older builds refuse the file), else 19 when a material has a `metalness` above 0 or a `roughness` below 1 (written in the material only then; older builds refuse the file), else 18 when the model has a style or the view or a scene's view chooses one (written as `styles` in the model and `style` in the view and scene views; older builds refuse the file), else 17 when the display units use `feet` or have a `length_snap` other than 0, an `angle_precision` other than 1 or an `angle_snap` other than 15 (older builds refuse the fields), else 16 when the location is not the default (written in the model as `location` with `latitude`, `longitude`, `north_angle` and `utc_offset`) or the view or a scene's view has shadow settings other than the defaults (written as `shadows`, with `on`, `year`, `month`, `day`, `minutes`, `light`, `dark` and `on_ground`), else 15 when the model axes are not the world axes (written as `axes` with `origin`, `x`, `y` and `z` in the model), else 14 when something is hidden or the view has `x_ray` or `hidden_geometry` on, else 13 when the model has a section plane or `set_section_display` has turned something off (written in the view as `section_planes`, `section_cuts` and `section_fill`, only when false), else 12 when the model has a dimension or a note, or display units other than meters with 3 decimals, else 11 when the model has a scene, else 10 when the model has a tag or the view colors faces by tag, else 9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
 texture, else 6 when a material is see-through, else 5; a material's `opacity` is written only
 when below 1, its `emission` only when above 0, and a face's `texture_position` only when it
 has one, so a model whose materials are all opaque
@@ -2087,8 +2087,8 @@ the file it was read from, `textures/m31.png` (or `.jpg`), and the material's `t
 
 | Command | Effect |
 |---|---|
-| `{"type": "save", "path": "/abs/house.skr"}` | Writes the file (the old file is replaced only once the new one is complete: the bytes go to a new hidden `.sketchup-alt-<pid>-<n>.partial` beside it, renamed over it at the end; no other file is touched). Without `path` it saves to the file last opened or saved; a model never saved then gives `invalid_input`. An existing file at `path` that is not a model (any other file but an empty one) is refused with `invalid_input` unless `"overwrite": true`. A model `open` would refuse (a scene's view beyond +/-1e6 m, say) is not written: the error is `file` and names it ("scene p40's view is beyond +/-1000000 m"). |
-| `{"type": "open", "path": "/abs/house.skr"}` | Replaces the model and the view with the file's; a file whose saved view is unusable or is the default one opens with the view framing the model, and a library item whose saved view misses it opens framed too. With unsaved changes it fails with `unsaved_changes` unless it has `"discard": true`. A SketchUp file (a `.skp` path, or a file whose header is SketchUp's) opens as a new model not saved anywhere: what `import` reads from it (see Import) goes straight into the root, with no wrapping group (the file's top-level faces, edges and instances are the root's), lit by day, with the view zoomed to it; the outcome carries the `import` report (without `instance` and `definition`); `file` reports no `path` and `modified` false, so `save` needs a `path` (a `.skr`), and never writes over the `.skp`. |
+| `{"type": "save", "path": "/abs/house.tnn"}` | Writes the file (the old file is replaced only once the new one is complete: the bytes go to a new hidden `.tenon-<pid>-<n>.partial` beside it, renamed over it at the end; no other file is touched). Without `path` it saves to the file last opened or saved; a model never saved then gives `invalid_input`. An existing file at `path` that is not a model (any other file but an empty one) is refused with `invalid_input` unless `"overwrite": true`. A model `open` would refuse (a scene's view beyond +/-1e6 m, say) is not written: the error is `file` and names it ("scene p40's view is beyond +/-1000000 m"). |
+| `{"type": "open", "path": "/abs/house.tnn"}` | Replaces the model and the view with the file's; a file whose saved view is unusable or is the default one opens with the view framing the model, and a library item whose saved view misses it opens framed too. With unsaved changes it fails with `unsaved_changes` unless it has `"discard": true`. A SketchUp file (a `.skp` path, or a file whose header is SketchUp's) opens as a new model not saved anywhere: what `import` reads from it (see Import) goes straight into the root, with no wrapping group (the file's top-level faces, edges and instances are the root's), lit by day, with the view zoomed to it; the outcome carries the `import` report (without `instance` and `definition`); `file` reports no `path` and `modified` false, so `save` needs a `path` (a `.tnn`), and never writes over the `.skp`. |
 | `{"type": "new"}` | An empty model with the default view, not saved anywhere. With unsaved changes it fails with `unsaved_changes` unless it has `"discard": true`. |
 
 Paths are relative to the app's working directory, or with `--api-root` to the first
@@ -2097,7 +2097,7 @@ root (see Access and safety). None of these is an undo step. `open` and
 subscribers get a `resync` notification and should read the model again. Ids in an opened file
 are those it was saved with, and new ids continue after the largest one ever used. A file that
 cannot be read or written gives the error kind `file`, with a message naming the path and the
-reason (a missing file, not a sketchup-alt file, a missing or newer schema version, a document
+reason (a missing file, not a Tenon file, a missing or newer schema version, a document
 over 256 MiB, an id of 2^53 or more or one number used as the id of two things, a transform that cannot be inverted, a coordinate beyond the
 +/-1e6 m limit, a curve whose edges branch, fall apart or are straight, a soft edge bounding
 fewer than two faces, a face or instance painted with a material the file lacks, an entity on a
@@ -2111,9 +2111,9 @@ when the model has given out ids past 2^53, which no file can hold. `open` and `
 not saved (`modified` in the `file` query) unless told to: they fail with `unsaved_changes`, and
 a client that means it, or has asked the user, passes `"discard": true`. In the window, `new`,
 `open` and `quit` with `discard: true` first write the unsaved model to a recovery file,
-`<name>-<seconds>.skr` in the recovery folder (macOS `~/.sketchup-alt/recovery`; Linux
-`$XDG_STATE_HOME/sketchup-alt/recovery`, by default `~/.local/state/sketchup-alt/recovery`; files
-an earlier version left in `~/.sketchup-alt/recovery` stay there); the window's status bar and
+`<name>-<seconds>.tnn` in the recovery folder (macOS `~/.tenon/recovery`; Linux
+`$XDG_STATE_HOME/tenon/recovery`, by default `~/.local/state/tenon/recovery`; files
+an earlier version left in `~/.tenon/recovery` stay there); the window's status bar and
 its Agent Activity window name it; only the user may read it (0600). A sidecar note
 `<file>.json` beside it records that an agent discarded it, the window session, the file it was a
 copy of and when; once that window has ended, File > Recover Models... in another window lists
@@ -2123,7 +2123,7 @@ itself before its own New and Open.
 
 The window also autosaves: while the model has unsaved changes, every few minutes (Settings >
 Files, 5 by default, Off turns it off) it copies the model to
-`<name>-<session>.autosave.skr` in the same folder, with its sidecar, overwriting that one copy in
+`<name>-<session>.autosave.tnn` in the same folder, with its sidecar, overwriting that one copy in
 place; while a drag or a tool operation that has not changed the model yet is in progress it
 waits, at most one interval more. The user's own file is never written by
 autosave. The copy and its sidecar are removed when the model is saved, when New or Open replaces
@@ -2141,7 +2141,7 @@ other (on save, or on Don't Save at quit). A copy whose note cannot be read, or 
 missing or not private, is listed with why and can only be discarded; a copy whose contents
 cannot be opened is listed too, and Open says why in the status bar. The newest 200 entries are
 listed, with a note saying how many older ones were not; at start only autosave notes are read.
-Listing also removes temporary files (`.sketchup-alt-*.partial`, `.session-*.locking`) left a
+Listing also removes temporary files (`.tenon-*.partial`, `.session-*.locking`) left a
 day or more by a write or a start that never finished. On
 macOS and Linux the listing skips links and any note or copy other users can read (each file
 must be 0600); on Windows it relies on the folder's owner-only access list and does not check
@@ -2159,7 +2159,7 @@ is what hidden tags hide (see Tags; a model whose faces are all hidden is "nothi
 any case; any other extension without `format` is `invalid_input`, and so is a model with no
 faces (for `skp`: with nothing at all, or only empty groups and components, "nothing to export"). A SketchUp file holds the whole
 scene rather than triangles (see the `skp` row below).
-A `.skr` path (any case) and the open model's own file are refused with `invalid_input`: export
+A `.tnn` path (any case) and the open model's own file are refused with `invalid_input`: export
 never overwrites a model; use `save`. After `open` of a SketchUp file the model has no file of
 its own, but exporting to the file it was opened from (compared after resolving the paths) is
 refused with `invalid_input` unless `"overwrite": true`: the export would replace it with a 2017
@@ -2238,7 +2238,7 @@ file and adds its faces to the open context as one undo step. `format` (`obj`, `
 `gltf` (also written `glb`; JSON and binary files alike), `dae`) defaults to the one the path's
 extension names (`.obj`, `.stl`, `.skp`, `.gltf`, `.glb`, `.dae`), in any case; a file with another extension whose header is
 SketchUp's is read as `skp`; any other file without `format` is `invalid_input`, and so is a
-`.skr` path (use `open`).
+`.tnn` path (use `open`).
 
 | Field | Meaning |
 |---|---|
@@ -2473,10 +2473,10 @@ the units when not meters) and polygons skipped, or the error. For a SketchUp, g
 COLLADA file it reads
 `Imported desk.skp: 147 faces, 1 definition, 1 instance` (and faces skipped), followed by
 `with N warnings (see the import report)` when the report has warnings, which also go to
-stderr. File > Open... lists `.skr` and SketchUp (`.skp`) files; a `.skp` runs `open` as above,
+stderr. File > Open... lists `.tnn` and SketchUp (`.skp`) files; a `.skp` runs `open` as above,
 the status reads `Opened <name>.skp: ...` with the same counts, and the window title is
-`<name>.skp (imported)` until the model is saved (Save then asks for a `.skr` path, suggesting
-`<name>.skr`).
+`<name>.skp (imported)` until the model is saved (Save then asks for a `.tnn` path, suggesting
+`<name>.tnn`).
 
 Details: for `"as": "context"` the report's `faces` counts the faces built from the file, before
 they merge with what is already in the context. A `.mtl` over 16 MiB is ignored, as is a library
@@ -2503,7 +2503,7 @@ not a file. A hard link inside a root to a file outside is followed (the API can
 links). A path outside the roots is refused with `invalid_input` ("outside the folders the API
 may use"), the same whether it exists, is missing or cannot be read. Paths are resolved one part
 at a time and may pass only through folders that hold a root and folders within one, so
-`outside/x/../../root/a.skr` and a dangling link are refused the same way; a part missing within
+`outside/x/../../root/a.tnn` and a dangling link are refused the same way; a part missing within
 a root (a missing file, say) gives `file`. A path with a NUL byte
 is `invalid_input`. `save` without a path checks the open model's file; inside a `batch` it
 needs a path. A batch with a path outside the roots runs nothing (`-32001`, its `index` names
@@ -2513,7 +2513,7 @@ FILE argument are not limited. A root that is not an existing folder stops the a
 2).
 
 On Windows, each part of a path is resolved to the name the folder or file has on disk before
-it is compared, so `c:\models\A.SKR` lies within a root given as `C:\Models` when those
+it is compared, so `c:\models\A.TNN` lies within a root given as `C:\Models` when those
 folders exist; names are then compared exactly, since a folder can be case-sensitive (a sibling
 `C:\p\root` of a root `C:\p\Root` is outside it). A file to write keeps its name as given. A
 verbatim path (`\\?\C:\...`, `\\?\UNC\server\share\...`) is
@@ -2577,13 +2577,13 @@ under a pixel and where a click would snap.
 
 | In the window | Through the API |
 |---|---|
-| File > New, Open... (`.skr` or `.skp`), Save, Save As... (Cmd+N, Cmd+O, Cmd+S, Shift+Cmd+S), the unsaved-changes prompt | `new`, `open` (`discard`), `save` (`path`); the prompt reads `Do you want to save changes to "<name>"?` (Save, Don't Save, Cancel); it is still `unsaved_changes` / `discard` |
+| File > New, Open... (`.tnn` or `.skp`), Save, Save As... (Cmd+N, Cmd+O, Cmd+S, Shift+Cmd+S), the unsaved-changes prompt | `new`, `open` (`discard`), `save` (`path`); the prompt reads `Do you want to save changes to "<name>"?` (Save, Don't Save, Cancel); it is still `unsaved_changes` / `discard` |
 | File > Open Recent (the last 10 files) and Clear Menu | `open` (`path`); the list is chrome |
 | File > Recover Models... and the window that opens at start after a crash: Open, Discard, Discard All | none: window chrome over the recovery folder (see the autosave paragraph above); agents' `save`, `new` and `open` remove the window's autosave |
 | The empty-model card's New, Open... and recent files | `new`, `open` (`path`) |
 | File > Import... (Cmd+I) and its options sheet (units, up axis, import as, merge coplanar faces; only import as for a `.skp`; no units or up axis for a `.dae`) | `import` (`scale`, `up`, `as`, `merge_coplanar`); `set_import_units`, `editor.import_units` |
 | File > Export... (Shift+Cmd+E); the dialog also lists SVG drawing (pixels) | `export` (`format`; `svg` with `scale`) |
-| File > Export PDF... and File > Print... (a Print sheet: paper, orientation, Fit or 1:N, resolution; remembered in the prefs; Print writes `sketchup-alt-print-<pid>-<n>.pdf` in the temp folder and opens it with the system's viewer) | `export_pdf` (`path`, `paper`, `landscape`, `scale`, `dpi`, `overwrite`) |
+| File > Export PDF... and File > Print... (a Print sheet: paper, orientation, Fit or 1:N, resolution; remembered in the prefs; Print writes `tenon-print-<pid>-<n>.pdf` in the temp folder and opens it with the system's viewer) | `export_pdf` (`path`, `paper`, `landscape`, `scale`, `dpi`, `overwrite`) |
 | Quit (app menu on macOS, File menu elsewhere; Cmd+Q), closing the window | `quit` (`discard`) |
 | View > Agent Activity; the context bar's Agent Activity indicator; the status bar's `Agents: N` | none: they only show what agents do |
 | Settings (Cmd+,): Appearance (theme, UI scale), Input (trackpad scroll) and Files (autosave interval, library folder); View > Theme | none: window chrome, kept in the prefs file (see below) |
@@ -2637,9 +2637,9 @@ which menus are open, tooltips, which Outliner rows are expanded, the Outliner's
 agent filters the `outliner` query's rows itself), the Help > Keyboard Shortcuts window, the export
 dialog's suggested format, keyboard focus, and the window's preferences: the theme (Settings or
 View > Theme), the UI scale, the trackpad scroll setting, the import options, the dock's width,
-divider position and tab, the library folder and the recent files list, kept in `~/.sketchup-alt/prefs.json` on
-macOS and in `$XDG_CONFIG_HOME/sketchup-alt/prefs.json` (by default
-`~/.config/sketchup-alt/prefs.json`) on Linux, which the API never reads or writes (files an agent opens or saves are not added to the list). The card
+divider position and tab, the library folder and the recent files list, kept in `~/.tenon/prefs.json` on
+macOS and in `$XDG_CONFIG_HOME/tenon/prefs.json` (by default
+`~/.config/tenon/prefs.json`) on Linux, which the API never reads or writes (files an agent opens or saves are not added to the list). The card
 the window shows over an untouched empty model (New, Open..., recent files, a drawing hint) is
 chrome too, and so is dismissing it. Whether the menus are the native macOS menu bar or the
 window's own is chrome too; on macOS, Cmd shortcuts act through the native menu even while a text

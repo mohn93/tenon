@@ -86,6 +86,6 @@ fn camera_and_selection_still_work_and_bytes_still_open() {
         all: true,
     })
     .unwrap();
-    d.open_bytes("m.skr", &bytes, true).unwrap();
+    d.open_bytes("m.tnn", &bytes, true).unwrap();
     assert!(d.is_read_only());
 }

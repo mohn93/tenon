@@ -68,7 +68,7 @@ fn path_str(p: &std::path::Path) -> String {
 fn save_bytes_is_the_file_save_writes() {
     let mut d = doc();
     boxed(&mut d);
-    let path = scratch("saved.skr");
+    let path = scratch("saved.tnn");
     run(&mut d, json!({"type": "save", "path": path_str(&path)})).unwrap();
     let file = std::fs::read(&path).unwrap();
     let bytes = d.save_bytes().unwrap();
@@ -88,7 +88,7 @@ fn save_bytes_marks_the_model_saved() {
 fn open_bytes_equals_open_of_the_path() {
     let mut d = doc();
     boxed(&mut d);
-    let path = scratch("model.skr");
+    let path = scratch("model.tnn");
     run(&mut d, json!({"type": "save", "path": path_str(&path)})).unwrap();
     let bytes = std::fs::read(&path).unwrap();
 
@@ -99,7 +99,7 @@ fn open_bytes_equals_open_of_the_path() {
     )
     .unwrap();
     let mut by_bytes = doc();
-    let report = by_bytes.open_bytes("model.skr", &bytes, false).unwrap();
+    let report = by_bytes.open_bytes("model.tnn", &bytes, false).unwrap();
     assert!(report.is_none());
     assert_eq!(contents(&by_bytes), contents(&by_path));
     assert!(!by_bytes.is_modified());
@@ -118,9 +118,9 @@ fn open_bytes_refuses_unsaved_changes_unless_discarded() {
         json!({"type": "add_rectangle", "corner": [5, 5, 0], "opposite": [6, 6, 0]}),
     )
     .unwrap();
-    let err = d.open_bytes("a.skr", &bytes, false).unwrap_err();
+    let err = d.open_bytes("a.tnn", &bytes, false).unwrap_err();
     assert_eq!(err.kind, ErrorKind::UnsavedChanges);
-    d.open_bytes("a.skr", &bytes, true).unwrap();
+    d.open_bytes("a.tnn", &bytes, true).unwrap();
 }
 
 #[test]
@@ -128,9 +128,9 @@ fn open_bytes_of_something_else_fails_and_changes_nothing() {
     let mut d = doc();
     boxed(&mut d);
     let before = contents(&d);
-    let err = d.open_bytes("a.skr", b"not an archive", true).unwrap_err();
+    let err = d.open_bytes("a.tnn", b"not an archive", true).unwrap_err();
     assert_eq!(err.kind, ErrorKind::File);
-    assert!(err.message.starts_with("a.skr: "), "{}", err.message);
+    assert!(err.message.starts_with("a.tnn: "), "{}", err.message);
     assert_eq!(contents(&d), before);
 }
 
@@ -233,7 +233,7 @@ fn import_bytes_reads_no_material_library_and_checks_the_name() {
         0
     );
     let err = d
-        .import_bytes("model.skr", vec![1], &ImportOptions::default())
+        .import_bytes("model.tnn", vec![1], &ImportOptions::default())
         .unwrap_err();
     assert_eq!(err.kind, ErrorKind::InvalidInput);
     let err = d

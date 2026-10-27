@@ -1,6 +1,6 @@
 //! Clip text: what Copy puts on the clipboard and Paste reads back. The header line
 //! [`HEADER`], then base64 (standard alphabet) of a zip archive holding `model.json`, the
-//! clip as a `.skr` file writes its document (with textures as entries, as in `.skr`), and
+//! clip as a `.tnn` file writes its document (with textures as entries, as in `.tnn`), and
 //! `clip.json` `{ "base": [x, y, z], "source": "<token>" }`: the base point (the minimum corner
 //! of the clip's bounding box, in world coordinates) and the token of the document it was
 //! copied from.
@@ -18,7 +18,9 @@ use crate::document::MAX_COORDINATE;
 use crate::file::{self, ViewLook};
 
 /// The first line of every clip text.
-pub const HEADER: &str = "sketchup-alt clip 1";
+pub const HEADER: &str = "tenon clip 1";
+/// The header clips had before the project was renamed Tenon; still read.
+const LEGACY_HEADER: &str = "sketchup-alt clip 1";
 /// The most bytes a clip's archive may hold once its base64 is decoded.
 pub const MAX_CLIP_BYTES: usize = 64 * 1024 * 1024;
 /// The most segments [`outline`] returns.
@@ -35,7 +37,7 @@ pub const MAX_CLIP_DEPTH: usize = kernel::MAX_IMPORT_DEPTH;
 pub const MAX_CLIP_PLACED_FACES: u64 = kernel::MAX_IMPORT_PLACED_FACES;
 /// The most instances [`outline`] walks into.
 const MAX_OUTLINE_VISITS: usize = 100_000;
-/// The archive entry holding the clip's model, as `.skr` writes its document.
+/// The archive entry holding the clip's model, as `.tnn` writes its document.
 const MODEL_ENTRY: &str = "model.json";
 /// The archive entry holding the base point and the source token.
 const CLIP_ENTRY: &str = "clip.json";
@@ -68,7 +70,7 @@ pub struct ClipOutline {
 }
 
 /// The clip text of `scene` (a clip in world coordinates) copied from the document with
-/// `token`. The camera and look only fill the `.skr` document's view; paste ignores them.
+/// `token`. The camera and look only fill the `.tnn` document's view; paste ignores them.
 pub(crate) fn encode(
     scene: &Scene,
     token: &str,
@@ -92,17 +94,18 @@ pub(crate) fn encode(
     ))
 }
 
-/// Reads clip text, with every check opening a `.skr` file makes. Anything wrong is
+/// Reads clip text, with every check opening a `.tnn` file makes. Anything wrong is
 /// `invalid_input`.
 pub(crate) fn decode(text: &str) -> Result<Clip, CommandError> {
     let invalid = |m: String| CommandError::new(ErrorKind::InvalidInput, m);
     let body = text
         .strip_prefix(HEADER)
+        .or_else(|| text.strip_prefix(LEGACY_HEADER))
         .and_then(|rest| {
             rest.strip_prefix('\n')
                 .or_else(|| rest.strip_prefix("\r\n"))
         })
-        .ok_or_else(|| invalid("not a sketchup-alt clip".into()))?;
+        .ok_or_else(|| invalid("not a tenon clip".into()))?;
     // Base64 takes 4 characters for 3 bytes; line breaks a clipboard may add are allowed.
     let encoded_limit = MAX_CLIP_BYTES.div_ceil(3) * 4;
     let too_large = || {

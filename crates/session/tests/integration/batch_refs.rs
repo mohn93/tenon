@@ -343,7 +343,7 @@ fn scene_positions_take_references() {
 fn a_reference_across_new_or_open_is_refused() {
     for replace in [
         json!({"type": "new", "discard": true}),
-        json!({"type": "open", "path": "/no/such.skr", "discard": true}),
+        json!({"type": "open", "path": "/no/such.tnn", "discard": true}),
     ] {
         let commands = batch(vec![
             rectangle(),

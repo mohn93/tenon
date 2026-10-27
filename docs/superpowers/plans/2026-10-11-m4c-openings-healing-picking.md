@@ -19,7 +19,7 @@
 
 **Tech Stack:** Rust 2024; no dependency changes.
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`:
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md`:
 - section 1: sticky geometry and the operations API;
 - section 2: inference engine (point snaps include intersection; picking via BVH);
 - the technology table: picking acceleration.
@@ -1880,7 +1880,7 @@ git commit -m "Snap to apparent intersections"
 ### Task 6: API test, agent docs, spec amendment, visual check
 
 **Files:**
-- Modify: `crates/api/tests/dispatch.rs`, `docs/agent-api.md`, `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`
+- Modify: `crates/api/tests/dispatch.rs`, `docs/agent-api.md`, `docs/superpowers/specs/2026-10-10-tenon-design.md`
 
 **Interfaces:**
 - Consumes: the `push_pull` command with Tasks 1-2 behavior. No code changes.
@@ -1974,7 +1974,7 @@ Expected: PASS (15 tests). The behavior exists already; this pins it at the JSON
 
   Keep the line breaks around it as the file has them (about 100 columns).
 
-`docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`:
+`docs/superpowers/specs/2026-10-10-tenon-design.md`:
 - **`Status:` line:**
   ```
   Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope; M4c scope)
@@ -2011,7 +2011,7 @@ Expected: no warnings; workspace total 371.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/api/tests/dispatch.rs docs/agent-api.md docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
+git add crates/api/tests/dispatch.rs docs/agent-api.md docs/superpowers/specs/2026-10-10-tenon-design.md
 git commit -m "Document openings and flush push/pull"
 ```
 

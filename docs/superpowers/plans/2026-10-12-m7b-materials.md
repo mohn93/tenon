@@ -13,7 +13,7 @@
 
 **Tech Stack:** Rust 2024; no dependency changes.
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`: materials (section 2), commands and queries (section 5), export. Task 2 adds the M7b milestone line.
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md`: materials (section 2), commands and queries (section 5), export. Task 2 adds the M7b milestone line.
 
 ## Global Constraints
 
@@ -2913,7 +2913,7 @@ Apply to `crates/session/src/file.rs`:
 @@ -13,11 +13,11 @@ use crate::document::MAX_COORDINATE;
  
  /// The `format` every file records.
- pub const FORMAT: &str = "sketchup-alt";
+ pub const FORMAT: &str = "tenon";
  /// The schema version this build writes and the newest it reads. Version 2 added guides,
 -/// version 3 curves and soft edges, and version 4 the camera's up direction and projection;
 -/// older files still open.
@@ -3114,11 +3114,11 @@ Apply to `docs/agent-api.md`:
  ### Files
  
  Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
--(`"sketchup-alt"`), `schema_version` (4; version 3 files, written before camera projections,
+-(`"tenon"`), `schema_version` (4; version 3 files, written before camera projections,
 -open in perspective, and versions 2 and 1, written before curves and guides, still open), the
 -camera (eye, target, field of view, up and projection) and the model with every id, edges with
 -their curve and soft flag.
-+(`"sketchup-alt"`), `schema_version` (5; version 4 files, written before materials, open
++(`"tenon"`), `schema_version` (5; version 4 files, written before materials, open
 +unpainted, version 3 files, written before camera projections, open in perspective, and
 +versions 2 and 1, written before curves and guides, still open), the camera (eye, target, field
 +of view, up and projection) and the model with every id, edges with their curve and soft flag,
@@ -3130,7 +3130,7 @@ Apply to `docs/agent-api.md`:
 @@ -250,10 +288,11 @@ subscribers get a `resync` notification and should read the model again. Ids in
  are those it was saved with, and new ids continue after the largest one ever used. A file that
  cannot be read or written gives the error kind `file`, with a message naming the path and the
- reason (a missing file, not a sketchup-alt file, a missing or newer schema version, a document
+ reason (a missing file, not a tenon file, a missing or newer schema version, a document
  over 256 MiB, ids over 2^53, a transform that cannot be inverted, a coordinate beyond the
 -+/-1e6 m limit, a curve whose edges branch, fall apart or are straight, or a soft edge bounding
 -fewer than two faces); the model is left as it was. `open` and `new` never drop changes the user has
@@ -3143,12 +3143,12 @@ Apply to `docs/agent-api.md`:
  atomic batch.
 ```
 
-Apply to `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`:
+Apply to `docs/superpowers/specs/2026-10-10-tenon-design.md`:
 ```diff
---- a/docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
-+++ b/docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
+--- a/docs/superpowers/specs/2026-10-10-tenon-design.md
++++ b/docs/superpowers/specs/2026-10-10-tenon-design.md
 @@ -1,8 +1,8 @@
- # SketchUp Alternative — Design
+ # Tenon — Design
  
  Date: 2026-10-10
 -Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope; M4c scope; M5 split into M5a-c; M5b tools); 2026-10-12 (M5c files, M5d export, M6a circles, M6b rotate, M6c guides, M6d curves, M7a camera)
@@ -3191,7 +3191,7 @@ Run: `cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings &
 ```bash
 git status
 git diff --stat
-git add crates/api/tests/dispatch.rs crates/session/tests/camera.rs crates/session/tests/curves.rs crates/session/tests/materials.rs crates/session/src/command.rs crates/session/src/document.rs crates/session/src/document/groups.rs crates/session/src/document/materials.rs crates/session/src/file.rs crates/session/src/lib.rs crates/session/src/query.rs docs/agent-api.md docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
+git add crates/api/tests/dispatch.rs crates/session/tests/camera.rs crates/session/tests/curves.rs crates/session/tests/materials.rs crates/session/src/command.rs crates/session/src/document.rs crates/session/src/document/groups.rs crates/session/src/document/materials.rs crates/session/src/file.rs crates/session/src/lib.rs crates/session/src/query.rs docs/agent-api.md docs/superpowers/specs/2026-10-10-tenon-design.md
 git commit -m "Material commands: add_material, change_material, delete_material, paint; materials query and face/instance materials in queries; .skr schema 5; spec M7b"
 ```
 
@@ -4029,11 +4029,11 @@ Apply to `crates/session/src/export.rs`:
  
 -/// OBJ with shared positions and normals; faces are triangles.
 -fn obj(triangles: &[Triangle]) -> String {
--    let mut out = String::from("# sketchup-alt export: meters, Y up\no model\n");
+-    let mut out = String::from("# tenon export: meters, Y up\no model\n");
 +/// OBJ with shared positions and normals; faces are triangles. When some faces are painted,
 +/// each material's faces follow a `usemtl` line and the material library is returned too.
 +fn obj(groups: &Groups, mtl_name: &str) -> (String, Option<String>) {
-+    let mut out = String::from("# sketchup-alt export: meters, Y up\n");
++    let mut out = String::from("# tenon export: meters, Y up\n");
 +    let painted = groups.painted();
 +    if painted {
 +        let _ = writeln!(out, "mtllib {mtl_name}");
@@ -4092,7 +4092,7 @@ Apply to `crates/session/src/export.rs`:
      out.push_str(&faces);
 -    out
 +    let mtl = painted.then(|| {
-+        let mut mtl = String::from("# sketchup-alt materials: diffuse colors, linear\n");
++        let mut mtl = String::from("# tenon materials: diffuse colors, linear\n");
 +        for (g, name) in groups.groups.iter().zip(&names) {
 +            let [r, gr, b] = g.color.map(linear);
 +            let _ = writeln!(mtl, "newmtl {name}\nKd {r:.6} {gr:.6} {b:.6}");
@@ -4183,7 +4183,7 @@ Apply to `crates/session/src/export.rs`:
 +        start += n;
 +    }
      let doc = json!({
-         "asset": {"version": "2.0", "generator": "sketchup-alt"},
+         "asset": {"version": "2.0", "generator": "tenon"},
          "scene": 0,
          "scenes": [{"nodes": [0]}],
          "nodes": [{"mesh": 0, "name": "model"}],
@@ -5806,10 +5806,10 @@ Apply to `docs/agent-api.md`:
  "id": "i4"}` opens an instance of the open context for editing, and `{"type": "close_instance"}`
 ```
 
-Apply to `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`:
+Apply to `docs/superpowers/specs/2026-10-10-tenon-design.md`:
 ```diff
---- a/docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
-+++ b/docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
+--- a/docs/superpowers/specs/2026-10-10-tenon-design.md
++++ b/docs/superpowers/specs/2026-10-10-tenon-design.md
 @@ -198,9 +198,9 @@ Every milestone's acceptance includes: new capabilities are reachable as `sessio
  - **M6b**: rotate: a `rotate` command (vertices, edges, faces and instances about an axis through a center, angle in degrees, exact quarter turns; optional `copies` for radial arrays) and a Rotate tool (`q`: center on a face turns about its normal, else about Z; reference click, then angle click with 15-degree snapping, or a typed angle; Ctrl copies, "5x" and "/5" arrays). Turned placements work everywhere: render normals, picking, box select, inference and the tools' camera inside an open turned instance, bounds, Entity Info (rotation line), explode, files and export.
  - **M6c**: guides and the Tape Measure: guide lines (infinite) and guide points are model entities (`g<n>` ids) of the context they are drawn in; `add_guide_line`, `add_guide_point` and `delete_guides` commands, and `erase`, `select`, `move`, `rotate`, `copy`, `make_group` and `explode` take guides; saved in `.skr` (schema version 2; version 1 still opens), never exported. Inference snaps to guide points, onto guide lines, and where guide lines cross edges or each other. Guides are drawn dashed (guide points as small crosses), picked, box-selected and erased like edges, and shown in Entity Info. Tape Measure tool (`t`): from a point the second click adds a guide point, from an edge or guide line a parallel guide line; typed distances, retyped right after to adjust; Ctrl switches to measuring only. Edit > Delete Guides.
@@ -5834,7 +5834,7 @@ Run: `cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings &
 ```bash
 git status
 git diff --stat
-git add crates/app/src/app.rs crates/app/src/editor.rs crates/app/src/info.rs crates/app/src/ui.rs crates/tools/src/arc.rs crates/tools/src/circle.rs crates/tools/src/erase.rs crates/tools/src/lib.rs crates/tools/src/line.rs crates/tools/src/move_tool.rs crates/tools/src/paint.rs crates/tools/src/push_pull.rs crates/tools/src/rectangle.rs crates/tools/src/rotate.rs crates/tools/src/select.rs crates/tools/src/tape.rs crates/tools/src/tool.rs docs/agent-api.md docs/superpowers/specs/2026-10-10-sketchup-alt-design.md
+git add crates/app/src/app.rs crates/app/src/editor.rs crates/app/src/info.rs crates/app/src/ui.rs crates/tools/src/arc.rs crates/tools/src/circle.rs crates/tools/src/erase.rs crates/tools/src/lib.rs crates/tools/src/line.rs crates/tools/src/move_tool.rs crates/tools/src/paint.rs crates/tools/src/push_pull.rs crates/tools/src/rectangle.rs crates/tools/src/rotate.rs crates/tools/src/select.rs crates/tools/src/tape.rs crates/tools/src/tool.rs docs/agent-api.md docs/superpowers/specs/2026-10-10-tenon-design.md
 git commit -m "Paint tool (b) and Materials list: paint the side facing the viewer, whole selections and groups, Cmd/Ctrl-click picks up a material; add, rename, recolor and delete materials in the right panel; face and group materials in Entity Info"
 ```
 

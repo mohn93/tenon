@@ -335,7 +335,7 @@ mod tests {
         let base = scratch("winforms");
         let root = base.join("Root");
         std::fs::create_dir_all(root.join("sub")).unwrap();
-        std::fs::write(root.join("a.skr"), "").unwrap();
+        std::fs::write(root.join("a.tnn"), "").unwrap();
         let text = root.to_str().unwrap().to_string();
         // Given in other case or verbatim, the root is the folder as the system names it.
         for given in [
@@ -347,13 +347,13 @@ mod tests {
             assert_eq!(roots.dirs(), std::slice::from_ref(&root), "{given}");
         }
         let roots = ApiRoots::new(&[PathBuf::from(text.to_lowercase())]).unwrap();
-        let want = root.join("a.skr");
+        let want = root.join("a.tnn");
         for given in [
-            format!(r"{}\A.SKR", text.to_uppercase()),
-            format!(r"\\?\{text}\a.skr"),
-            format!(r"{text}\sub\..\a.skr"),
-            format!("{}/a.skr", text.replace('\\', "/")),
-            r"sub\..\a.skr".to_string(),
+            format!(r"{}\A.TNN", text.to_uppercase()),
+            format!(r"\\?\{text}\a.tnn"),
+            format!(r"{text}\sub\..\a.tnn"),
+            format!("{}/a.tnn", text.replace('\\', "/")),
+            r"sub\..\a.tnn".to_string(),
         ] {
             // Resolved part by part, so the case on disk is what is compared.
             assert_eq!(roots.read(&given).unwrap(), want, "{given}");
@@ -361,7 +361,7 @@ mod tests {
             let written = roots.write(&given).unwrap();
             assert_eq!(written.parent(), Some(root.as_path()), "{given}");
             assert!(
-                written.ends_with("a.skr") || written.ends_with("A.SKR"),
+                written.ends_with("a.tnn") || written.ends_with("A.TNN"),
                 "{given}"
             );
         }
@@ -383,7 +383,7 @@ mod tests {
             format!(r"\\?\{text}\..\secret"),
             r"..\secret".to_string(),
             base.join("secret").to_str().unwrap().to_uppercase(),
-            format!("{text}shop\\a.skr"),
+            format!("{text}shop\\a.tnn"),
         ] {
             let e = roots.read(&given).unwrap_err();
             assert!(e.message.contains("outside"), "{given}: {}", e.message);
@@ -398,7 +398,7 @@ mod tests {
         for given in [
             r"C:foo",
             r"\foo",
-            "a.skr:x",
+            "a.tnn:x",
             "nul.txt",
             r"sub\CON",
             "a. ",
@@ -434,14 +434,14 @@ mod tests {
         );
         assert!(
             roots
-                .write(r"out\a.skr")
+                .write(r"out\a.tnn")
                 .unwrap_err()
                 .message
                 .contains("outside")
         );
         assert_eq!(
-            roots.write(r"in\a.skr").unwrap(),
-            root.join("sub").join("a.skr")
+            roots.write(r"in\a.tnn").unwrap(),
+            root.join("sub").join("a.tnn")
         );
         // A junction is never written to.
         let e = roots.write("in").unwrap_err();
@@ -468,7 +468,7 @@ mod tests {
         std::os::unix::fs::symlink(base.join("real"), base.join("link")).unwrap();
         let roots = ApiRoots::new(&[base.join("link")]).unwrap();
         assert_eq!(roots.dirs(), [base.join("real")]);
-        assert_eq!(roots.write("a.skr").unwrap(), base.join("real/a.skr"));
+        assert_eq!(roots.write("a.tnn").unwrap(), base.join("real/a.tnn"));
     }
 
     #[test]
@@ -480,7 +480,7 @@ mod tests {
             let e = roots.write(path).unwrap_err();
             assert_eq!(e.kind, ErrorKind::InvalidInput, "{path:?}");
         }
-        assert_eq!(roots.write("sub/a.skr").unwrap(), base.join("sub/a.skr"));
+        assert_eq!(roots.write("sub/a.tnn").unwrap(), base.join("sub/a.tnn"));
     }
 
     #[test]
@@ -488,7 +488,7 @@ mod tests {
         let base = scratch("apply");
         std::fs::write(base.join("a.obj"), "").unwrap();
         std::fs::write(base.join("t.png"), "").unwrap();
-        std::fs::write(base.join("m.skr"), "").unwrap();
+        std::fs::write(base.join("m.tnn"), "").unwrap();
         let roots = ApiRoots::new(std::slice::from_ref(&base)).unwrap();
         let texture = || TextureSource {
             path: Some("t.png".into()),
@@ -497,11 +497,11 @@ mod tests {
         };
         let mut commands = [
             Command::Open {
-                path: "m.skr".into(),
+                path: "m.tnn".into(),
                 discard: false,
             },
             Command::Save {
-                path: Some("s.skr".into()),
+                path: Some("s.tnn".into()),
                 overwrite: false,
             },
             Command::Export {
@@ -544,7 +544,7 @@ mod tests {
                 density: None,
             },
         ];
-        let expected = ["m.skr", "s.skr", "e.obj", "a.obj", "t.png", "t.png"];
+        let expected = ["m.tnn", "s.tnn", "e.obj", "a.obj", "t.png", "t.png"];
         for (command, name) in commands.iter_mut().zip(expected) {
             roots.apply(command, None, false).unwrap();
             let want = base.join(name).display().to_string();
@@ -598,8 +598,8 @@ mod tests {
         let (root, other) = (base.join("root"), base.join("other"));
         std::fs::create_dir_all(root.join("lib")).unwrap();
         std::fs::create_dir_all(&other).unwrap();
-        std::fs::write(root.join("lib/a.skr"), "").unwrap();
-        std::fs::write(other.join("b.skr"), "").unwrap();
+        std::fs::write(root.join("lib/a.tnn"), "").unwrap();
+        std::fs::write(other.join("b.tnn"), "").unwrap();
         let roots = ApiRoots::new(std::slice::from_ref(&root)).unwrap();
         let save = |path: &std::path::Path| Command::SaveToLibrary {
             path: path.display().to_string(),
@@ -612,17 +612,17 @@ mod tests {
             path: path.display().to_string(),
             at: None,
         };
-        for mut c in [save(&other.join("b.skr")), insert(&other.join("b.skr"))] {
+        for mut c in [save(&other.join("b.tnn")), insert(&other.join("b.tnn"))] {
             let e = roots.apply(&mut c, None, false).unwrap_err();
             assert_eq!(e.kind, ErrorKind::InvalidInput);
             assert!(e.message.contains("--api-root"), "{}", e.message);
         }
-        let mut c = save(Path::new("lib/new.skr"));
+        let mut c = save(Path::new("lib/new.tnn"));
         roots.apply(&mut c, None, false).unwrap();
-        assert_eq!(c, save(&root.join("lib").join("new.skr")));
-        let mut c = insert(Path::new("lib/a.skr"));
+        assert_eq!(c, save(&root.join("lib").join("new.tnn")));
+        let mut c = insert(Path::new("lib/a.tnn"));
         roots.apply(&mut c, None, false).unwrap();
-        assert_eq!(c, insert(&root.join("lib").join("a.skr")));
+        assert_eq!(c, insert(&root.join("lib").join("a.tnn")));
 
         let query = |folder: String| Query::Library { folder };
         // Folders within a root, the root itself and a relative name pass; others do not.
@@ -638,7 +638,7 @@ mod tests {
         for given in [
             other.display().to_string(),
             "../other".to_string(),
-            root.join("lib/a.skr").display().to_string(),
+            root.join("lib/a.tnn").display().to_string(),
         ] {
             let mut q = query(given.clone());
             assert!(roots.apply_query(&mut q).is_err(), "{given}");
@@ -662,16 +662,16 @@ mod tests {
         };
         // A relative open file is from the working directory, not the first root.
         let cwd = std::env::current_dir().unwrap();
-        let outside = std::path::absolute("house.skr").unwrap();
+        let outside = std::path::absolute("house.tnn").unwrap();
         assert!(!outside.starts_with(&root) && cwd != root);
         let mut c = save();
         let e = roots
-            .apply(&mut c, Some(Path::new("house.skr")), false)
+            .apply(&mut c, Some(Path::new("house.tnn")), false)
             .unwrap_err();
         assert_eq!(e.kind, ErrorKind::InvalidInput);
         assert_eq!(c, save());
         // An open file inside a root is saved where it is.
-        let inside = root.join("m.skr");
+        let inside = root.join("m.tnn");
         let mut c = save();
         roots.apply(&mut c, Some(&inside), false).unwrap();
         assert_eq!(
@@ -681,6 +681,6 @@ mod tests {
                 overwrite: false
             }
         );
-        assert!(!root.join("house.skr").exists());
+        assert!(!root.join("house.tnn").exists());
     }
 }

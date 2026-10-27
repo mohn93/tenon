@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn verbatim_and_unc_prefixes_normalise() {
-        assert_eq!(strip_verbatim(r"\\?\C:\work\a.skr"), r"C:\work\a.skr");
+        assert_eq!(strip_verbatim(r"\\?\C:\work\a.tnn"), r"C:\work\a.tnn");
         assert_eq!(strip_verbatim(r"\\?\d:\"), r"d:\");
         assert_eq!(
             strip_verbatim(r"\\?\UNC\server\share\a"),
@@ -224,7 +224,7 @@ mod tests {
     #[test]
     fn windows_paths_compare_names_exactly() {
         // Only the drive letter and the verbatim prefix are folded.
-        assert!(windows_starts_with(r"c:\Work\Sub\A.SKR", r"C:\Work"));
+        assert!(windows_starts_with(r"c:\Work\Sub\A.TNN", r"C:\Work"));
         assert!(windows_starts_with(r"\\?\c:\Work\a", r"C:\Work"));
         assert!(windows_starts_with(
             r"\\?\unc\Server\Share\a",
@@ -282,7 +282,7 @@ mod tests {
             (r"ab:stream", ":"),
             // One letter before the colon reads as a drive.
             (r"a:stream", "drive-relative"),
-            (r"C:\work\a.skr:x:$DATA", ":"),
+            (r"C:\work\a.tnn:x:$DATA", ":"),
             ("CON", "reserved"),
             ("nul.txt", "reserved"),
             (r"C:\work\Com1.tar.gz", "reserved"),
@@ -297,16 +297,16 @@ mod tests {
             assert!(reason.contains(why), "{path}: {reason}");
         }
         for path in [
-            r"C:\work\a.skr",
-            r"c:/work/a.skr",
+            r"C:\work\a.tnn",
+            r"c:/work/a.tnn",
             r"\\server\share\a",
             r"\\?\C:\work\a",
             r"\\?\UNC\server\share\a",
-            r"sub\a.skr",
-            "a.skr",
+            r"sub\a.tnn",
+            "a.tnn",
             r"..\a",
             r".\a",
-            r"C:\work\console.skr",
+            r"C:\work\console.tnn",
             r"C:\work\com10",
             r"C:\work\nullity",
             r"C:\work\.hidden",

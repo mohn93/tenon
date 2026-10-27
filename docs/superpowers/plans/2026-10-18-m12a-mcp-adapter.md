@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust 2024, serde_json =1.0.151, schemars =1.2.2. No new dependencies.
 
-**Spec:** `docs/superpowers/specs/2026-10-10-sketchup-alt-design.md`, section 5 "MCP" and the M12a bullet under "Agent integration milestones".
+**Spec:** `docs/superpowers/specs/2026-10-10-tenon-design.md`, section 5 "MCP" and the M12a bullet under "Agent integration milestones".
 
 ## Global Constraints
 
@@ -344,7 +344,7 @@ Tools (name: arguments → method; annotations):
 
 Each `inputSchema` is built with Task 3's `schema::object_root`, `hoist` and `any_of_root`, so every `$ref` resolves in the tool schema's root `$defs`. Descriptions, one sentence each, say what the tool does and mention meters, Z up and `describe` for schemas.
 
-`initialize` result: `{protocolVersion, capabilities: {tools: {listChanged: false}}, serverInfo: {name: "sketchup-alt", version: env!("CARGO_PKG_VERSION")}, instructions}` with this `instructions` text:
+`initialize` result: `{protocolVersion, capabilities: {tools: {listChanged: false}}, serverInfo: {name: "tenon", version: env!("CARGO_PKG_VERSION")}, instructions}` with this `instructions` text:
 
 > A SketchUp-style 3D modeler. Units are meters, Z is up, angles are in degrees. Change the model with transact (several commands run as one atomic undo step by default), read it with query, see it with render_view, and drive the drawing tools like a person with tool_input. Call describe for the full command and query schemas.
 
@@ -358,7 +358,7 @@ fn handshake_lists_seven_tools() {
     let out = run(&[init(1, "2025-06-18"), notif("notifications/initialized"), req(2, "tools/list", json!({}))]);
     assert_eq!(out.len(), 2); // the notification got no reply
     assert_eq!(out[0]["result"]["protocolVersion"], "2025-06-18");
-    assert_eq!(out[0]["result"]["serverInfo"]["name"], "sketchup-alt");
+    assert_eq!(out[0]["result"]["serverInfo"]["name"], "tenon");
     let names: Vec<_> = out[1]["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(names, ["describe", "transact", "query", "pick", "infer", "render_view", "tool_input"]);
     for t in out[1]["result"]["tools"].as_array().unwrap() {
@@ -516,16 +516,16 @@ Expected: PASS.
 `docs/mcp.md`: what it is (one paragraph); the seven tools with one line each; headless setup for Claude Code:
 
 ```bash
-claude mcp add sketchup-alt -- /path/to/app --mcp --api-root ~/Models
+claude mcp add tenon -- /path/to/app --mcp --api-root ~/Models
 ```
 
 and for Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json`):
 
 ```json
-{"mcpServers": {"sketchup-alt": {"command": "/path/to/app", "args": ["--mcp", "--api-root", "/Users/you/Models"]}}}
+{"mcpServers": {"tenon": {"command": "/path/to/app", "args": ["--mcp", "--api-root", "/Users/you/Models"]}}}
 ```
 
-the live setup (start the window with a fixed `--socket ~/.sketchup-alt/main.sock`, then `--mcp --live ~/.sketchup-alt/main.sock`); notes: undo with `expect` in a shared window, `--api-root` for headless file access, how to build (`cargo build --release -p app`).
+the live setup (start the window with a fixed `--socket ~/.tenon/main.sock`, then `--mcp --live ~/.tenon/main.sock`); notes: undo with `expect` in a shared window, `--api-root` for headless file access, how to build (`cargo build --release -p app`).
 
 - [ ] **Step 6: Gate and commit**
 

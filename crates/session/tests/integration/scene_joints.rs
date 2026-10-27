@@ -316,7 +316,7 @@ fn scene_joint_values_are_saved_at_schema_29_and_older_files_stay_older() {
         &mut d,
         json!({"type": "add_scene", "name": "J", "joints": true}),
     );
-    let path = scratch("joints.skr");
+    let path = scratch("joints.tnn");
     ok(
         &mut d,
         json!({"type": "save", "path": path.to_str().unwrap()}),
@@ -339,7 +339,7 @@ fn scene_joint_values_are_saved_at_schema_29_and_older_files_stay_older() {
     let mut plain = doc();
     rig(&mut plain);
     ok(&mut plain, json!({"type": "add_scene"}));
-    let old = scratch("plain.skr");
+    let old = scratch("plain.tnn");
     ok(
         &mut plain,
         json!({"type": "save", "path": old.to_str().unwrap()}),

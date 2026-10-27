@@ -1,4 +1,4 @@
-//! Files macOS asks the app to open: a double-clicked `.skr` in Finder, Open With, a file
+//! Files macOS asks the app to open: a double-clicked `.tnn` in Finder, Open With, a file
 //! dropped on the Dock icon. They arrive as `application:openURLs:` on the app delegate, never
 //! as arguments, and winit's delegate does not answer it (AppKit would say the app cannot open
 //! the file). `install` adds the method to winit's delegate class, as `system_quit` adds
@@ -105,8 +105,8 @@ mod tests {
         let got: Rc<RefCell<Vec<Vec<PathBuf>>>> = Rc::default();
         let sink = got.clone();
         SEND.with_borrow_mut(|s| *s = Some(Box::new(move |paths| sink.borrow_mut().push(paths))));
-        let file = NSURL::from_file_path(Path::new("/tmp/a b/model.skr")).unwrap();
-        let web = NSURL::URLWithString(&NSString::from_str("https://example.com/x.skr")).unwrap();
+        let file = NSURL::from_file_path(Path::new("/tmp/a b/model.tnn")).unwrap();
+        let web = NSURL::URLWithString(&NSString::from_str("https://example.com/x.tnn")).unwrap();
         let receiver = NSObject::new();
         let call = |urls: &[&NSURL]| {
             let urls = NSArray::from_slice(urls);
@@ -125,7 +125,7 @@ mod tests {
             std::ptr::null_mut(),
             std::ptr::null_mut(),
         );
-        assert_eq!(*got.borrow(), [vec![PathBuf::from("/tmp/a b/model.skr")]]);
+        assert_eq!(*got.borrow(), [vec![PathBuf::from("/tmp/a b/model.tnn")]]);
         SEND.with_borrow_mut(|s| *s = None);
     }
 }

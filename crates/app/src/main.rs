@@ -128,7 +128,7 @@ fn main() {
             config.roots = roots;
             config.recovery = recovery;
             config.session = session;
-            // A .skr opened from Finder or the Dock arrives from AppKit, before the window
+            // A .tnn opened from Finder or the Dock arrives from AppKit, before the window
             // exists when it launches the app.
             #[cfg(target_os = "macos")]
             {
