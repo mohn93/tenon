@@ -87,10 +87,10 @@ def launch_headless(app=None, *args, startup_timeout=30):
     app = app or find_app()
     if app is None:
         raise FileNotFoundError("no app binary: set TENON_APP or run `cargo build -p app`")
-    tmpdir = tempfile.mkdtemp(prefix="skalt")
+    tmpdir = tempfile.mkdtemp(prefix="tenon")
     if sys.platform != "win32" and len(os.path.join(tmpdir, "api.sock").encode()) > 100:
         shutil.rmtree(tmpdir, ignore_errors=True)  # too long for a Unix socket path
-        tmpdir = tempfile.mkdtemp(prefix="skalt", dir="/tmp")
+        tmpdir = tempfile.mkdtemp(prefix="tenon", dir="/tmp")
     if sys.platform == "win32":
         sock = "tenon-py-%d-%s" % (os.getpid(), os.path.basename(tmpdir))
     else:

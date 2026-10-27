@@ -36,7 +36,7 @@ pub(crate) enum Kind {
 impl Kind {
     fn name(self) -> &'static str {
         match self {
-            Kind::Tnn => "tenon model",
+            Kind::Tnn => "Tenon model",
             Kind::Obj => "OBJ",
             Kind::Mtl => "MTL material library",
             Kind::Stl => "STL",

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds target/package/macos/tenon-<version>-macos-<arch>.dmg: the release build in a
-# tenon.app bundle, ad-hoc signed (`codesign -s -`), in a disk image. It opens no window
+# Tenon.app bundle, ad-hoc signed (`codesign -s -`), in a disk image. It opens no window
 # and installs nothing outside target/. Developer ID signing and notarization are not done here
 # (docs/packaging.md says what they need).
 #
@@ -19,7 +19,7 @@ export MACOSX_DEPLOYMENT_TARGET="$min_macos"
 version="$(awk -F'"' '/^version *=/ { print $2; exit }' Cargo.toml)"
 target_dir="${CARGO_TARGET_DIR:-$root/target}"
 out="$target_dir/package/macos"
-app="$out/tenon.app"
+app="$out/Tenon.app"
 
 # The commit About shows; a source tarball without git sets TENON_GIT_HASH itself.
 export TENON_GIT_HASH="${TENON_GIT_HASH:-$(git rev-parse --short=7 HEAD 2>/dev/null || true)}"
@@ -67,7 +67,7 @@ dmg="$out/tenon-$version-macos-$arch_name.dmg"
 # failed attempt is retried after a pause, with a leftover mount of the volume detached first.
 stage_kb="$(du -sk "$stage" | awk '{ print $1 }')"
 size_mb=$(( stage_kb / 1024 * 12 / 10 + 20 ))
-volname="tenon $version"
+volname="Tenon $version"
 attempt=1
 until hdiutil create -volname "$volname" -srcfolder "$stage" -size "${size_mb}m" -ov -format UDZO "$dmg"; do
     if [ "$attempt" -ge 4 ]; then

@@ -320,7 +320,7 @@ fn sizes_are_written_in_bytes_kilobytes_and_megabytes() {
 
 #[test]
 fn the_database_and_store_names_are_the_documented_ones() {
-    assert_eq!(DB_NAME, "tenon-viewer");
+    assert_eq!(DB_NAME, "sketchup-alt-viewer");
     assert_eq!(STORE, "recent");
     assert_eq!(KEEP, 5);
     assert_eq!(MAX_KEPT_BYTES, 64 * 1024 * 1024);

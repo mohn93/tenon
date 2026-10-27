@@ -169,10 +169,22 @@ fn question_for(name: &str) -> String {
     format!("Do you want to save changes to \"{name}\"?")
 }
 
-/// The `.tnn` name of a file kept under `name`: a SketchUp file's stem gets the extension.
+/// `name` without its model extension (`.tnn`, or the legacy `.skr`).
+fn model_stem(name: &str) -> &str {
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if session::file::is_model_extension(ext) && !stem.is_empty() => stem,
+        _ => name,
+    }
+}
+
+/// The `.tnn` name of a file kept under `name`: a SketchUp or legacy `.skr` file's stem gets the
+/// extension.
 fn tnn_name(name: &str) -> String {
     match name.rsplit_once('.') {
-        Some((stem, ext)) if ext.eq_ignore_ascii_case("skp") && !stem.is_empty() => {
+        Some((stem, ext))
+            if (ext.eq_ignore_ascii_case("skp") || ext.eq_ignore_ascii_case("skr"))
+                && !stem.is_empty() =>
+        {
             format!("{stem}.tnn")
         }
         _ => name.to_string(),
@@ -488,9 +500,9 @@ impl Flows {
     /// its extension.
     fn export_stem(&self, env: &Env) -> String {
         let stem = file_name(env.editor.doc().path());
-        let stem = stem.strip_suffix(".tnn").unwrap_or(&stem).to_string();
+        let stem = model_stem(&stem).to_string();
         match (&self.kept_name, env.editor.doc().path()) {
-            (Some(kept), None) => kept.strip_suffix(".tnn").unwrap_or(kept).to_string(),
+            (Some(kept), None) => model_stem(kept).to_string(),
             _ => stem,
         }
     }
@@ -627,7 +639,7 @@ impl Flows {
             return Vec::new();
         }
         let stem = file_name(env.editor.doc().path());
-        let stem = stem.strip_suffix(".tnn").unwrap_or(&stem);
+        let stem = model_stem(&stem);
         let request = SaveRequest {
             filters: vec![Filter::new("PDF", &["pdf"])],
             name: format!("{stem}.pdf"),
@@ -1568,5 +1580,9 @@ mod tests {
     fn a_sketchup_file_kept_by_name_is_saved_as_tnn() {
         assert_eq!(tnn_name("desk.skp"), "desk.tnn");
         assert_eq!(tnn_name("house.tnn"), "house.tnn");
+        assert_eq!(tnn_name("old.skr"), "old.tnn", "a web save downloads .tnn");
+        assert_eq!(model_stem("house.skr"), "house");
+        assert_eq!(model_stem("house.TNN"), "house");
+        assert_eq!(model_stem("house.obj"), "house.obj");
     }
 }

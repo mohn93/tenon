@@ -34,6 +34,13 @@ const MAX_SIDECAR_BYTES: u64 = 16 * 1024;
 
 /// The end of an autosave model's file name.
 const AUTOSAVE_SUFFIX: &str = ".autosave.tnn";
+/// The end an autosave model's file name had before the rename to Tenon; still listed.
+const LEGACY_AUTOSAVE_SUFFIX: &str = ".autosave.skr";
+
+/// Whether `name` ends like an autosave model's file name.
+fn is_autosave_name(name: &str) -> bool {
+    name.ends_with(AUTOSAVE_SUFFIX) || name.ends_with(LEGACY_AUTOSAVE_SUFFIX)
+}
 
 /// What a sidecar holds.
 #[derive(Debug, Serialize, Deserialize)]
@@ -86,7 +93,10 @@ fn valid_id(id: &str) -> bool {
 /// been written by: the stem may end in digits too, so both the last two and the last three
 /// `-` parts are tried.
 fn ids_in_name(name: &str) -> Vec<String> {
-    let Some(base) = name.strip_suffix(AUTOSAVE_SUFFIX) else {
+    let Some(base) = name
+        .strip_suffix(AUTOSAVE_SUFFIX)
+        .or_else(|| name.strip_suffix(LEGACY_AUTOSAVE_SUFFIX))
+    else {
         return Vec::new();
     };
     let parts: Vec<&str> = base.split('-').collect();
@@ -452,14 +462,17 @@ pub fn list_newest(dir: &Path, own: &Session, include_discarded: bool, max: usiz
             if valid_id(id) {
                 locks.push(id.to_string());
             }
-        } else if name.ends_with(".tnn.json") {
-            if include_discarded || name.ends_with(".autosave.tnn.json") {
+        } else if name.ends_with(".tnn.json") || name.ends_with(".skr.json") {
+            if include_discarded
+                || name.ends_with(".autosave.tnn.json")
+                || name.ends_with(".autosave.skr.json")
+            {
                 let written = std::fs::symlink_metadata(item.path())
                     .and_then(|m| m.modified())
                     .unwrap_or(UNIX_EPOCH);
                 sidecars.push((written, item.path()));
             }
-        } else if name.ends_with(AUTOSAVE_SUFFIX) {
+        } else if is_autosave_name(name) {
             autosaves.push(item.path());
         } else if is_temp_name(name) {
             remove_if_stale(&item.path(), now);
@@ -516,10 +529,7 @@ pub fn list_newest(dir: &Path, own: &Session, include_discarded: bool, max: usiz
                     continue;
                 }
                 with_entries.extend(ids);
-                let kind = if file_name
-                    .as_deref()
-                    .is_some_and(|n| n.ends_with(AUTOSAVE_SUFFIX))
-                {
+                let kind = if file_name.as_deref().is_some_and(is_autosave_name) {
                     Kind::Autosave
                 } else {
                     Kind::Discarded
@@ -875,6 +885,14 @@ mod tests {
         assert_eq!(found[0].kind, Kind::Autosave);
         discard(&found[0]).unwrap();
         assert!(!bad.exists());
+        // An autosave note written before the rename is listed too.
+        let old = dir.join("odd.autosave.skr.json");
+        session::file::replace_private(&old, b"{not json").unwrap();
+        let found = list(&dir, &b, false);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].kind, Kind::Autosave);
+        discard(&found[0]).unwrap();
+        assert!(!old.exists());
         // A time no clock reaches.
         let late = dir.join("late.autosave.tnn.json");
         let note = format!(

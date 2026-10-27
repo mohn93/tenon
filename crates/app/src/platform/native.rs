@@ -176,7 +176,7 @@ mod tests {
         std::fs::create_dir_all(dir.join(".config")).unwrap();
         let file = PrefsFile {
             path: dir.join(".config/tenon/prefs.json"),
-            legacy: None,
+            legacy: Vec::new(),
         };
         let platform = NativePlatform::new(Some(file));
         assert_eq!(platform.read_prefs(), None, "no file yet");

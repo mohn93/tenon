@@ -122,7 +122,8 @@ pub fn path_in(home: &Path) -> PathBuf {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrefsFile {
     pub path: PathBuf,
-    pub legacy: Option<PathBuf>,
+    /// Earlier locations, newest first: the first that exists is read while `path` does not.
+    pub legacy: Vec<PathBuf>,
 }
 
 /// The prefs of `file`: those at `file.path`, or, when nothing is there yet, those at the
@@ -145,10 +146,11 @@ fn source_of(file: &PrefsFile) -> &Path {
         std::fs::symlink_metadata(&file.path),
         Err(e) if e.kind() == io::ErrorKind::NotFound
     );
-    match &file.legacy {
-        Some(legacy) if missing => legacy,
-        _ => &file.path,
+    if !missing {
+        return &file.path;
     }
+    let exists = |p: &&PathBuf| std::fs::symlink_metadata(p).is_ok();
+    file.legacy.iter().find(exists).unwrap_or(&file.path)
 }
 
 /// The text of the prefs file `file` names (see `load_file`), for a platform to hand to
@@ -346,6 +348,31 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn the_first_legacy_file_that_exists_is_read() {
+        let home = home("legacy-list");
+        let newest = home.join("newest/prefs.json");
+        let older = home.join("older/prefs.json");
+        let kept = Prefs {
+            recent: vec![PathBuf::from("/a/older.tnn")],
+            ..Prefs::default()
+        };
+        save(&older, &kept).unwrap();
+        let file = PrefsFile {
+            path: home.join("new/prefs.json"),
+            legacy: vec![newest.clone(), older],
+        };
+        assert_eq!(load_file(&file), kept, "a missing first one is skipped");
+        let first = Prefs {
+            recent: vec![PathBuf::from("/a/newest.tnn")],
+            ..Prefs::default()
+        };
+        save(&newest, &first).unwrap();
+        assert_eq!(load_file(&file), first);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn old_prefs_are_read_once() {
         let home = home("legacy");
         let old = path_in(&home);
@@ -353,7 +380,7 @@ mod tests {
         std::fs::create_dir_all(home.join(".config")).unwrap();
         let file = PrefsFile {
             path: new.clone(),
-            legacy: Some(old.clone()),
+            legacy: vec![old.clone()],
         };
         let kept = Prefs {
             recent: vec![PathBuf::from("/a/b.tnn")],
@@ -385,7 +412,7 @@ mod tests {
         std::fs::remove_file(&new).unwrap();
         let only_new = PrefsFile {
             path: new,
-            legacy: None,
+            legacy: Vec::new(),
         };
         assert_eq!(load_file(&only_new), Prefs::default());
         let _ = std::fs::remove_dir_all(home);

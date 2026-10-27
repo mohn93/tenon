@@ -47,14 +47,31 @@ a real folder you own that group and others cannot write to, and the socket path
 limit. Otherwise the socket goes in `$TMPDIR` when that is set to a folder other than `/tmp`
 and short enough for a socket path, and failing that in `~/.tenon/` (created 0700).
 
-Earlier versions kept everything in `~/.tenon`. If the new preferences file does not exist
-yet, the old `~/.tenon/prefs.json` is read on every start until the first change is saved;
-that save writes the new location, which is read from then on, and the old file is left alone
-(delete it when you like). Recovery files already in
-`~/.tenon/recovery` are not moved.
+Before the rename to Tenon the folders were `~/.config/sketchup-alt` (preferences, Linux),
+`~/.local/state/sketchup-alt/recovery` (recovery files) and, in the earliest builds,
+`~/.sketchup-alt` (everything). If the new preferences file does not exist yet, the first
+of `~/.config/sketchup-alt/prefs.json` and `~/.sketchup-alt/prefs.json` that exists is read on
+every start until the first change is saved; that save writes the new location, which is read
+from then on, and the old file is left alone (delete it when you like). Recovery files in the
+old folders are not moved or listed; copy them into the new recovery folder to see them in
+File > Recover Models... (`.autosave.skr` models and their `.skr.json` notes are recognised).
 
 macOS keeps `~/.tenon/prefs.json`, `~/.tenon/recovery` and the socket in the temp
-folder, as before.
+folder; its old folder was `~/.sketchup-alt` (preferences read once, recovery not moved).
+On Windows the old folders were `%APPDATA%\sketchup-alt` (preferences, read once) and
+`%LOCALAPPDATA%\sketchup-alt\recovery` (not moved).
+
+## File associations
+
+The tarball holds `tenon.desktop` and `tenon.xml`, the MIME type `application/x-tenon` for
+`*.tnn` and the legacy `*.skr`. To make the file manager open models with the program, install
+both for your user (the `Exec=app` line needs the program on `PATH`, or edit it to its full path):
+
+```bash
+xdg-mime install --novendor tenon.xml
+install -Dm644 tenon.desktop ~/.local/share/applications/tenon.desktop
+update-desktop-database ~/.local/share/applications
+```
 
 ## Keys
 

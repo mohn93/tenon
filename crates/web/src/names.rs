@@ -6,7 +6,8 @@ use app::platform::Filter;
 use app::prefs::{self, Prefs};
 
 /// The `localStorage` key the preferences are kept under (the same JSON as `prefs.json`).
-pub const PREFS_KEY: &str = "tenon-prefs";
+/// Kept from before the rename to Tenon, as stored data stays where the browser has it.
+pub const PREFS_KEY: &str = "sketchup-alt-prefs";
 
 /// The id of the page's canvas; one is made if the page has none.
 pub const CANVAS_ID: &str = "tenon";

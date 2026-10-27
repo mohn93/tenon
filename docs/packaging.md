@@ -12,9 +12,9 @@ Windows zip.
 
 | Artifact | Contents |
 |---|---|
-| `tenon-macos-dmg` | `tenon-<version>-macos-universal.dmg`: `tenon.app` (aarch64 and x86_64, macOS 11 or later, ad-hoc signed) and a link to Applications |
-| `tenon-windows` | `tenon-<version>-windows-x86_64.msi` (per-machine, Start menu shortcut, `.tnn` association, icon) and the `.zip` with `app.exe`; both unsigned |
-| `tenon-linux-x86_64`, `tenon-linux-aarch64` | `tenon-<version>-linux-<arch>.AppImage` and `.tar.gz` (program, `.desktop` file, icon, notices) |
+| `tenon-macos-dmg` | `tenon-<version>-macos-universal.dmg`: `Tenon.app` (aarch64 and x86_64, macOS 11 or later, ad-hoc signed) and a link to Applications |
+| `tenon-windows` | `tenon-<version>-windows-x86_64.msi` (per-machine, Start menu shortcut, `.tnn` and legacy `.skr` associations, icon) and the `.zip` with `app.exe`; both unsigned |
+| `tenon-linux-x86_64`, `tenon-linux-aarch64` | `tenon-<version>-linux-<arch>.AppImage` and `.tar.gz` (program, `.desktop` file, `tenon.xml` MIME type, icon, notices) |
 
 ## Build locally
 
@@ -67,6 +67,11 @@ in the background, and never downloads or installs anything. The new HTTP depend
 (MIT or Apache-2.0) with rustls, used only for this.
 
 ## Opening a .tnn from the desktop
+
+Models saved before the rename to Tenon end in `.skr`. They still open, and each package
+registers `.skr` beside `.tnn`: the macOS `Info.plist` lists both extensions under the UTI
+`io.github.mohn93.tenon.model`, the MSI has a second ProgId (`tenon.skr`), and
+`packaging/linux/tenon.xml` gives the MIME type `application/x-tenon` both globs.
 
 Windows (the MSI's association) and Linux (`Exec=app %f`) pass the file as the program's
 argument. macOS never does: Finder (double-click, Open With) and the Dock icon (a file dropped

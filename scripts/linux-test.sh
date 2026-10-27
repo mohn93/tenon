@@ -5,8 +5,8 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-image="${SKETCHUP_LINUX_IMAGE:-tenon-linux}"
-volume="${SKETCHUP_LINUX_TARGET_VOLUME:-tenon-linux-target}"
+image="${TENON_LINUX_IMAGE:-tenon-linux}"
+volume="${TENON_LINUX_TARGET_VOLUME:-tenon-linux-target}"
 rust_version="$(rustc --version 2>/dev/null | awk '{print $2}' || true)"
 
 docker build -f "$root/scripts/linux.Dockerfile" \

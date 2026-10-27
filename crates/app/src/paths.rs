@@ -61,8 +61,9 @@ pub struct Paths {
     /// The folder the default agent socket goes in (on Windows, which uses a named pipe, the
     /// temp folder, unused).
     pub socket_dir: PathBuf,
-    /// The earlier prefs location, read once when `prefs` does not exist yet (Linux only).
-    pub legacy_prefs: Option<PathBuf>,
+    /// The prefs locations from before the rename to Tenon, newest first: the first that exists
+    /// is read once when `prefs` does not exist yet.
+    pub legacy_prefs: Vec<PathBuf>,
 }
 
 pub type Env<'a> = &'a dyn Fn(&str) -> Option<OsString>;
@@ -89,7 +90,10 @@ fn resolve_as(os: Os, env: Env, temp: &Path, pid: u32, uid: Option<u32>) -> Opti
                 prefs: config.join(XDG_DIR).join("prefs.json"),
                 recovery: state.join(XDG_DIR).join("recovery"),
                 socket_dir,
-                legacy_prefs: Some(config.join(OLD_XDG_DIR).join("prefs.json")),
+                legacy_prefs: vec![
+                    config.join(OLD_XDG_DIR).join("prefs.json"),
+                    home.join(OLD_FALLBACK_DIR).join("prefs.json"),
+                ],
             }
         }
         // Windows was resolved above, without HOME.
@@ -97,7 +101,7 @@ fn resolve_as(os: Os, env: Env, temp: &Path, pid: u32, uid: Option<u32>) -> Opti
             prefs: fallback.join("prefs.json"),
             recovery: fallback.join("recovery"),
             socket_dir,
-            legacy_prefs: Some(home.join(OLD_FALLBACK_DIR).join("prefs.json")),
+            legacy_prefs: vec![home.join(OLD_FALLBACK_DIR).join("prefs.json")],
         },
     })
 }
@@ -119,7 +123,7 @@ fn windows_paths(env: Env, temp: &Path) -> Option<Paths> {
         prefs: windows_join(&roaming, &[XDG_DIR, "prefs.json"]),
         recovery: windows_join(&local, &[XDG_DIR, "recovery"]),
         socket_dir: temp.to_path_buf(),
-        legacy_prefs: Some(windows_join(&roaming, &[OLD_XDG_DIR, "prefs.json"])),
+        legacy_prefs: vec![windows_join(&roaming, &[OLD_XDG_DIR, "prefs.json"])],
     })
 }
 
@@ -287,10 +291,8 @@ mod tests {
         );
         assert_eq!(p.socket_dir, tmp, "the per-user temp folder");
         assert_eq!(
-            p.legacy_prefs.as_deref(),
-            Some(Path::new(
-                abs("/Users/me/.sketchup-alt/prefs.json").as_str()
-            ))
+            p.legacy_prefs,
+            [PathBuf::from(abs("/Users/me/.sketchup-alt/prefs.json"))]
         );
         let long = PathBuf::from(abs(&format!("/{}", "x".repeat(100))));
         let p = resolve_as(Os::MacOs, &e, &long, 7, Some(0)).unwrap();
@@ -337,10 +339,10 @@ mod tests {
         );
         assert_eq!(p.recovery.as_os_str(), r"D:\local\tenon\recovery");
         assert_eq!(
-            p.legacy_prefs.as_deref(),
-            Some(Path::new(
+            p.legacy_prefs,
+            [PathBuf::from(
                 r"C:\Users\me\AppData\Roaming\sketchup-alt\prefs.json"
-            ))
+            )]
         );
         // Relative, drive-relative, rooted without a drive or empty: ignored for USERPROFILE.
         for bad in ["", "AppData", r"C:AppData", r"\AppData", r"\\.\C:\AppData"] {
@@ -386,10 +388,11 @@ mod tests {
             Path::new(abs("/home/me/.local/state/tenon/recovery").as_str())
         );
         assert_eq!(
-            p.legacy_prefs.as_deref(),
-            Some(Path::new(
-                abs("/home/me/.config/sketchup-alt/prefs.json").as_str()
-            ))
+            p.legacy_prefs,
+            [
+                PathBuf::from(abs("/home/me/.config/sketchup-alt/prefs.json")),
+                PathBuf::from(abs("/home/me/.sketchup-alt/prefs.json")),
+            ]
         );
         let e = env(&[
             ("HOME", abs("/home/me").as_str()),

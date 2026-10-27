@@ -1,4 +1,4 @@
-//! The browser's IndexedDB as the Recent list's `Storage`: database `tenon-viewer`,
+//! The browser's IndexedDB as the Recent list's `Storage`: database `sketchup-alt-viewer`,
 //! object store `recent` (`{ id, key, name, time, blob }`, keyed by `id`) beside `recent-info`
 //! (`{ id, name, time, size }`), which lets the list load without reading every blob (up to
 //! five of 64 MiB). The list is read from memory (`infos` is loaded once when the database
