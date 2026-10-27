@@ -33,8 +33,8 @@ fn integer_max(t: DataType) -> Option<f64> {
 }
 
 /// Decodes the triangle mesh in `bytes` and reads the `wanted` attributes. Fails, saying why,
-/// for a stream that is not a triangle mesh, passes the importer's point and triangle limits
-/// or lacks an attribute.
+/// for a stream that is not a triangle mesh, passes the importer's point and triangle limits,
+/// lacks an attribute or holds a number that is not finite.
 pub(crate) fn decode(bytes: &[u8], wanted: &[Wanted]) -> Result<Decoded, String> {
     let limits = DecodeLimits::default()
         .with_max_points(MAX_IMPORT_POINTS as u64)
@@ -72,6 +72,12 @@ pub(crate) fn decode(bytes: &[u8], wanted: &[Wanted]) -> Result<Decoded, String>
             None
         };
         let read = attribute.read_f32s(points, w.width);
+        if read.iter().any(|v| !v.is_finite()) {
+            return Err(format!(
+                "attribute {} has a number that is not finite",
+                w.id
+            ));
+        }
         values.push(
             read.into_iter()
                 .map(|v| {
@@ -85,4 +91,61 @@ pub(crate) fn decode(bytes: &[u8], wanted: &[Wanted]) -> Result<Decoded, String>
         );
     }
     Ok(Decoded { indices, values })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use draco_core::{
+        EncoderBuffer, EncoderOptions, GeometryAttributeType, PointAttribute, PointIndex,
+    };
+
+    /// A triangle whose positions are stored unquantized, one of them `x`.
+    fn triangle(x: f32) -> (Vec<u8>, u32) {
+        let mut mesh = Mesh::new();
+        let mut position = PointAttribute::new();
+        position.init(
+            GeometryAttributeType::Position,
+            3,
+            DataType::Float32,
+            false,
+            3,
+        );
+        for (i, p) in [[x, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+            .iter()
+            .enumerate()
+        {
+            let bytes: Vec<u8> = p.iter().flat_map(|v: &f32| v.to_le_bytes()).collect();
+            position.buffer_mut().write(i * 12, &bytes);
+        }
+        let id = mesh.add_attribute(position);
+        mesh.add_face([0, 1, 2].map(PointIndex));
+        let uid = mesh.attribute(id).unique_id();
+        let mut encoder = draco_core::MeshEncoder::new();
+        encoder.set_mesh(mesh);
+        let mut options = EncoderOptions::new();
+        options.set_encoding_method(0);
+        let mut out = EncoderBuffer::new();
+        encoder.encode(&options, &mut out).unwrap();
+        (out.data().to_vec(), uid)
+    }
+
+    #[test]
+    fn numbers_that_are_not_finite_are_refused() {
+        let wanted = |id| {
+            [Wanted {
+                id,
+                width: 3,
+                normalized: false,
+            }]
+        };
+        let (bytes, id) = triangle(0.5);
+        let got = decode(&bytes, &wanted(id)).unwrap();
+        assert_eq!(got.values[0][0], 0.5);
+        for x in [f32::NAN, f32::INFINITY] {
+            let (bytes, id) = triangle(x);
+            let err = decode(&bytes, &wanted(id)).err().unwrap();
+            assert!(err.contains("not finite"), "{err}");
+        }
+    }
 }

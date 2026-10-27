@@ -1018,8 +1018,8 @@ fn a_meshopt_compressed_glb_imports_as_the_plain_one_does() {
 }
 
 /// A glb of the square's two triangles (six corners) with `KHR_draco_mesh_compression`:
-/// positions and red-then-green byte colors.
-fn draco_square(name: &str, damage: bool) -> String {
+/// positions and red-then-green byte colors, read through a color accessor of `color_kind`.
+fn draco_square(name: &str, damage: bool, color_kind: &str) -> String {
     use draco_core::{
         DataType, EncoderBuffer, EncoderOptions, GeometryAttributeType, Mesh, MeshEncoder,
         PointAttribute, PointIndex,
@@ -1076,7 +1076,7 @@ fn draco_square(name: &str, damage: bool) -> String {
             "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": bin.len()}],
             "accessors": [
                 {"componentType": 5126, "count": 6, "type": "VEC3"},
-                {"componentType": 5121, "normalized": true, "count": 6, "type": "VEC3"},
+                {"componentType": 5121, "normalized": true, "count": 6, "type": color_kind},
                 {"componentType": 5125, "count": 6, "type": "SCALAR"}],
             "buffers": [{"byteLength": bin.len()}],
         }),
@@ -1087,7 +1087,7 @@ fn draco_square(name: &str, damage: bool) -> String {
 #[test]
 fn a_draco_compressed_glb_imports_with_its_colors() {
     let mut d = doc();
-    let report = import(&mut d, &draco_square("draco.glb", false));
+    let report = import(&mut d, &draco_square("draco.glb", false, "VEC3"));
     assert_eq!(report["faces"], 2, "{report}");
     let mut got = material_colors(&d);
     got.sort();
@@ -1101,10 +1101,21 @@ fn a_draco_compressed_glb_imports_with_its_colors() {
     let mut d = doc();
     let err = run(
         &mut d,
-        json!({"type": "import", "path": draco_square("draco-bad.glb", true)}),
+        json!({"type": "import", "path": draco_square("draco-bad.glb", true, "VEC3")}),
     )
     .unwrap_err();
     assert_eq!(err.0, ErrorKind::File, "{}", err.1);
     assert!(err.1.contains("Draco"), "{}", err.1);
     assert!(d.scene().triangles().is_empty());
+
+    // A color accessor that is not VEC3 or VEC4 leaves the colors out: one plain square.
+    for kind in ["SCALAR", "VEC2"] {
+        let mut d = doc();
+        let report = import(
+            &mut d,
+            &draco_square(&format!("draco-{kind}.glb"), false, kind),
+        );
+        assert_eq!(report["faces"], 1, "{report}");
+        assert!(material_colors(&d).is_empty(), "{kind}");
+    }
 }

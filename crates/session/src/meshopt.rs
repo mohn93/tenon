@@ -434,7 +434,8 @@ fn exponential(out: &mut [u8]) {
     for e in out.as_chunks_mut::<4>().0 {
         let v = i32::from_le_bytes([e[0], e[1], e[2], e[3]]);
         let (exp, mantissa) = (v >> 24, (v << 8) >> 8);
-        let f = 2f32.powi(exp.clamp(-100, 100)) * mantissa as f32;
+        // ldexp: exact in f64 for every exponent, then rounded once.
+        let f = (f64::from(mantissa) * 2f64.powi(exp)) as f32;
         e.copy_from_slice(&f.to_le_bytes());
     }
 }
@@ -641,9 +642,10 @@ mod tests {
             .map(|b| i16::from_le_bytes(*b))
             .collect();
         assert_eq!(q, [0, 0, 0, 32767]);
-        // Exponential: exponent -2, mantissa 12 is 3.0; exponent 3, mantissa -1 is -8.0.
+        // Exponential: exponent -2, mantissa 12 is 3.0; exponent 3, mantissa -1 is -8.0;
+        // exponent 120, mantissa 1 is 2^120, and exponent -128 mantissa 4 is 2^-126.
         let mut v = Vec::new();
-        for (e, m) in [(-2i32, 12i32), (3, -1)] {
+        for (e, m) in [(-2i32, 12i32), (3, -1), (120, 1), (-128, 4)] {
             v.extend((((e << 24) as u32) | (m as u32 & 0xff_ffff)).to_le_bytes());
         }
         exponential(&mut v);
@@ -653,7 +655,7 @@ mod tests {
             .iter()
             .map(|b| f32::from_le_bytes(*b))
             .collect();
-        assert_eq!(f, [3.0, -8.0]);
+        assert_eq!(f, [3.0, -8.0, 2f32.powi(120), 2f32.powi(-126)]);
     }
 
     #[test]

@@ -1026,11 +1026,12 @@ impl Data<'_> {
                 .accessors
                 .get(acc)
                 .ok_or(format!("accessor {acc} does not exist"))?;
-            let width = match acc.kind.as_str() {
-                "SCALAR" => 1,
-                "VEC2" => 2,
-                "VEC3" => 3,
-                "VEC4" => 4,
+            // Each attribute is read in the element type glTF gives it; an accessor of
+            // another type is left out, as `read` would refuse it.
+            let width = match (name, acc.kind.as_str()) {
+                ("POSITION" | "NORMAL" | "COLOR_0", "VEC3") => 3,
+                ("COLOR_0", "VEC4") => 4,
+                (_, "VEC2") if name.starts_with("TEXCOORD_") => 2,
                 _ => continue,
             };
             if name == "COLOR_0"
