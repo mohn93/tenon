@@ -60,7 +60,7 @@ writes `packaging/icons/` (`app.icns`, `app.ico`, PNGs). The outputs are committ
 ## Help > Check for Updates
 
 On desktops only (the browser build hides it). Choosing it asks
-`https://api.github.com/repos/mohn93/sketchup/releases/latest` once and shows "Version X is
+`https://api.github.com/repos/mohn93/tenon/releases/latest` once and shows "Version X is
 available" with a button that opens the release page in the browser, "You're up to date", "No
 releases published yet" (no release exists), or the error. The app makes no request at start or
 in the background, and never downloads or installs anything. The new HTTP dependency is `ureq`

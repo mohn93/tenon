@@ -44,7 +44,7 @@ claude mcp add tenon-live -- C:\path\to\app.exe --mcp --live tenon-main
 The first runs its own headless model; the second drives a window started with
 `app.exe --socket tenon-main`. Claude Desktop reads
 `%APPDATA%\Claude\claude_desktop_config.json`; the entry has the same shape as in
-[mcp.md](https://github.com/mohn93/sketchup/blob/main/docs/mcp.md), with `command` set to the path of `app.exe` (backslashes doubled in JSON).
+[mcp.md](https://github.com/mohn93/tenon/blob/main/docs/mcp.md), with `command` set to the path of `app.exe` (backslashes doubled in JSON).
 
 ## File locations
 
@@ -52,7 +52,7 @@ The first runs its own headless model; the second drives a window started with
 |---|---|
 | Preferences | `%APPDATA%\tenon\prefs.json` |
 | Recovery files (autosaves, work an agent discards, their `.json` notes and the open windows' `session-*.lock` files) | `%LOCALAPPDATA%\tenon\recovery\` |
-| Agent API | the named pipe `\\.\pipe\tenon-<pid>` (see [agent-api.md](https://github.com/mohn93/sketchup/blob/main/docs/agent-api.md)) |
+| Agent API | the named pipe `\\.\pipe\tenon-<pid>` (see [agent-api.md](https://github.com/mohn93/tenon/blob/main/docs/agent-api.md)) |
 
 `APPDATA` and `LOCALAPPDATA` count only when set to an absolute path (a drive and a backslash,
 or a share). A missing or unusable one falls back to `%USERPROFILE%\AppData\Roaming` or
@@ -80,7 +80,7 @@ case requests use, and a share and the same folder by drive letter are different
 a mapped or `subst` drive is compared as the drive path it was given as, so requests must use
 relative paths or the real (UNC) path: a request's drive is not resolved before the comparison,
 and one that does not match is refused (it fails closed). Details in
-Access and safety in [agent-api.md](https://github.com/mohn93/sketchup/blob/main/docs/agent-api.md).
+Access and safety in [agent-api.md](https://github.com/mohn93/tenon/blob/main/docs/agent-api.md).
 
 ## The zip from CI
 
