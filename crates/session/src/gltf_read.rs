@@ -3,21 +3,25 @@
 //! texture, and the node tree. Animations, skins, cameras, lights and morph targets are left
 //! out and named in the warnings.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use glam::{DMat4, DQuat, DVec2, DVec3};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::draco;
 use crate::import::{MAX_IMPORT_BYTES, MAX_IMPORT_POINTS, MAX_IMPORT_POLYGONS};
+use crate::meshopt;
 use crate::scene_read::{
     FileUp, IMAGE_MISSING, ImageBudget, MAX_SCENE_ITEMS, MAX_SCENE_NODES, ReadScene, SceneMaterial,
-    SceneMesh, SceneNode, ScenePolygon, SideFiles, counted, srgb_byte,
+    SceneMesh, SceneNode, ScenePolygon, SideFiles, counted, paint_vertex_colors, srgb_byte,
 };
 
 /// Extensions a file may require that change nothing this reader reads, or that it applies
-/// (`KHR_texture_transform`).
-const HARMLESS: [&str; 5] = [
+/// (`KHR_texture_transform`, and the two compressions, decoded here).
+const HARMLESS: [&str; 7] = [
+    "EXT_meshopt_compression",
+    "KHR_draco_mesh_compression",
     "KHR_materials_emissive_strength",
     "KHR_materials_unlit",
     "KHR_texture_transform",
@@ -81,6 +85,7 @@ struct GPrimitive {
     material: Option<usize>,
     mode: Option<u32>,
     targets: Vec<Value>,
+    extensions: BTreeMap<String, Value>,
 }
 
 #[derive(Deserialize, Default)]
@@ -195,6 +200,7 @@ struct GView {
     byte_offset: u64,
     byte_length: u64,
     byte_stride: Option<u64>,
+    extensions: BTreeMap<String, Value>,
 }
 
 #[derive(Deserialize, Default)]
@@ -202,6 +208,7 @@ struct GView {
 struct GBuffer {
     uri: Option<String>,
     byte_length: u64,
+    extensions: BTreeMap<String, Value>,
 }
 
 /// Most objects a glTF's JSON may hold, and most values its arrays may hold in all: each
@@ -326,10 +333,13 @@ pub(crate) fn read_gltf(bytes: &[u8], side: &SideFiles) -> Result<ReadScene, Str
         }
     }
     let mut warnings = Vec::new();
-    let buffers = read_buffers(&doc, bin, side)?;
+    let compressed = meshopt_views(&doc)?;
+    let buffers = read_buffers(&doc, bin, side, &compressed)?;
+    let decoded = decode_views(&buffers, &compressed)?;
     let data = Data {
         doc: &doc,
         buffers: &buffers,
+        decoded: &decoded,
     };
 
     // Which texture coordinate set each material's base-color texture uses.
@@ -383,17 +393,14 @@ pub(crate) fn read_gltf(bytes: &[u8], side: &SideFiles) -> Result<ReadScene, Str
             name: m.name.clone(),
             ..SceneMesh::default()
         };
-        // Normals and coordinates are kept only when every primitive has them.
+        // Normals are kept only when every primitive has them; coordinates and colors are
+        // filled in (zeros, white) for the primitives that lack them.
         let all_normals = m
             .primitives
             .iter()
             .all(|p| p.attributes.contains_key("NORMAL"));
         let set_of = |p: &GPrimitive| p.material.and_then(|i| uv_set.get(i).copied().flatten());
-        let all_uvs = m.primitives.iter().any(|p| set_of(p).is_some())
-            && m.primitives.iter().all(|p| {
-                p.attributes
-                    .contains_key(&format!("TEXCOORD_{}", set_of(p).unwrap_or(0)))
-            });
+        let (mut any_uvs, mut any_colors) = (false, false);
         for p in &m.primitives {
             morphs += usize::from(!p.targets.is_empty());
             let mode = p.mode.unwrap_or(4);
@@ -405,44 +412,34 @@ pub(crate) fn read_gltf(bytes: &[u8], side: &SideFiles) -> Result<ReadScene, Str
                 unread += 1;
                 continue;
             }
-            let Some(&position) = p.attributes.get("POSITION") else {
+            if !p.attributes.contains_key("POSITION") {
                 unread += 1;
                 continue;
-            };
-            let positions = data.vec3(position)?;
+            }
+            let got = data.primitive(p, mode, all_normals, set_of(p))?;
+            let positions = got.positions;
             if points + positions.len() > MAX_IMPORT_POINTS {
                 return Err(format!("more than {MAX_IMPORT_POINTS} positions"));
             }
             points += positions.len();
-            let normals = match (all_normals, p.attributes.get("NORMAL")) {
-                (true, Some(&n)) => Some(data.vec3(n)?),
-                _ => None,
-            };
-            let uvs = if all_uvs {
-                let set = set_of(p).unwrap_or(0);
-                match p.attributes.get(&format!("TEXCOORD_{set}")) {
-                    Some(&t) => {
-                        let uvs = data.vec2(t)?;
-                        match p
-                            .material
-                            .and_then(|i| uv_transform.get(i).copied().flatten())
-                        {
-                            Some(x) => Some(uvs.into_iter().map(|uv| x.apply(uv)).collect()),
-                            None => Some(uvs),
-                        }
-                    }
-                    None => None,
+            let uvs = got.uvs.map(|uvs| {
+                match p
+                    .material
+                    .and_then(|i| uv_transform.get(i).copied().flatten())
+                {
+                    Some(x) => uvs.into_iter().map(|uv| x.apply(uv)).collect(),
+                    None => uvs,
                 }
-            } else {
-                None
-            };
+            });
+            let (normals, colors) = (got.normals, got.colors);
             if normals.as_ref().is_some_and(|n| n.len() != positions.len())
                 || uvs.as_ref().is_some_and(|t| t.len() != positions.len())
+                || colors.as_ref().is_some_and(|c| c.len() != positions.len())
             {
                 return Err("a primitive's attributes have different counts".into());
             }
-            let indices: Vec<usize> = match p.indices {
-                Some(i) => data.indices(i)?,
+            let indices: Vec<usize> = match got.indices {
+                Some(i) => i,
                 None => (0..positions.len()).collect(),
             };
             let triangles = triangles(mode, &indices);
@@ -451,13 +448,16 @@ pub(crate) fn read_gltf(bytes: &[u8], side: &SideFiles) -> Result<ReadScene, Str
             }
             polygons += triangles.len();
             let start = mesh.points.len();
+            let n = positions.len();
             mesh.points.extend(positions);
             if let Some(n) = normals {
                 mesh.normals.extend(n);
             }
-            if let Some(t) = uvs {
-                mesh.uvs.extend(t);
-            }
+            any_uvs |= uvs.is_some();
+            mesh.uvs.extend(uvs.unwrap_or_else(|| vec![DVec2::ZERO; n]));
+            any_colors |= colors.is_some();
+            mesh.colors
+                .extend(colors.unwrap_or_else(|| vec![[1.0; 3]; n]));
             let material = p.material.filter(|i| *i < materials.len());
             let count = mesh.points.len() - start;
             for t in triangles {
@@ -472,6 +472,12 @@ pub(crate) fn read_gltf(bytes: &[u8], side: &SideFiles) -> Result<ReadScene, Str
                     material,
                 });
             }
+        }
+        if !any_uvs {
+            mesh.uvs.clear();
+        }
+        if !any_colors {
+            mesh.colors.clear();
         }
         meshes.push(mesh);
     }
@@ -553,7 +559,7 @@ pub(crate) fn read_gltf(bytes: &[u8], side: &SideFiles) -> Result<ReadScene, Str
             if sheared == 1 { "was" } else { "were" },
         ));
     }
-    Ok(ReadScene {
+    let mut scene = ReadScene {
         meshes,
         materials,
         nodes,
@@ -563,15 +569,142 @@ pub(crate) fn read_gltf(bytes: &[u8], side: &SideFiles) -> Result<ReadScene, Str
         v_down: true,
         skipped,
         warnings,
-    })
+    };
+    paint_vertex_colors(&mut scene);
+    Ok(scene)
+}
+
+/// `EXT_meshopt_compression` on a buffer view.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MeshoptView {
+    buffer: usize,
+    #[serde(default)]
+    byte_offset: u64,
+    byte_length: u64,
+    byte_stride: u64,
+    count: u64,
+    mode: String,
+    #[serde(default)]
+    filter: Option<String>,
+}
+
+const MESHOPT: &str = "EXT_meshopt_compression";
+
+/// The buffer views that are meshopt compressed, by view index.
+fn meshopt_views(doc: &Gltf) -> Result<Vec<(usize, MeshoptView)>, String> {
+    let mut out = Vec::new();
+    for (i, v) in doc.buffer_views.iter().enumerate() {
+        if let Some(ext) = v.extensions.get(MESHOPT) {
+            let m: MeshoptView = serde_json::from_value(ext.clone())
+                .map_err(|e| format!("buffer view {i} has a broken {MESHOPT} ({e})"))?;
+            out.push((i, m));
+        }
+    }
+    Ok(out)
+}
+
+/// Each compressed view's bytes, decoded, with its stride. Fails, saying why, for a view
+/// outside its buffer, an unknown mode or filter, a broken stream, or more than
+/// `MAX_IMPORT_BYTES` of output in all.
+fn decode_views(
+    buffers: &[Vec<u8>],
+    views: &[(usize, MeshoptView)],
+) -> Result<HashMap<usize, (Vec<u8>, u64)>, String> {
+    let mut out = HashMap::new();
+    let mut total = 0u64;
+    for (i, m) in views {
+        let buffer = buffers.get(m.buffer).ok_or(format!(
+            "buffer view {i} names a compressed buffer that does not exist"
+        ))?;
+        let end = m
+            .byte_offset
+            .checked_add(m.byte_length)
+            .filter(|e| *e <= buffer.len() as u64)
+            .ok_or(format!(
+                "buffer view {i}'s compressed data runs past its buffer"
+            ))?;
+        let mode = match m.mode.as_str() {
+            "ATTRIBUTES" => meshopt::Mode::Attributes,
+            "TRIANGLES" => meshopt::Mode::Triangles,
+            "INDICES" => meshopt::Mode::Indices,
+            other => {
+                return Err(format!(
+                    "buffer view {i} has an unknown {MESHOPT} mode {other}"
+                ));
+            }
+        };
+        let filter = match m.filter.as_deref() {
+            None | Some("NONE") => meshopt::Filter::None,
+            Some("OCTAHEDRAL") => meshopt::Filter::Octahedral,
+            Some("QUATERNION") => meshopt::Filter::Quaternion,
+            Some("EXPONENTIAL") => meshopt::Filter::Exponential,
+            Some(other) => {
+                return Err(format!(
+                    "buffer view {i} has an unknown {MESHOPT} filter {other}"
+                ));
+            }
+        };
+        if m.byte_stride == 0 || m.byte_stride > 256 {
+            return Err(format!(
+                "buffer view {i} has a compressed stride outside 1-256"
+            ));
+        }
+        let size = m
+            .count
+            .checked_mul(m.byte_stride)
+            .filter(|s| total.saturating_add(*s) <= MAX_IMPORT_BYTES)
+            .ok_or(format!(
+                "the compressed views decode to over {MAX_IMPORT_BYTES} bytes"
+            ))?;
+        total += size;
+        let bytes = meshopt::decode(
+            mode,
+            filter,
+            &buffer[m.byte_offset as usize..end as usize],
+            m.count as usize,
+            m.byte_stride as usize,
+        )
+        .map_err(|e| format!("buffer view {i}: {e}"))?;
+        out.insert(*i, (bytes, m.byte_stride));
+    }
+    Ok(out)
 }
 
 /// Each buffer's bytes: the `.glb`'s BIN chunk for a first buffer without a URI, else what
-/// its URI names. Fails for a missing or short buffer, or more than `MAX_IMPORT_BYTES` in all.
-fn read_buffers(doc: &Gltf, bin: Option<&[u8]>, side: &SideFiles) -> Result<Vec<Vec<u8>>, String> {
+/// its URI names. A fallback buffer (what only uncompressed copies of compressed views use)
+/// is left empty and unread. Fails for a missing or short buffer, or more than
+/// `MAX_IMPORT_BYTES` in all.
+fn read_buffers(
+    doc: &Gltf,
+    bin: Option<&[u8]>,
+    side: &SideFiles,
+    compressed: &[(usize, MeshoptView)],
+) -> Result<Vec<Vec<u8>>, String> {
+    let storage: HashSet<usize> = compressed.iter().map(|(_, m)| m.buffer).collect();
+    let parents: HashSet<usize> = compressed
+        .iter()
+        .map(|(i, _)| doc.buffer_views[*i].buffer)
+        .collect();
+    let plain_users: HashSet<usize> = doc
+        .buffer_views
+        .iter()
+        .filter(|v| !v.extensions.contains_key(MESHOPT))
+        .map(|v| v.buffer)
+        .collect();
     let mut out = Vec::with_capacity(doc.buffers.len());
     let mut total = 0u64;
     for (i, b) in doc.buffers.iter().enumerate() {
+        let flagged = b
+            .extensions
+            .get(MESHOPT)
+            .and_then(|e| e.get("fallback"))
+            .and_then(Value::as_bool)
+            == Some(true);
+        if flagged || (parents.contains(&i) && !storage.contains(&i) && !plain_users.contains(&i)) {
+            out.push(Vec::new());
+            continue;
+        }
         let bytes = match (&b.uri, i, bin) {
             (Some(uri), _, _) => side
                 .read(uri, MAX_IMPORT_BYTES - total)
@@ -634,11 +767,26 @@ fn triangles(mode: u32, indices: &[usize]) -> Vec<[usize; 3]> {
 struct Data<'a> {
     doc: &'a Gltf,
     buffers: &'a [Vec<u8>],
+    /// Decoded compressed views and their strides, by view index.
+    decoded: &'a HashMap<usize, (Vec<u8>, u64)>,
+}
+
+/// What a primitive gives: positions, and the normals, texture coordinates, colors (linear)
+/// and corner indices it has.
+struct PrimitiveData {
+    positions: Vec<DVec3>,
+    normals: Option<Vec<DVec3>>,
+    uvs: Option<Vec<DVec2>>,
+    colors: Option<Vec<[f64; 3]>>,
+    indices: Option<Vec<usize>>,
 }
 
 impl Data<'_> {
     /// The bytes of buffer view `v`, checked against its buffer.
     fn view(&self, v: usize) -> Result<(&[u8], Option<u64>), String> {
+        if let Some((bytes, stride)) = self.decoded.get(&v) {
+            return Ok((bytes, Some(*stride)));
+        }
         let view = self
             .doc
             .buffer_views
@@ -770,6 +918,174 @@ impl Data<'_> {
             .into_iter()
             .map(|x| x as usize)
             .collect())
+    }
+
+    /// Accessor `a`'s colors (RGB, linear): floats or normalized unsigned integers as a
+    /// VEC3 or VEC4. None for a color accessor of another kind.
+    fn colors(&self, a: usize) -> Result<Option<Vec<[f64; 3]>>, String> {
+        let Some(acc) = self.doc.accessors.get(a) else {
+            return Err(format!("accessor {a} does not exist"));
+        };
+        let width = match acc.kind.as_str() {
+            "VEC3" => 3,
+            "VEC4" => 4,
+            _ => return Ok(None),
+        };
+        if !(acc.component_type == 5126
+            || acc.normalized && matches!(acc.component_type, 5121 | 5123))
+        {
+            return Ok(None);
+        }
+        let values = self.read(a, width, MAX_IMPORT_POINTS as u64)?;
+        Ok(Some(
+            values
+                .chunks_exact(width)
+                .map(|c| [c[0], c[1], c[2]])
+                .collect(),
+        ))
+    }
+
+    /// A primitive's data: through its accessors, or decoded from its Draco stream. Normals
+    /// are read when `normals`, texture coordinates of `set` when it is given, `COLOR_0`
+    /// when it is there.
+    fn primitive(
+        &self,
+        p: &GPrimitive,
+        mode: u32,
+        normals: bool,
+        set: Option<usize>,
+    ) -> Result<PrimitiveData, String> {
+        let uv_name = set.map(|s| format!("TEXCOORD_{s}"));
+        if let Some(ext) = p.extensions.get("KHR_draco_mesh_compression") {
+            if mode != 4 {
+                return Err(
+                    "a Draco primitive that is not a triangle list is not supported".into(),
+                );
+            }
+            return self.draco(p, ext, normals, uv_name.as_deref());
+        }
+        let positions = self.vec3(p.attributes["POSITION"])?;
+        let normals = match (normals, p.attributes.get("NORMAL")) {
+            (true, Some(&n)) => Some(self.vec3(n)?),
+            _ => None,
+        };
+        let uvs = match uv_name.as_ref().and_then(|n| p.attributes.get(n)) {
+            Some(&t) => Some(self.vec2(t)?),
+            None => None,
+        };
+        let colors = match p.attributes.get("COLOR_0") {
+            Some(&c) => self.colors(c)?,
+            None => None,
+        };
+        let indices = match p.indices {
+            Some(i) => Some(self.indices(i)?),
+            None => None,
+        };
+        Ok(PrimitiveData {
+            positions,
+            normals,
+            uvs,
+            colors,
+            indices,
+        })
+    }
+
+    /// A primitive decoded from its `KHR_draco_mesh_compression` stream: the stream's
+    /// triangles, and the attributes the extension names, in the accessors' units.
+    fn draco(
+        &self,
+        p: &GPrimitive,
+        ext: &Value,
+        normals: bool,
+        uv_name: Option<&str>,
+    ) -> Result<PrimitiveData, String> {
+        let view = ext
+            .get("bufferView")
+            .and_then(Value::as_u64)
+            .ok_or("a Draco primitive names no buffer view")? as usize;
+        let ids = ext
+            .get("attributes")
+            .and_then(Value::as_object)
+            .ok_or("a Draco primitive names no attributes")?;
+        let (bytes, _) = self.view(view)?;
+        // The attributes to take, and the accessor each is read in the units of.
+        let mut wanted = Vec::new();
+        let mut names = Vec::new();
+        for name in ["POSITION", "NORMAL", "COLOR_0"].into_iter().chain(uv_name) {
+            if name == "NORMAL" && !normals {
+                continue;
+            }
+            let (Some(id), Some(&acc)) = (
+                ids.get(name).and_then(Value::as_u64),
+                p.attributes.get(name),
+            ) else {
+                continue;
+            };
+            let acc = self
+                .doc
+                .accessors
+                .get(acc)
+                .ok_or(format!("accessor {acc} does not exist"))?;
+            // Each attribute is read in the element type glTF gives it; an accessor of
+            // another type is left out, as `read` would refuse it.
+            let width = match (name, acc.kind.as_str()) {
+                ("POSITION" | "NORMAL" | "COLOR_0", "VEC3") => 3,
+                ("COLOR_0", "VEC4") => 4,
+                (_, "VEC2") if name.starts_with("TEXCOORD_") => 2,
+                _ => continue,
+            };
+            if name == "COLOR_0"
+                && !(acc.component_type == 5126
+                    || acc.normalized && matches!(acc.component_type, 5121 | 5123))
+            {
+                continue;
+            }
+            wanted.push(draco::Wanted {
+                id: u32::try_from(id).map_err(|_| "a Draco attribute id is too large")?,
+                width,
+                normalized: acc.normalized,
+            });
+            names.push(name);
+        }
+        if !names.contains(&"POSITION") {
+            return Err("a Draco primitive has no position attribute".into());
+        }
+        let decoded = draco::decode(bytes, &wanted).map_err(|e| format!("a Draco stream: {e}"))?;
+        let mut values: HashMap<&str, (Vec<f64>, usize)> = names
+            .into_iter()
+            .zip(
+                decoded
+                    .values
+                    .into_iter()
+                    .zip(wanted.iter().map(|w| w.width)),
+            )
+            .collect();
+        let vec3 = |v: Vec<f64>| -> Vec<DVec3> {
+            v.as_chunks::<3>()
+                .0
+                .iter()
+                .map(|c| DVec3::new(c[0], c[1], c[2]))
+                .collect()
+        };
+        let positions = vec3(values.remove("POSITION").map(|v| v.0).unwrap_or_default());
+        let normals = values.remove("NORMAL").map(|v| vec3(v.0));
+        let uvs = uv_name.and_then(|n| values.remove(n)).map(|(v, _)| {
+            v.as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| DVec2::new(c[0], c[1]))
+                .collect()
+        });
+        let colors = values
+            .remove("COLOR_0")
+            .map(|(v, width)| v.chunks_exact(width).map(|c| [c[0], c[1], c[2]]).collect());
+        Ok(PrimitiveData {
+            positions,
+            normals,
+            uvs,
+            colors,
+            indices: Some(decoded.indices),
+        })
     }
 
     /// Image `i`'s file bytes, from its buffer view or URI, or why they could not be read.
