@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn the_accept_attribute_lists_each_extension_once() {
         let filters = vec![
-            Filter::new("both", &["tnn", "skr", "skp"]),
+            Filter::new("both", &["tnn", "skp"]),
             Filter::new("one", &["tnn"]),
             Filter::new("other", &["skp"]),
         ];
