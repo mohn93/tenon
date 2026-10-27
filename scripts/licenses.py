@@ -71,6 +71,7 @@ FALLBACKS = [
     (r"profiling", ["profiling-MIT.txt", "profiling-Apache-2.0.txt"]),
     (r"clipboard-win", ["clipboard-win-BSL-1.0.txt"]),
     (r"spirv", ["rspirv-Apache-2.0.txt"]),
+    (r"draco-core", ["draco-core-Apache-2.0.txt"]),
 ]
 
 # Licence texts of bundled content kept under other names, beside the crate's own licence: paths
