@@ -21,6 +21,16 @@
 //! assembly. A drive whose steps (of at most 10 degrees for every joint coupled to it) would
 //! number more than [`MAX_DRIVE_STEPS`] is refused before any work.
 //!
+//! A joint the drive need not move is held at its value: one on no closed loop of joints (the
+//! ground counts as one part), not driven, not following a cam and coupled only to joints held
+//! the same way gets a residual per value (and slide), its value less its value at the start
+//! of the step. Without it, joints in series (an arm's shoulder, elbow and wrist) are free
+//! together and the least motion of the parts shares the driven turn among them. A joint on a
+//! loop (a crank's rod and piston) stays free, as the loop must move, and so does a ball
+//! joint, which has no value to hold. Values are measured from where the parts stand when the
+//! drive starts (a part placed by hand keeps its place), and a coupling not met then (an
+//! offset set since) frees its joints so the drive meets it.
+//!
 //! A cam follower in the assembly (its joint's part is reached from the cam, or through its
 //! own joints) is met in a second pass of each step: once the other residuals are met with
 //! the parts where they stand, its residual, the follower joint's value less the value where
@@ -110,6 +120,10 @@ struct Link {
     driven: bool,
 }
 
+/// A joint held at its value through a step: one residual for its value, a second for a
+/// cylindrical joint's slide.
+type Hold = ([f64; 2], usize);
+
 /// A coupling of the assembly: `links[driven]`'s value less `ratio` times `links[driver]`'s
 /// less `offset` is held at 0.
 struct Bond {
@@ -147,6 +161,8 @@ enum Outcome {
 struct System {
     links: Vec<Link>,
     bonds: Vec<Bond>,
+    /// The links held at their values (see the module's notes).
+    holds: Vec<usize>,
     riders: Vec<Rider>,
     /// Whether the riders' residuals count (the second pass of a step).
     riding: bool,
@@ -279,6 +295,14 @@ impl System {
             .iter()
             .map(|b| self.bond_residual(b, &pose).powi(2))
             .sum();
+        let holds: f64 = self
+            .holds
+            .iter()
+            .map(|k| {
+                let (r, n) = self.hold_residual(*k, &pose);
+                r[..n].iter().map(|x| x * x).sum::<f64>()
+            })
+            .sum();
         let mut riders = 0.0;
         if self.riding {
             for r in &self.riders {
@@ -289,7 +313,7 @@ impl System {
                 }
             }
         }
-        joints + bonds + riders
+        joints + bonds + holds + riders
     }
 
     /// The residual of a cam follower with the parts at `pose`: zero when it touches; None
@@ -373,6 +397,21 @@ impl System {
         }
     }
 
+    /// The residuals holding `links[k]` with the parts at `pose`: its value (and a cylindrical
+    /// joint's slide) less where it stood at the start of the step.
+    fn hold_residual(&self, k: usize, pose: &dyn Fn(Body) -> DAffine3) -> Hold {
+        let link = &self.links[k];
+        let a = link.frame_a.world(&pose(link.a));
+        let b = link.frame_b.world(&pose(link.b));
+        let (value, slide) = self.near[k];
+        let (v, sl) = measure_joint(link.kind, &a, &b, value, slide);
+        if link.kind == JointKind::Cylindrical {
+            ([v - value, sl - slide], 2)
+        } else {
+            ([v - value, 0.0], 1)
+        }
+    }
+
     /// The normal equations `J^T J` (row-major, 6 unknowns per part) and `J^T r` at the
     /// current poses.
     fn normal_equations(&self, target: Target) -> (Vec<f64>, Vec<f64>) {
@@ -440,6 +479,42 @@ impl System {
                 jtr[*p] += dp * r0;
                 for (q, dq) in &cols {
                     jtj[p * n + q] += dp * dq;
+                }
+            }
+        }
+        for k in &self.holds {
+            let current = |b: Body| self.pose(b);
+            let (r0, m) = self.hold_residual(*k, &current);
+            let link = &self.links[*k];
+            let mut parts: Vec<usize> = [link.a, link.b]
+                .iter()
+                .filter_map(|b| match b {
+                    Body::Part(i) => Some(*i),
+                    Body::Held(_) => None,
+                })
+                .collect();
+            parts.dedup();
+            let mut cols: Vec<(usize, [f64; 2])> = Vec::with_capacity(12);
+            for i in parts {
+                for u in 0..6 {
+                    let at = |h: f64| {
+                        let (w, t) = unknown(u, h);
+                        let moved = rigid(w, t, self.pivots[i]) * self.poses[i];
+                        let pose = |b: Body| match b {
+                            Body::Part(j) if j == i => moved,
+                            b => self.pose(b),
+                        };
+                        self.hold_residual(*k, &pose).0
+                    };
+                    let (plus, minus) = (at(NUDGE), at(-NUDGE));
+                    let d = [0, 1].map(|r| (plus[r] - minus[r]) / (2.0 * NUDGE));
+                    cols.push((6 * i + u, d));
+                }
+            }
+            for (p, dp) in &cols {
+                jtr[*p] += (0..m).map(|r| dp[r] * r0[r]).sum::<f64>();
+                for (q, dq) in &cols {
+                    jtj[p * n + q] += (0..m).map(|r| dp[r] * dq[r]).sum::<f64>();
                 }
             }
         }
@@ -683,7 +758,8 @@ fn refuse(why: String) -> KernelError {
 impl Scene {
     /// Sets joint `id` to `value` (radians or meters; `slide` too for a cylindrical joint,
     /// absent keeping it) and moves the parts connected to it through joints so that every
-    /// joint between them holds, the other joints' values free. Parts joined to the ground
+    /// joint between them holds. The other joints on closed loops follow the new pose; the rest
+    /// (joints in series, as in an arm) keep their values. Parts joined to the ground
     /// keep the ground fixed; an assembly with no ground holds the joint's part `a` in place.
     /// The moved parts' transforms and every changed joint value are the steps, applied. A
     /// value outside the joint's limits, a pose where the joints cannot all be met, or one
@@ -738,6 +814,23 @@ impl Scene {
                 (j.value, j.slide)
             })
             .collect();
+        // Parts placed by hand since the values were stored stand at other values: the drive
+        // starts from where they stand, and holds the joints there.
+        system.measure(
+            &mut values,
+            Target {
+                value: driven.value,
+                slide: driven.slide,
+            },
+        );
+        system.near.clone_from(&values);
+        let current = |b: Body| system.pose(b);
+        let unmet: Vec<bool> = system
+            .bonds
+            .iter()
+            .map(|b| system.bond_residual(b, &current).abs() > DRIVE_TOLERANCE)
+            .collect();
+        system.holds = held_links(&system.links, &system.bonds, &unmet, &system.riders);
         let steps =
             drive_steps(&driven, value, slide).max(system.coupled_steps(value - driven.value));
         if steps > MAX_DRIVE_STEPS {
@@ -1093,6 +1186,7 @@ impl Scene {
         System {
             links,
             bonds,
+            holds: Vec::new(),
             riders,
             riding: false,
             near,
@@ -1101,6 +1195,78 @@ impl Scene {
             pivots,
         }
     }
+}
+
+/// The links a drive holds at their values: each on no closed loop of joints (the held parts
+/// and the ground are one node), with a value, not driven and not following a cam, and every
+/// link coupled to it the same. The joints of a coupling `unmet` at the start (an offset the
+/// parts do not stand at yet) are free, so the drive meets it.
+fn held_links(links: &[Link], bonds: &[Bond], unmet: &[bool], riders: &[Rider]) -> Vec<usize> {
+    let node = |b: Body| match b {
+        Body::Held(_) => 0,
+        Body::Part(i) => i + 1,
+    };
+    let nodes = links
+        .iter()
+        .flat_map(|l| [node(l.a), node(l.b)])
+        .max()
+        .map_or(1, |n| n + 1);
+    let mut edges: Vec<Vec<(usize, usize)>> = vec![Vec::new(); nodes];
+    for (k, l) in links.iter().enumerate() {
+        edges[node(l.a)].push((node(l.b), k));
+        edges[node(l.b)].push((node(l.a), k));
+    }
+    // A link is on a loop when its two ends still meet without it.
+    let on_loop = |k: usize| {
+        let (from, to) = (node(links[k].a), node(links[k].b));
+        let mut seen = vec![false; nodes];
+        let mut queue = VecDeque::from([from]);
+        seen[from] = true;
+        while let Some(x) = queue.pop_front() {
+            for &(y, e) in &edges[x] {
+                if e != k && !seen[y] {
+                    if y == to {
+                        return true;
+                    }
+                    seen[y] = true;
+                    queue.push_back(y);
+                }
+            }
+        }
+        false
+    };
+    let mut free: Vec<bool> = links
+        .iter()
+        .enumerate()
+        .map(|(k, l)| {
+            l.driven || !l.kind.has_value() || riders.iter().any(|r| r.link == k) || on_loop(k)
+        })
+        .collect();
+    for (b, _) in bonds.iter().zip(unmet).filter(|(_, u)| **u) {
+        free[b.driver] = true;
+        free[b.driven] = true;
+    }
+    // A coupled group is held only whole.
+    let mut group: Vec<usize> = (0..links.len()).collect();
+    fn root(group: &mut [usize], mut k: usize) -> usize {
+        while group[k] != k {
+            group[k] = group[group[k]];
+            k = group[k];
+        }
+        k
+    }
+    for b in bonds {
+        let (x, y) = (root(&mut group, b.driver), root(&mut group, b.driven));
+        group[x] = y;
+    }
+    let mut group_free = vec![false; links.len()];
+    for (k, _) in free.iter().enumerate().filter(|(_, f)| **f) {
+        let g = root(&mut group, k);
+        group_free[g] = true;
+    }
+    (0..links.len())
+        .filter(|k| !group_free[root(&mut group, *k)])
+        .collect()
 }
 
 /// How many steps of at most 10 degrees turn through `angle` (not negative).

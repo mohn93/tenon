@@ -778,3 +778,274 @@ fn perf_a_thirty_part_engine_drives_in_under_20_ms() {
     eprintln!("worst 10 degree drive: {:.2} ms", worst * 1e3);
     assert!(worst < 0.020, "{worst}");
 }
+
+/// A six-axis arm on the ground: base on a vertical axis, shoulder and elbow on horizontal
+/// ones, a forearm roll, a wrist pitch and a tool roll, each joint 0.3 m further out along X.
+/// Returns the scene, the parts and the joints J1 to J6.
+fn six_axis_arm() -> (Scene, Vec<InstanceId>, Vec<JointId>) {
+    let (mut s, ids) = parts(6);
+    let axes = [DVec3::Z, DVec3::Y, DVec3::Y, DVec3::X, DVec3::Y, DVec3::X];
+    let mut joints = Vec::new();
+    for (k, axis) in axes.iter().enumerate() {
+        let a = (k > 0).then(|| ids[k - 1]);
+        let reference = if *axis == DVec3::Z {
+            DVec3::X
+        } else {
+            DVec3::Z
+        };
+        let at = p(0.3 * k as f64, 0.0, 0.5);
+        joints.push(join(
+            &mut s,
+            JointKind::Revolute,
+            a,
+            ids[k],
+            at,
+            *axis,
+            reference,
+        ));
+    }
+    (s, ids, joints)
+}
+
+#[test]
+fn driving_one_joint_of_a_serial_arm_holds_the_others() {
+    let (mut s, ids, joints) = six_axis_arm();
+    for (k, j) in joints.iter().enumerate() {
+        s.drive_joint(*j, 0.2 * (k as f64 + 1.0), None).unwrap();
+    }
+    let before: Vec<DAffine3> = ids.iter().map(|i| transform(&s, *i)).collect();
+    let values: Vec<f64> = joints.iter().map(|j| value(&s, *j)).collect();
+    // The wrist pitch, J5: the parts before it stay put, the two after it turn about it.
+    s.drive_joint(joints[4], 50f64.to_radians(), None).unwrap();
+    for (k, j) in joints.iter().enumerate() {
+        let want = if k == 4 {
+            50f64.to_radians()
+        } else {
+            values[k]
+        };
+        assert!(
+            (value(&s, *j) - want).abs() < 1e-9,
+            "J{}: {}",
+            k + 1,
+            value(&s, *j)
+        );
+    }
+    for k in 0..4 {
+        assert!(
+            transform(&s, ids[k]).abs_diff_eq(before[k], 1e-9),
+            "part {k} moved"
+        );
+    }
+    let turn = transform(&s, ids[4]) * before[4].inverse();
+    assert!(transform(&s, ids[5]).abs_diff_eq(turn * before[5], 1e-9));
+}
+
+#[test]
+fn a_whole_arm_pose_is_reached_in_one_call() {
+    let (mut s, _, joints) = six_axis_arm();
+    let pose = [40.0, 33.0, -47.0, 120.0, 104.0, -200.0];
+    let wanted: Vec<(JointId, f64, Option<f64>)> = joints
+        .iter()
+        .zip(pose)
+        .map(|(j, d)| (*j, f64::to_radians(d), None))
+        .collect();
+    s.drive_joints(&wanted).unwrap();
+    for (j, d) in joints.iter().zip(pose) {
+        assert!((value(&s, *j) - d.to_radians()).abs() < 1e-9);
+    }
+}
+
+#[test]
+fn coupled_fingers_on_an_arm_hold_while_the_arm_turns() {
+    let (mut s, ids, joints) = six_axis_arm();
+    let d = s.root().instance(ids[0]).unwrap().definition;
+    let mut finger = || {
+        s.place_instance(MeshId::Root, d, DAffine3::IDENTITY)
+            .unwrap()
+            .0
+    };
+    let (f1, f2) = (finger(), finger());
+    let (tool, at) = (ids[5], p(1.6, 0.0, 0.5));
+    let g1 = join(
+        &mut s,
+        JointKind::Prismatic,
+        Some(tool),
+        f1,
+        at,
+        DVec3::Y,
+        DVec3::Z,
+    );
+    let g2 = join(
+        &mut s,
+        JointKind::Prismatic,
+        Some(tool),
+        f2,
+        at,
+        -DVec3::Y,
+        DVec3::Z,
+    );
+    s.add_coupling(kernel::Coupling {
+        driver: g1,
+        driven: g2,
+        ratio: 1.0,
+        offset: 0.0,
+    })
+    .unwrap();
+    s.drive_joint(g1, 0.03, None).unwrap();
+    assert!((value(&s, g2) - 0.03).abs() < 1e-9);
+    s.drive_joint(joints[0], 1.0, None).unwrap();
+    s.drive_joint(joints[2], -0.8, None).unwrap();
+    for (j, want) in [(g1, 0.03), (g2, 0.03), (joints[1], 0.0), (joints[0], 1.0)] {
+        assert!((value(&s, j) - want).abs() < 1e-9, "{}", value(&s, j));
+    }
+}
+
+#[test]
+fn a_coupling_not_yet_met_is_met_by_a_drive_elsewhere() {
+    // Ground -> A; A -> B and A -> C, B and C coupled with an offset they do not stand at yet.
+    let (mut s, ids) = parts(3);
+    let [a, b, c] = [ids[0], ids[1], ids[2]];
+    let ja = join(
+        &mut s,
+        JointKind::Revolute,
+        None,
+        a,
+        DVec3::ZERO,
+        DVec3::Z,
+        DVec3::X,
+    );
+    let jb = join(
+        &mut s,
+        JointKind::Revolute,
+        Some(a),
+        b,
+        p(0.3, 0.0, 0.0),
+        DVec3::Z,
+        DVec3::X,
+    );
+    let jc = join(
+        &mut s,
+        JointKind::Revolute,
+        Some(a),
+        c,
+        p(0.0, 0.3, 0.0),
+        DVec3::Z,
+        DVec3::X,
+    );
+    s.add_coupling(kernel::Coupling {
+        driver: jb,
+        driven: jc,
+        ratio: 1.0,
+        offset: 0.3,
+    })
+    .unwrap();
+    s.drive_joint(ja, 0.5, None).unwrap();
+    assert!((value(&s, jc) - value(&s, jb) - 0.3).abs() < 1e-9);
+}
+
+#[test]
+fn a_part_placed_by_hand_keeps_its_place_when_another_joint_is_driven() {
+    let (mut s, ids) = parts(3);
+    let j0 = join(
+        &mut s,
+        JointKind::Revolute,
+        None,
+        ids[0],
+        DVec3::ZERO,
+        DVec3::Z,
+        DVec3::X,
+    );
+    join(
+        &mut s,
+        JointKind::Revolute,
+        Some(ids[0]),
+        ids[1],
+        p(0.3, 0.0, 0.0),
+        DVec3::Z,
+        DVec3::X,
+    );
+    let j2 = join(
+        &mut s,
+        JointKind::Revolute,
+        Some(ids[1]),
+        ids[2],
+        p(0.6, 0.0, 0.0),
+        DVec3::Z,
+        DVec3::X,
+    );
+    // Turn the last part about its joint by its transform: its stored value stays 0.
+    let pivot = p(0.6, 0.0, 0.0);
+    let turn = DAffine3::from_translation(pivot)
+        * DAffine3::from_quat(DQuat::from_rotation_z(0.4))
+        * DAffine3::from_translation(-pivot);
+    let placed = turn * transform(&s, ids[2]);
+    s.set_instance_transform(MeshId::Root, ids[2], placed)
+        .unwrap();
+    let relative = transform(&s, ids[1]).inverse() * placed;
+    s.drive_joint(j0, 0.7, None).unwrap();
+    assert!((value(&s, j2) - 0.4).abs() < 1e-9, "{}", value(&s, j2));
+    let now = transform(&s, ids[1]).inverse() * transform(&s, ids[2]);
+    assert!(now.abs_diff_eq(relative, 1e-9));
+}
+
+#[test]
+fn a_floating_arm_driven_in_the_middle_holds_its_other_joints() {
+    let (mut s, ids) = parts(4);
+    let at = |k: usize| p(0.3 * k as f64, 0.0, 0.0);
+    let js: Vec<JointId> = (1..4)
+        .map(|k| {
+            join(
+                &mut s,
+                JointKind::Revolute,
+                Some(ids[k - 1]),
+                ids[k],
+                at(k),
+                DVec3::Z,
+                DVec3::X,
+            )
+        })
+        .collect();
+    s.drive_joint(js[0], 0.3, None).unwrap();
+    s.drive_joint(js[2], -0.5, None).unwrap();
+    let held = transform(&s, ids[0]);
+    s.drive_joint(js[1], 0.9, None).unwrap();
+    assert!((value(&s, js[0]) - 0.3).abs() < 1e-9);
+    assert!((value(&s, js[2]) + 0.5).abs() < 1e-9);
+    assert_eq!(transform(&s, ids[0]), held);
+}
+
+#[test]
+fn a_cylindrical_joint_in_series_keeps_its_slide() {
+    let (mut s, ids) = parts(3);
+    let j0 = join(
+        &mut s,
+        JointKind::Revolute,
+        None,
+        ids[0],
+        DVec3::ZERO,
+        DVec3::Z,
+        DVec3::X,
+    );
+    let j1 = join(
+        &mut s,
+        JointKind::Cylindrical,
+        Some(ids[0]),
+        ids[1],
+        p(0.3, 0.0, 0.0),
+        DVec3::X,
+        DVec3::Z,
+    );
+    join(
+        &mut s,
+        JointKind::Revolute,
+        Some(ids[1]),
+        ids[2],
+        p(0.6, 0.0, 0.0),
+        DVec3::Z,
+        DVec3::X,
+    );
+    s.drive_joint(j1, 0.4, Some(0.05)).unwrap();
+    s.drive_joint(j0, 1.2, None).unwrap();
+    let j = s.joint(j1).unwrap();
+    assert!((j.value - 0.4).abs() < 1e-9 && (j.slide - 0.05).abs() < 1e-9);
+}
