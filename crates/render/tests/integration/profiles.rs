@@ -116,6 +116,10 @@ fn snapshotter(style: Option<&StyleSettings>) -> Option<Snapshotter> {
         return None;
     };
     snap.set_model_style(style);
+    // TENON_TEST_CULL=1 runs these with every model culled by chunk: same pictures expected.
+    if std::env::var_os("TENON_TEST_CULL").is_some() {
+        snap.set_culling_from(0);
+    }
     Some(snap)
 }
 
