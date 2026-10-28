@@ -75,8 +75,15 @@ fn connect(port: u16) -> TcpStream {
 
 fn read_reply(mut s: TcpStream) -> Reply {
     let mut raw = Vec::new();
-    let _ = s.read_to_end(&mut raw);
-    let at = find(&raw, b"\r\n\r\n").expect("a response head");
+    // Keep what arrived even if the read then fails (a reset after the head is fine).
+    let read = s.read_to_end(&mut raw);
+    let at = find(&raw, b"\r\n\r\n").unwrap_or_else(|| {
+        panic!(
+            "a response head; read result {read:?}, got {} bytes: {:?}",
+            raw.len(),
+            String::from_utf8_lossy(&raw)
+        )
+    });
     let head = String::from_utf8(raw[..at].to_vec()).unwrap();
     let status = head.split(' ').nth(1).unwrap().parse().unwrap();
     Reply {

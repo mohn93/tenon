@@ -116,7 +116,16 @@ struct Out<'a> {
     deadline: Instant,
     idle: Duration,
     progress: Instant,
+    /// How long dropping the output drains what the client still sends (see `Drop`).
+    linger: Duration,
 }
+
+/// The most that is read and thrown away after a response.
+const LINGER_BYTES: usize = 64 * 1024;
+/// The longest the connection thread waits for the rest of a request after answering.
+const LINGER: Duration = Duration::from_secs(1);
+/// How long one read of that drain waits; a quiet client ends it.
+const LINGER_QUIET: Duration = Duration::from_millis(100);
 
 impl<'a> Out<'a> {
     fn new(stream: TcpStream, shared: &'a Shared, total: Duration, idle: Duration) -> Self {
@@ -127,6 +136,33 @@ impl<'a> Out<'a> {
             deadline: now + total,
             idle,
             progress: now,
+            linger: LINGER,
+        }
+    }
+}
+
+/// An early answer (a 4xx for a request cut short, a 503) leaves request bytes unread. Closing a
+/// socket with unread data makes Windows send a TCP RST instead of a FIN, and the client then
+/// loses the response it was about to read. So the response is followed by a FIN (`Write`
+/// shutdown) and the rest of the request is read and dropped, within `linger`, `LINGER_BYTES`
+/// and `LINGER_QUIET` of silence, so a client cannot hold the thread or the slot for long.
+impl Drop for Out<'_> {
+    fn drop(&mut self) {
+        let _ = self.stream.flush();
+        let _ = self.stream.shutdown(std::net::Shutdown::Write);
+        let end = Instant::now() + self.linger;
+        let mut left_bytes = LINGER_BYTES;
+        let mut chunk = [0u8; 4096];
+        while left_bytes > 0 && !self.shared.halted() {
+            let left = end.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            let _ = self.stream.set_read_timeout(Some(left.min(LINGER_QUIET)));
+            match self.stream.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => left_bytes = left_bytes.saturating_sub(n),
+            }
         }
     }
 }
@@ -290,6 +326,8 @@ fn refuse(stream: TcpStream, shared: &Shared) {
     // Short, so a client that does not read cannot hold up accepting.
     let short = Duration::from_millis(100);
     let mut out = Out::new(stream, shared, short, short);
+    // Runs on the accept thread: the drain is as short as the write.
+    out.linger = short;
     let _ = send(
         &mut out,
         503,
@@ -424,7 +462,11 @@ fn serve(stream: TcpStream, shared: &Shared) {
             let _ = send(&mut stream, code, reason, &[], reason.as_bytes(), false);
             return;
         }
-        Head::Gone => return,
+        Head::Gone => {
+            // Closed, idle or stopped: nothing was answered, nothing to wait for.
+            stream.linger = Duration::ZERO;
+            return;
+        }
     };
     let bad = |stream: &mut Out| {
         let _ = send(stream, 400, "Bad Request", &[], b"Bad Request\n", false);
