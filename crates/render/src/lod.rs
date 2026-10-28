@@ -66,13 +66,15 @@ pub struct Lod {
 type ChunkLevels = Vec<Option<Vec<BaseFaceVertex>>>;
 
 impl Lod {
-    /// Simplifies the solid chunks of `plan`, which orders `faces`, and uploads them; None when
-    /// `cancel` is set meanwhile. Written for a worker thread.
+    /// Simplifies the solid chunks of `plan`, which orders `faces`, and uploads them, a level
+    /// at a time, leaving out one over `limit` bytes; None when `cancel` is set meanwhile.
+    /// Written for a worker thread.
     pub fn build(
         device: &wgpu::Device,
         plan: &ChunkPlan,
         faces: &[BaseFaceVertex],
         cancel: &AtomicBool,
+        limit: u64,
     ) -> Option<Lod> {
         let count = plan.solid_chunks;
         let threads = std::thread::available_parallelism()
@@ -113,6 +115,15 @@ impl Lod {
                 .sum();
             let mut ranges = vec![None; count];
             let mut buffer = None;
+            // A level too big for a buffer is left out.
+            let total = if (total * stride) as u64 > limit {
+                for chunk in &mut results {
+                    chunk[l] = None;
+                }
+                0
+            } else {
+                total
+            };
             if total > 0 {
                 let b = device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("lod faces"),
@@ -146,7 +157,7 @@ impl Lod {
             });
         }
         let most = levels.iter().map(|l| l.vertices).max().unwrap_or(0);
-        let zeros = (most > 0).then(|| {
+        let zeros = (most > 0 && u64::from(most) * 4 <= limit).then(|| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("lod flags"),
                 size: u64::from(most) * std::mem::size_of::<f32>() as u64,

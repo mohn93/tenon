@@ -191,7 +191,7 @@ fn a_renderer_that_was_not_asked_for_lod_draws_full_detail_however_far_the_view(
 }
 
 #[test]
-fn the_copies_are_made_on_a_thread_once_a_view_needs_them() {
+fn an_idle_renderer_makes_the_copies_once_the_model_has_settled() {
     let Some(screen) = Offscreen::new() else {
         return;
     };
@@ -201,23 +201,61 @@ fn the_copies_are_made_on_a_thread_once_a_view_needs_them() {
     r.set_model_style(Some(&style()));
     r.set_lod(true);
     r.set_scene(&scene, &[], &BTreeSet::new());
-    let full = Viewport::full((W, H));
-    // A near view never needs them.
-    for _ in 0..20 {
-        screen.draw(&mut r, &camera(NEAR), full, &[]);
-    }
-    assert!(r.lod_level_bytes().is_empty());
-    // A far one starts them, and frames go on, whole, until they are ready.
-    let far = camera(FAR);
-    let (kept, _) = r.visible_triangles(&far).unwrap();
+    // No frame is drawn and no camera asked: the copies still come, and the vertices they
+    // are made from are let go.
+    assert!(r.lod_busy());
     let started = std::time::Instant::now();
-    while r.lod_level_bytes().is_empty() {
+    let mut arrived = false;
+    while r.lod_busy() {
         assert!(started.elapsed().as_secs() < 30, "the copies never came");
-        screen.draw(&mut r, &far, full, &[]);
+        arrived |= r.poll_lod();
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+    assert!(arrived, "poll_lod says when they arrive");
+    assert!(
+        started.elapsed().as_millis() >= 400,
+        "not before it settled"
+    );
+    assert!(!r.lod_level_bytes().is_empty());
+    let far = camera(FAR);
+    let full = Viewport::full((W, H));
+    let (kept, _) = r.visible_triangles(&far).unwrap();
     screen.draw(&mut r, &far, full, &[]);
     assert!(r.drawn_triangles(&far).unwrap().0 * 3 < kept);
+    // Turning it off drops them.
+    r.set_lod(false);
+    assert!(r.lod_level_bytes().is_empty() && !r.lod_busy());
+}
+
+#[test]
+fn a_level_over_the_buffer_limit_is_left_out() {
+    let Some(screen) = Offscreen::new() else {
+        return;
+    };
+    let (scene, _) = plane();
+    let all = renderer(&screen, &scene, true).lod_level_bytes();
+    assert!(all.len() > 1 && all.iter().all(|&b| b > 0), "{all:?}");
+    let largest = *all.iter().max().unwrap();
+    let mut r = screen.renderer();
+    r.set_culling_from(100);
+    r.set_model_style(Some(&style()));
+    r.set_lod(true);
+    r.set_lod_buffer_limit(largest - 1);
+    r.set_scene(&scene, &[], &BTreeSet::new());
+    r.wait_for_lod();
+    let some: Vec<u64> = all
+        .iter()
+        .map(|&b| if b == largest { 0 } else { b })
+        .collect();
+    assert_eq!(r.lod_level_bytes(), some);
+    // And with room for none, nothing is made and nothing panics.
+    r.set_lod_buffer_limit(1);
+    r.set_scene(&scene, &[], &BTreeSet::new());
+    r.wait_for_lod();
+    assert!(r.lod_level_bytes().iter().all(|&b| b == 0));
+    let cam = camera(FAR);
+    let (kept, _) = r.visible_triangles(&cam).unwrap();
+    assert_eq!(r.drawn_triangles(&cam).map(|d| d.0), Some(kept));
 }
 
 #[test]

@@ -12,7 +12,7 @@ use crate::grid::{
 };
 use crate::guides::{GuideShape, guide_lines};
 use crate::lights::{Light, MAX_LIGHTS, strongest};
-use crate::lod::{CELL_PIXELS, CELLS, ENTER, Lod};
+use crate::lod::{CELL_PIXELS, Lod};
 use crate::scene::{
     BaseFaceVertex, CasterChunk, EdgeColors, EdgeExtra, GlassView, PartsCache, Ranges, Spans,
     scene_base_cached, shown_annotations, shown_guides, shown_sections,
@@ -569,15 +569,15 @@ struct Indices {
 /// leaving out those out of view. Smaller models are drawn whole, as one call.
 const CULL_FROM: usize = 20_000;
 
-/// Frames drawn after `set_model` before the simplified copies are made: while the model is
-/// being changed again and again (a transition moving instances), they would be thrown away.
-const LOD_SETTLE: u32 = 8;
+/// How long after `set_model` the simplified copies are made: while the model is being changed
+/// again and again (a transition moving instances), they would be thrown away.
+const LOD_SETTLE: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// The simplified copies of a model's solid chunks: they are made from the vertices, which
-/// are kept until a frame would draw one, then built on another thread, so a frame never waits.
+/// are kept until the model has settled, then built on another thread, so a frame never waits.
 enum LodState {
     Off,
-    /// The model's vertices, waiting for a view that needs the copies.
+    /// The model's vertices, waiting for the model to settle.
     Pending(std::sync::Arc<Vec<BaseFaceVertex>>),
     Building {
         done: std::sync::mpsc::Receiver<Option<Lod>>,
@@ -888,9 +888,11 @@ pub struct Renderer {
     /// cells of a simplified chunk may be.
     lod_on: bool,
     lod_pixels: f32,
-    /// How many frames have been drawn since `set_model`, and the level each chunk was last
-    /// drawn at (0: whole).
-    lod_idle: u32,
+    /// When `set_model` last ran with LOD on, and the level each chunk was last drawn at
+    /// (0: whole).
+    lod_since: Option<std::time::Instant>,
+    /// The most bytes a level's buffer may hold (the device's limit and this).
+    lod_limit: u64,
     lod_last: std::cell::RefCell<Vec<u8>>,
     /// Which chunks of `face_chunks` hold something selected, and something hovered.
     selected_chunks: Vec<bool>,
@@ -1618,7 +1620,8 @@ impl Renderer {
             lod: LodState::Off,
             lod_on: false,
             lod_pixels: CELL_PIXELS,
-            lod_idle: 0,
+            lod_since: None,
+            lod_limit: u64::MAX,
             lod_last: std::cell::RefCell::new(Vec::new()),
             selected_chunks: Vec::new(),
             hovered_chunks: Vec::new(),
@@ -1678,6 +1681,28 @@ impl Renderer {
     /// on the web.
     pub fn set_lod(&mut self, on: bool) {
         self.lod_on = on && !cfg!(target_arch = "wasm32");
+        if !self.lod_on {
+            self.drop_lod();
+        }
+    }
+
+    /// Limits the bytes a level of the simplified copies may take to `bytes`, on top of the
+    /// device's own limit: a level over it is left out. For tests.
+    pub fn set_lod_buffer_limit(&mut self, bytes: u64) {
+        self.lod_limit = bytes;
+    }
+
+    /// True while the simplified copies are waiting to be made or being made, so a caller that
+    /// draws only on demand knows to call `poll_lod` soon.
+    pub fn lod_busy(&self) -> bool {
+        matches!(self.lod, LodState::Pending(_) | LodState::Building { .. })
+    }
+
+    /// Moves the making of the simplified copies on without drawing: starts it once the model
+    /// has settled, takes the copies when done. True when they arrived, so a frame should be
+    /// drawn.
+    pub fn poll_lod(&mut self) -> bool {
+        self.advance_lod()
     }
 
     /// Sets how many pixels across the cells of a simplified chunk may be on the screen (0.1
@@ -1782,11 +1807,12 @@ impl Renderer {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(plan) = self.face_chunks.clone() {
             let device = self.device.clone();
+            let limit = self.lod_limit.min(device.limits().max_buffer_size);
             let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let (sender, done) = std::sync::mpsc::channel();
             let flag = cancel.clone();
             std::thread::spawn(move || {
-                let lod = Lod::build(&device, &plan, &faces, &flag);
+                let lod = Lod::build(&device, &plan, &faces, &flag, limit);
                 drop(faces);
                 let _ = sender.send(lod);
             });
@@ -1796,37 +1822,25 @@ impl Renderer {
         let _ = faces;
     }
 
-    /// Whether a view of `camera` would draw some chunk simplified.
-    fn lod_wanted(&self, camera: &Camera) -> bool {
-        let wanted = std::cell::Cell::new(false);
-        if let Some(plan) = &self.face_chunks {
-            plan.visible_by(camera, |_, per_pixel| {
-                if ENTER * self.lod_pixels * per_pixel >= CELLS[0] {
-                    wanted.set(true);
-                }
-                None
-            });
-        }
-        wanted.get()
-    }
-
-    /// Moves the making of the simplified copies on before a frame: takes them when they are
-    /// done, starts them when the model has settled and the view would use them.
-    fn advance_lod(&mut self, camera: &Camera) {
+    /// Moves the making of the simplified copies on: takes them when they are done, starts
+    /// them when the model has settled. True when they arrived.
+    fn advance_lod(&mut self) -> bool {
         match std::mem::replace(&mut self.lod, LodState::Off) {
             LodState::Building { done, cancel } => match done.try_recv() {
                 Ok(lod) => {
                     self.lod = lod.map_or(LodState::Off, LodState::Ready);
                     self.lod_last.get_mut().clear();
+                    return true;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                     self.lod = LodState::Building { done, cancel }
                 }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    eprintln!("the thread making the simplified copies ended without a result");
+                }
             },
             LodState::Pending(faces) => {
-                self.lod_idle = self.lod_idle.saturating_add(1);
-                if self.lod_on && self.lod_idle >= LOD_SETTLE && self.lod_wanted(camera) {
+                if self.lod_on && self.lod_since.is_some_and(|t| t.elapsed() >= LOD_SETTLE) {
                     self.start_lod(faces);
                 } else {
                     self.lod = LodState::Pending(faces);
@@ -1834,6 +1848,7 @@ impl Renderer {
             }
             other => self.lod = other,
         }
+        false
     }
 
     /// Draws the vertices of the simplified levels in `runs`, with `pipeline` if given (else
@@ -1868,7 +1883,7 @@ impl Renderer {
     pub fn set_model(&mut self, scene: &Scene, context: &[InstanceId]) {
         // What the last model holds is freed first, so the new one is not built beside it.
         self.drop_lod();
-        self.lod_idle = 0;
+        self.lod_since = self.lod_on.then(std::time::Instant::now);
         self.faces = None;
         self.glass = None;
         self.edges = None;
@@ -1954,13 +1969,8 @@ impl Renderer {
         );
         self.cut_fill = mesh(&self.device, "cut fill", &base.cut_fill);
         self.cut_edges = mesh(&self.device, "cut edges", &base.cut_edges);
-        // The simplified copies are made later, from these vertices, unless the levels would
-        // not fit a buffer (each has at most half the vertices of the one before it).
-        if self.lod_on
-            && let Some(plan) = &self.face_chunks
-            && (plan.kept * std::mem::size_of::<BaseFaceVertex>() / 2) as u64
-                <= self.device.limits().max_buffer_size
-        {
+        // The simplified copies are made later, from these vertices.
+        if self.lod_on && self.face_chunks.is_some() {
             self.lod = LodState::Pending(std::sync::Arc::new(base.faces));
         }
         self.spans = base.spans;
@@ -2627,7 +2637,7 @@ impl Renderer {
         if self.targets.as_ref().map(|t| t.size) != Some(size) {
             self.targets = Some(self.make_targets(size));
         }
-        self.advance_lod(camera);
+        self.advance_lod();
         let occlusion = self.ambient_occlusion();
         self.prepare_ao(occlusion.is_some(), size);
 
