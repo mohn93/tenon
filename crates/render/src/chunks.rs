@@ -243,6 +243,33 @@ impl ChunkPlan {
         });
     }
 
+    /// The runs of the old order whose vertices lie in the new order's `range`, in order.
+    pub fn sources(&self, range: Range<usize>) -> Vec<Range<usize>> {
+        let first = self
+            .segments
+            .partition_point(|s| s.new + s.len <= range.start);
+        let mut out = Vec::new();
+        for s in &self.segments[first..] {
+            if s.new >= range.end {
+                break;
+            }
+            let (a, b) = (range.start.max(s.new), range.end.min(s.new + s.len));
+            out.push(s.old + (a - s.new)..s.old + (b - s.new));
+        }
+        out
+    }
+
+    /// The chunks whose vertices overlap `range` of the new order.
+    pub fn chunks_in(&self, range: Range<usize>) -> Range<usize> {
+        let first = self
+            .chunks
+            .partition_point(|c| c.vertices.end as usize <= range.start);
+        let end = self
+            .chunks
+            .partition_point(|c| (c.vertices.start as usize) < range.end);
+        first..end.max(first)
+    }
+
     /// Where the vertices `range` of the old order lie in the new one.
     pub fn map_range(&self, range: Range<usize>) -> Vec<Range<usize>> {
         let first = self
@@ -262,11 +289,23 @@ impl ChunkPlan {
     /// The vertex ranges to draw for `camera`, adjacent ones merged: chunks that may show in
     /// its view and are not smaller than `SMALL_PIXELS`.
     pub fn visible(&self, camera: &Camera) -> Runs {
+        self.visible_by(camera, |_, _| None)
+    }
+
+    /// Like `visible`, but a chunk for which `pick(chunk, world_per_pixel)` gives a range
+    /// has that range listed in `Runs::lod` instead of its own. `world_per_pixel` is how long
+    /// a pixel is at the chunk's nearest point.
+    pub fn visible_by(
+        &self,
+        camera: &Camera,
+        pick: impl Fn(usize, f32) -> Option<Range<u32>>,
+    ) -> Runs {
         let m = camera.view_proj_f32();
         let mut runs = Runs::default();
         for (k, c) in self.chunks.iter().enumerate() {
             let mut out = [true; 6];
             let (mut front, mut lo, mut hi) = (true, Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
+            let mut nearest = f32::MAX;
             for k in 0..8 {
                 let p = Vec3::new(
                     if k & 1 == 0 { c.lo.x } else { c.hi.x },
@@ -289,6 +328,7 @@ impl ChunkPlan {
                     *o &= d < 0.0;
                 }
                 front &= q.w > 0.0;
+                nearest = nearest.min(q.w);
                 if front {
                     let ndc = Vec2::new(q.x, q.y) / q.w;
                     lo = lo.min(ndc);
@@ -301,21 +341,28 @@ impl ChunkPlan {
             // With every corner in front of the eye, the box's extent on the screen is known
             // (a box near the edge of a wide view projects larger than its size over its
             // depth); a box that reaches the eye's plane is kept.
+            let mut per_pixel = None;
             if front {
+                per_pixel = Some(if camera.is_parallel() {
+                    camera.pixel_size(camera.eye) as f32
+                } else {
+                    (2.0 * f64::from(nearest) * (camera.fov_y * 0.5).tan() / camera.viewport.y)
+                        as f32
+                });
                 let px =
                     (hi - lo) * 0.5 * Vec2::new(camera.viewport.x as f32, camera.viewport.y as f32);
                 if f64::from(px.length()) < SMALL_PIXELS {
                     continue;
                 }
             }
-            let list = if k < self.solid_chunks {
-                &mut runs.solid
-            } else {
-                &mut runs.rest
+            let (list, range) = match per_pixel.and_then(|p| pick(k, p)) {
+                Some(range) => (&mut runs.lod, range),
+                None if k < self.solid_chunks => (&mut runs.solid, c.vertices.clone()),
+                None => (&mut runs.rest, c.vertices.clone()),
             };
             match list.last_mut() {
-                Some(r) if r.end == c.vertices.start => r.end = c.vertices.end,
-                _ => list.push(c.vertices.clone()),
+                Some(r) if r.end == range.start => r.end = range.end,
+                _ => list.push(range),
             }
         }
         runs
@@ -332,6 +379,8 @@ impl ChunkPlan {
 pub struct Runs {
     pub solid: Vec<Range<u32>>,
     pub rest: Vec<Range<u32>>,
+    /// Vertex ranges of the simplified meshes (see `lod`) drawn in place of some solid chunks.
+    pub lod: Vec<Range<u32>>,
 }
 
 /// `ranges` with the box of the primitives `keep` lists, and again with that of the others;

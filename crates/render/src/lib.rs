@@ -3,6 +3,7 @@ mod chunks;
 pub mod grid;
 pub mod guides;
 pub mod lights;
+mod lod;
 pub mod print;
 pub mod renderer;
 pub mod scene;

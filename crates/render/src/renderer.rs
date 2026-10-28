@@ -12,6 +12,7 @@ use crate::grid::{
 };
 use crate::guides::{GuideShape, guide_lines};
 use crate::lights::{Light, MAX_LIGHTS, strongest};
+use crate::lod::{CELL_PIXELS, Lod};
 use crate::scene::{
     BaseFaceVertex, CasterChunk, EdgeColors, EdgeExtra, GlassView, PartsCache, Ranges, Spans,
     scene_base_cached, shown_annotations, shown_guides, shown_sections,
@@ -863,6 +864,17 @@ pub struct Renderer {
     edge_chunks: Option<ChunkPlan>,
     /// How many triangles (or edges) a model needs before its drawing is culled by chunk.
     cull_from: usize,
+    /// Simplified copies of the opaque chunks of `faces` and the mesh holding them, with
+    /// flag buffers that are always 0 (a chunk with something selected or hovered is drawn
+    /// whole instead).
+    lod: Option<(Lod, Mesh)>,
+    /// Whether chunks far enough away are drawn simplified, and how many pixels across the
+    /// cells of a simplified chunk may be.
+    lod_on: bool,
+    lod_pixels: f32,
+    /// Which chunks of `face_chunks` hold something selected, and something hovered.
+    selected_chunks: Vec<bool>,
+    hovered_chunks: Vec<bool>,
     /// Whether any edge is selected, as of the last `set_selection`.
     edges_selected: bool,
     /// The hovered entity and its look, as of the last `set_hover`, and where it lies.
@@ -1583,6 +1595,11 @@ impl Renderer {
             face_chunks: None,
             edge_chunks: None,
             cull_from: CULL_FROM,
+            lod: None,
+            lod_on: true,
+            lod_pixels: CELL_PIXELS,
+            selected_chunks: Vec::new(),
+            hovered_chunks: Vec::new(),
             edges_selected: false,
             hover: None,
             hover_ranges: Ranges::default(),
@@ -1632,10 +1649,47 @@ impl Renderer {
         Some((ChunkPlan::covered(&runs.solid) / 3, plan.kept as u32 / 3))
     }
 
+    /// Turns the drawing of far chunks as simplified copies on (the default) or off, for
+    /// comparing pictures; the copies are made by `set_model` either way.
+    pub fn set_lod(&mut self, on: bool) {
+        self.lod_on = on;
+    }
+
+    /// Sets how many pixels across the cells of a simplified chunk may be on the screen; the
+    /// default is 1.5; what is dropped is of about that size.
+    pub fn set_lod_pixels(&mut self, pixels: f32) {
+        self.lod_pixels = pixels;
+    }
+
+    /// How many opaque triangles a frame seen by `camera` draws, counting the simplified ones
+    /// as drawn, and how many the model has in all; None when the faces are not chunked.
+    pub fn drawn_triangles(&self, camera: &Camera) -> Option<(u32, u32)> {
+        let plan = self.face_chunks.as_ref()?;
+        let runs = self.visible(camera).faces?;
+        let drawn = ChunkPlan::covered(&runs.solid) + ChunkPlan::covered(&runs.lod);
+        Some((drawn / 3, plan.kept as u32 / 3))
+    }
+
+    /// True when chunk `k` has something selected or hovered, so it is drawn whole.
+    fn chunk_marked(&self, k: usize) -> bool {
+        self.selected_chunks.get(k).copied().unwrap_or(false)
+            || self.hovered_chunks.get(k).copied().unwrap_or(false)
+    }
+
     /// The chunked lists' ranges in view of `camera`.
     fn visible(&self, camera: &Camera) -> Visible {
+        let faces = self.face_chunks.as_ref().map(|c| match &self.lod {
+            Some((lod, _)) if self.lod_on => c.visible_by(camera, |k, per_pixel| {
+                if self.chunk_marked(k) {
+                    None
+                } else {
+                    lod.pick(k, per_pixel, self.lod_pixels)
+                }
+            }),
+            _ => c.visible(camera),
+        });
         Visible {
-            faces: self.face_chunks.as_ref().map(|c| c.visible(camera)),
+            faces,
             edges: self.edge_chunks.as_ref().map(|c| c.visible(camera)),
         }
     }
@@ -1677,6 +1731,26 @@ impl Renderer {
                 &|first| !faces[first].is_glass(),
             )
         });
+        self.lod = self.face_chunks.as_ref().and_then(|plan| {
+            let lod = Lod::build(plan, &base.faces);
+            let bytes = std::mem::size_of_val(&lod.vertices[..]) as u64;
+            if bytes > self.device.limits().max_buffer_size {
+                return None;
+            }
+            let mut m = mesh(&self.device, "lod faces", &lod.vertices)?;
+            // Nothing in them is ever selected or hovered, so one buffer of zeros does for both.
+            let zeros = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("lod flags"),
+                size: u64::from(m.count) * std::mem::size_of::<f32>() as u64,
+                usage: wgpu::BufferUsages::VERTEX,
+                mapped_at_creation: false,
+            });
+            m.flags = Some(zeros.clone());
+            m.hover = Some(zeros);
+            Some((lod, m))
+        });
+        self.selected_chunks = Vec::new();
+        self.hovered_chunks = Vec::new();
         self.edge_chunks = (base.edges.len() / 2 >= self.cull_from).then(|| {
             let edges = &base.edges;
             ChunkPlan::new(
@@ -2039,6 +2113,20 @@ impl Renderer {
     /// the selection flags only. Call when just the selection changes.
     pub fn set_selection(&mut self, selection: &BTreeSet<EntityId>) {
         let flags = self.spans.flags(selection);
+        self.selected_chunks = match &self.face_chunks {
+            Some(plan) => {
+                let moved = plan.permute(&flags.faces);
+                plan.chunks
+                    .iter()
+                    .map(|c| {
+                        moved
+                            .get(c.vertices.start as usize..c.vertices.end as usize)
+                            .is_some_and(|f| f.iter().any(|&f| f != 0.0))
+                    })
+                    .collect()
+            }
+            None => Vec::new(),
+        };
         for (mesh, flags, plan) in [
             (&self.faces, &flags.faces, &self.face_chunks),
             (&self.edges, &flags.edges, &self.edge_chunks),
@@ -2076,6 +2164,18 @@ impl Renderer {
         self.write_hover(&ranges, 1.0);
         self.hover = hover;
         self.hover_ranges = ranges;
+        self.hovered_chunks = match &self.face_chunks {
+            Some(plan) => {
+                let mut marked = vec![false; plan.chunks.len()];
+                if !self.hover_ranges.faces.is_empty() {
+                    for placed in plan.map_range(self.hover_ranges.faces.clone()) {
+                        marked[plan.chunks_in(placed)].fill(true);
+                    }
+                }
+                marked
+            }
+            None => Vec::new(),
+        };
         self.refresh_guides();
     }
 
@@ -2551,6 +2651,18 @@ impl Renderer {
                             visible.faces.as_ref().map_or(&[][..], |r| &r.solid),
                             1,
                         );
+                        if let Some((_, simple)) = self
+                            .lod
+                            .as_ref()
+                            .filter(|_| visible.faces.as_ref().is_some_and(|r| !r.lod.is_empty()))
+                        {
+                            bind(&mut pass, &self.face_pipeline, simple);
+                            draw_runs(
+                                &mut pass,
+                                visible.faces.as_ref().map_or(&[][..], |r| &r.lod),
+                                1,
+                            );
+                        }
                         if let Some(glass) = glass {
                             bind(&mut pass, &self.solid_side_pipeline, faces);
                             pass.set_index_buffer(glass.order.slice(..), wgpu::IndexFormat::Uint32);
@@ -2731,6 +2843,30 @@ impl Renderer {
                         visible.faces.as_ref().map_or(&[][..], |r| &r.solid),
                         1,
                     );
+                    if let Some((_, simple)) = self
+                        .lod
+                        .as_ref()
+                        .filter(|_| visible.faces.as_ref().is_some_and(|r| !r.lod.is_empty()))
+                    {
+                        pass.set_vertex_buffer(0, simple.buffer.slice(..));
+                        if let (Some(flags), Some(hover)) = (&simple.flags, &simple.hover) {
+                            pass.set_vertex_buffer(1, flags.slice(..));
+                            pass.set_vertex_buffer(2, hover.slice(..));
+                        }
+                        draw_runs(
+                            &mut pass,
+                            visible.faces.as_ref().map_or(&[][..], |r| &r.lod),
+                            1,
+                        );
+                        // The glass below is drawn from the full vertices again.
+                        pass.set_vertex_buffer(0, faces.buffer.slice(..));
+                        if let Some(flags) = &faces.flags {
+                            pass.set_vertex_buffer(1, flags.slice(..));
+                        }
+                        if let Some(hover) = &faces.hover {
+                            pass.set_vertex_buffer(2, hover.slice(..));
+                        }
+                    }
                     if let Some(glass) = &self.glass {
                         pass.set_index_buffer(glass.order.slice(..), wgpu::IndexFormat::Uint32);
                         pass.draw_indexed(0..glass.count(), 0, 0..1);
