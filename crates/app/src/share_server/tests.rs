@@ -879,3 +879,39 @@ fn the_preferred_port_is_used_when_free_and_a_free_one_otherwise() {
     assert_eq!(Server::start(cfg).unwrap().port(), free);
     assert_eq!(PREFERRED_PORT, 47240);
 }
+
+#[test]
+fn silent_refused_clients_do_not_stall_accepting() {
+    let d = viewer();
+    let mut cfg = config(&d);
+    cfg.max_connections = 1;
+    cfg.idle = Duration::from_secs(5);
+    let s = Server::start(cfg).unwrap();
+    let _held = connect(s.port());
+    std::thread::sleep(Duration::from_millis(200));
+    // Over the cap and silent, but held open.
+    let silent: Vec<TcpStream> = (0..20).map(|_| connect(s.port())).collect();
+    let t = Instant::now();
+    assert_eq!(get(s.port(), "/").status, 503);
+    assert!(
+        t.elapsed() < Duration::from_millis(700),
+        "the refusal took {:?}",
+        t.elapsed()
+    );
+    drop(silent);
+}
+
+#[test]
+fn a_refused_client_that_sends_late_still_reads_the_503() {
+    let d = viewer();
+    let mut cfg = config(&d);
+    cfg.max_connections = 1;
+    cfg.idle = Duration::from_secs(5);
+    let s = Server::start(cfg).unwrap();
+    let _held = connect(s.port());
+    std::thread::sleep(Duration::from_millis(200));
+    let mut c = connect(s.port());
+    std::thread::sleep(Duration::from_millis(250));
+    c.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+    assert_eq!(read_reply(c).status, 503);
+}

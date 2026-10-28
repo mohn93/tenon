@@ -281,6 +281,13 @@ impl Drop for Server {
 }
 
 fn accept_loop(listener: TcpListener, shared: Arc<Shared>, started: Instant) {
+    let (refuse_tx, refuse_rx) = std::sync::mpsc::sync_channel(REFUSE_QUEUE);
+    let _ = std::thread::Builder::new()
+        .name("share-refuse".into())
+        .spawn({
+            let shared = Arc::clone(&shared);
+            move || refuser(refuse_rx, shared)
+        });
     while !shared.stop.load(Ordering::SeqCst) && started.elapsed() < shared.config.lifetime {
         match listener.accept() {
             Ok((stream, _)) => {
@@ -290,7 +297,8 @@ fn accept_loop(listener: TcpListener, shared: Arc<Shared>, started: Instant) {
                 }
                 if shared.active.fetch_add(1, Ordering::SeqCst) >= shared.config.max_connections {
                     shared.active.fetch_sub(1, Ordering::SeqCst);
-                    refuse(stream, &shared);
+                    // Dropped unanswered when the refuser is backed up.
+                    let _ = refuse_tx.try_send(stream);
                     continue;
                 }
                 let shared = Arc::clone(&shared);
@@ -321,22 +329,79 @@ impl Drop for Active {
     }
 }
 
-/// Answers 503 and closes: all the connection slots are taken.
-fn refuse(stream: TcpStream, shared: &Shared) {
-    // Short, so a client that does not read cannot hold up accepting.
-    let short = Duration::from_millis(100);
-    let mut out = Out::new(stream, shared, short, short);
-    // Runs on the accept thread: the drain is as short as the write.
-    out.linger = short;
-    let _ = send(
-        &mut out,
-        503,
-        "Service Unavailable",
-        &[],
-        b"Busy
-",
-        false,
-    );
+/// Most refused sockets waiting for the refuser thread; more are dropped unanswered.
+const REFUSE_QUEUE: usize = 32;
+/// How long a refused client may take to finish its request before the socket closes.
+const REFUSE_WAIT: Duration = Duration::from_secs(1);
+
+/// Answers 503 to the connections handed over by the accept loop, off that thread: it writes the
+/// answer, sends a FIN, then waits (without blocking on any one socket) for the client's request
+/// head or end of stream, at most `REFUSE_WAIT` and `LINGER_BYTES` each, so closing does not
+/// reset the connection (see `Drop for Out`). Ends when the accept loop drops its sender.
+fn refuser(rx: std::sync::mpsc::Receiver<TcpStream>, shared: Arc<Shared>) {
+    struct Waiting {
+        stream: TcpStream,
+        deadline: Instant,
+        seen: usize,
+        tail: Vec<u8>,
+    }
+    let mut waiting: Vec<Waiting> = Vec::new();
+    let mut open = true;
+    while (open || !waiting.is_empty()) && !shared.halted() {
+        if open && waiting.len() < REFUSE_QUEUE {
+            match rx.recv_timeout(TICK) {
+                Ok(mut stream) => {
+                    let mut reply = Vec::new();
+                    let _ = send(
+                        &mut reply,
+                        503,
+                        "Service Unavailable",
+                        &[],
+                        b"Busy\n",
+                        false,
+                    );
+                    let _ = stream.set_write_timeout(Some(Duration::from_millis(100)));
+                    if stream.write_all(&reply).is_ok()
+                        && stream.shutdown(std::net::Shutdown::Write).is_ok()
+                        && stream.set_nonblocking(true).is_ok()
+                    {
+                        waiting.push(Waiting {
+                            stream,
+                            deadline: Instant::now() + REFUSE_WAIT,
+                            seen: 0,
+                            tail: Vec::new(),
+                        });
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => open = false,
+            }
+        } else {
+            std::thread::sleep(TICK);
+        }
+        let now = Instant::now();
+        waiting.retain_mut(|w| {
+            let mut chunk = [0u8; 4096];
+            loop {
+                match w.stream.read(&mut chunk) {
+                    Ok(0) => return false,
+                    Ok(n) => {
+                        w.seen += n;
+                        w.tail.extend_from_slice(&chunk[..n]);
+                        if find(&w.tail, b"\r\n\r\n").is_some() || w.seen >= LINGER_BYTES {
+                            return false;
+                        }
+                        let keep = w.tail.len().saturating_sub(3);
+                        w.tail.drain(..keep);
+                    }
+                    Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+                    Err(e) if e.kind() == ErrorKind::Interrupted => {}
+                    Err(_) => return false,
+                }
+            }
+            now < w.deadline
+        });
+    }
 }
 
 enum Head {
@@ -468,6 +533,11 @@ fn serve(stream: TcpStream, shared: &Shared) {
             return;
         }
     };
+    // The head was read whole and no body is announced: nothing is left unread, so the slot
+    // frees at once instead of waiting for the client to close.
+    if header(&head, "content-length").is_none() && header(&head, "transfer-encoding").is_none() {
+        stream.linger = Duration::ZERO;
+    }
     let bad = |stream: &mut Out| {
         let _ = send(stream, 400, "Bad Request", &[], b"Bad Request\n", false);
     };
