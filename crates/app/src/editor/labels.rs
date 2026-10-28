@@ -59,6 +59,10 @@ impl Editor {
         frame: Option<&kernel::Scene>,
     ) -> Vec<HudLabel> {
         let layout = self.layout();
+        // Nothing to place: skip the view of every part, which grows with the model.
+        if frame.is_none() && !layout.has_annotations() {
+            return Vec::new();
+        }
         let (scenery, to_root) = match frame {
             Some(scene) => (
                 Scenery::of(scene, self.doc.context())
