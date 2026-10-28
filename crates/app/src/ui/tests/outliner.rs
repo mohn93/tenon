@@ -261,3 +261,13 @@ fn a_node_collapsed_under_a_filter_opens_again_for_the_next_filter() {
     );
     h.get_by_label("<Kitchen>");
 }
+
+#[test]
+fn an_expandable_row_lines_up_with_its_children_one_indent_in() {
+    let h = harness(boxes_fixture(&["i55"], &[]));
+    let laid = rows(&h);
+    let parent = row(&laid, &ids(&["i55"])).unwrap().rect.left();
+    let child = row(&laid, &ids(&["i55", "i27"])).unwrap().rect.left();
+    let indent = h.ctx.global_style().spacing.indent;
+    assert!((parent + indent - child).abs() < 0.5, "{parent} {child}");
+}

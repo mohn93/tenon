@@ -274,88 +274,93 @@ fn flatten<'a>(
     view: &'a View,
     filtering: &mut Option<Filtering>,
 ) -> Vec<Item<'a>> {
-    let mut items = vec![Item::Model];
+    let mut items = Vec::with_capacity(view.outliner.roots.len() + 2);
+    items.push(Item::Model);
+    let mut flat = Flat {
+        ctx,
+        view,
+        filtering,
+        items,
+    };
     let mut path = Vec::new();
     for row in &view.outliner.roots {
-        flatten_node(
-            ctx, view, row, &mut path, None, false, filtering, &mut items,
-        );
+        flat.node(row, &mut path, None, false);
     }
-    if let Some(f) = filtering {
+    if let Some(f) = flat.filtering.as_ref() {
         if f.drawn == 0 {
-            items.push(Item::Note("No matches"));
+            flat.items.push(Item::Note("No matches"));
         } else if f.drawn > MAX_FILTERED_ROWS {
-            items.push(Item::Note("More matches: refine the filter"));
+            flat.items
+                .push(Item::Note("More matches: refine the filter"));
         }
     }
-    items
+    flat.items
 }
 
-/// One node and, when expanded, its children. `path` leads to the node's parent.
-#[allow(clippy::too_many_arguments)]
-fn flatten_node<'a>(
-    ctx: &egui::Context,
-    view: &'a View,
-    row: &'a OutlinerRow,
-    path: &mut Vec<EntityId>,
-    parent: Option<usize>,
-    hidden: bool,
-    filtering: &mut Option<Filtering>,
-    items: &mut Vec<Item<'a>>,
-) {
-    let mut opens = false;
-    if let Some(f) = filtering {
-        if !f.filter.shows(row) || f.drawn > MAX_FILTERED_ROWS {
-            return;
+/// What flattening the tree works with.
+struct Flat<'a, 'b> {
+    ctx: &'b egui::Context,
+    view: &'a View<'a>,
+    filtering: &'b mut Option<Filtering>,
+    items: Vec<Item<'a>>,
+}
+
+impl<'a> Flat<'a, '_> {
+    /// One node and, when expanded, its children. `path` leads to the node's parent.
+    fn node(
+        &mut self,
+        row: &'a OutlinerRow,
+        path: &mut Vec<EntityId>,
+        parent: Option<usize>,
+        hidden: bool,
+    ) {
+        let view = self.view;
+        let mut opens = false;
+        if let Some(f) = self.filtering.as_mut() {
+            if !f.filter.shows(row) || f.drawn > MAX_FILTERED_ROWS {
+                return;
+            }
+            f.drawn += 1;
+            if f.drawn > MAX_FILTERED_ROWS {
+                return;
+            }
+            opens = f.filter.opens(row);
         }
-        f.drawn += 1;
-        if f.drawn > MAX_FILTERED_ROWS {
-            return;
+        let filtered = self.filtering.is_some();
+        let hidden = hidden || row.hidden;
+        path.push(row.id);
+        let open = view.context.starts_with(path);
+        let children = view.outliner.children(row.definition);
+        // A filtered node shows its children only when some of them show.
+        let leaf = children.is_empty() || (filtered && !opens);
+        let mut toggle = None;
+        if !leaf {
+            // Nodes on the open path start expanded; with a filter, every node shown with
+            // children does.
+            let (id, default) = if filtered {
+                (filtered_id(self.ctx, path), true)
+            } else {
+                (outliner_id(path), open)
+            };
+            let expanded = CollapsingState::load_with_default_open(self.ctx, id, default).is_open();
+            toggle = Some((id, default, expanded));
         }
-        opens = f.filter.opens(row);
-    }
-    let hidden = hidden || row.hidden;
-    path.push(row.id);
-    let open = view.context.starts_with(path);
-    let children = view.outliner.children(row.definition);
-    // A filtered node shows its children only when some of them show.
-    let leaf = children.is_empty() || (filtering.is_some() && !opens);
-    let mut toggle = None;
-    if !leaf {
-        // Nodes on the open path start expanded; with a filter, every node shown with
-        // children does.
-        let (id, default) = if filtering.is_some() {
-            (filtered_id(ctx, path), true)
-        } else {
-            (outliner_id(path), open)
-        };
-        let expanded = CollapsingState::load_with_default_open(ctx, id, default).is_open();
-        toggle = Some((id, default, expanded));
-    }
-    let index = items.len();
-    items.push(Item::Node(Node {
-        row,
-        depth: path.len() - 1,
-        parent,
-        hidden,
-        open,
-        toggle,
-    }));
-    if toggle.is_some_and(|(_, _, expanded)| expanded) {
-        for child in children {
-            flatten_node(
-                ctx,
-                view,
-                child,
-                path,
-                Some(index),
-                hidden,
-                filtering,
-                items,
-            );
+        let index = self.items.len();
+        self.items.push(Item::Node(Node {
+            row,
+            depth: path.len() - 1,
+            parent,
+            hidden,
+            open,
+            toggle,
+        }));
+        if toggle.is_some_and(|(_, _, expanded)| expanded) {
+            for child in children {
+                self.node(child, path, Some(index), hidden);
+            }
         }
+        path.pop();
     }
-    path.pop();
 }
 
 /// The path to the node at `index`.
@@ -384,11 +389,15 @@ fn draw_node(
     let clicked = ui
         .horizontal(|ui| {
             let indent = ui.spacing().indent;
+            // As `CollapsingState::show_header` did: the name follows the button flush.
+            ui.spacing_mut().item_spacing.x = 0.0;
             ui.add_space(indent * node.depth as f32);
             match node.toggle {
                 Some((id, default, expanded)) => {
-                    let (_, toggle) =
-                        ui.allocate_exact_size(Vec2::splat(indent), egui::Sense::click());
+                    let (_, toggle) = ui.allocate_exact_size(
+                        Vec2::new(indent, ui.spacing().icon_width),
+                        egui::Sense::click(),
+                    );
                     let openness = if expanded { 1.0 } else { 0.0 };
                     egui::collapsing_header::paint_default_icon(ui, openness, &toggle);
                     let verb = if expanded { "Collapse" } else { "Expand" };
@@ -403,6 +412,7 @@ fn draw_node(
                             CollapsingState::load_with_default_open(ui.ctx(), id, default);
                         state.set_open(!expanded);
                         state.store(ui.ctx());
+                        ui.ctx().request_repaint();
                     }
                 }
                 // Lined up with the names of nodes that have an expand button.
