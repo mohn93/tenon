@@ -103,10 +103,9 @@ pub(super) fn outliner(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     if before.as_deref().unwrap_or_default() != query {
         forget_filtered_states(ui.ctx());
     }
-    let mut filtering =
-        Filter::new(view.outliner, &query).map(|filter| Filtering { filter, drawn: 0 });
-    // Only the rows in view are laid out; flattening the visible tree is cheap by comparison.
-    let items = flatten(ui.ctx(), view, &mut filtering);
+    // Only the rows in view are laid out; the flat list is rebuilt only when an input changes.
+    let flat = flat_list(ui.ctx(), view, &query);
+    let items = &flat.items;
     let row_height = ui.spacing().interact_size.y;
     let tree = egui::ScrollArea::vertical()
         .id_salt("outliner")
@@ -132,8 +131,9 @@ pub(super) fn outliner(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
                         ui.weak(*text);
                     }
                     Item::Node(node) => {
-                        let path = node_path(&items, index);
-                        draw_node(ui, view, node, &path, actions);
+                        let path = node_path(items, index);
+                        let row = node.row.get(view.outliner);
+                        draw_node(ui, view, node, row, &path, actions);
                     }
                 }
             }
@@ -239,19 +239,90 @@ fn expand_open_path(ctx: &egui::Context, context: &[EntityId]) {
     ctx.data_mut(|d| d.insert_temp(key, context.to_vec()));
 }
 
+/// The flattened list and what it was built from.
+struct FlatList {
+    /// The table's stamp (`View::outliner_stamp`).
+    stamp: (u64, u64),
+    context: Vec<EntityId>,
+    query: String,
+    /// Bumped when a node is expanded or collapsed.
+    toggles: u64,
+    /// How many times a list was built, for tests.
+    builds: u64,
+    items: Vec<Item>,
+}
+
+/// Where the cached list lives in egui's memory.
+fn flat_key() -> egui::Id {
+    egui::Id::new("outliner-flat")
+}
+
+/// Where the count of expands and collapses lives in egui's memory.
+fn toggles_key() -> egui::Id {
+    egui::Id::new("outliner-toggles")
+}
+
+/// The flat list for `view` and `query`: the one kept from an earlier frame while the table,
+/// the open path, the filter and the expanded nodes are as they were.
+fn flat_list(ctx: &egui::Context, view: &View, query: &str) -> std::sync::Arc<FlatList> {
+    let toggles = ctx.data(|d| d.get_temp::<u64>(toggles_key())).unwrap_or(0);
+    let kept = ctx.data(|d| d.get_temp::<std::sync::Arc<FlatList>>(flat_key()));
+    if let Some(kept) = &kept
+        && kept.stamp == view.outliner_stamp
+        && kept.toggles == toggles
+        && kept.query == query
+        && kept.context == view.context
+    {
+        return kept.clone();
+    }
+    let mut filtering =
+        Filter::new(view.outliner, query).map(|filter| Filtering { filter, drawn: 0 });
+    let list = std::sync::Arc::new(FlatList {
+        stamp: view.outliner_stamp,
+        context: view.context.to_vec(),
+        query: query.to_owned(),
+        toggles,
+        builds: kept.map_or(0, |k| k.builds) + 1,
+        items: flatten(ctx, view, &mut filtering),
+    });
+    ctx.data_mut(|d| d.insert_temp(flat_key(), list.clone()));
+    list
+}
+
+/// How many flat lists were built, for tests.
+#[cfg(test)]
+pub(super) fn builds(ctx: &egui::Context) -> u64 {
+    ctx.data(|d| d.get_temp::<std::sync::Arc<FlatList>>(flat_key()))
+        .map_or(0, |k| k.builds)
+}
+
+/// A row of the table: of the roots (no definition) or of a definition's children.
+#[derive(Clone, Copy)]
+struct RowRef(Option<DefinitionId>, usize);
+
+impl RowRef {
+    fn get(self, table: &OutlinerTable) -> &OutlinerRow {
+        match self.0 {
+            None => &table.roots[self.1],
+            Some(definition) => &table.children(definition)[self.1],
+        }
+    }
+}
+
 /// A line of the flattened Outliner.
-enum Item<'a> {
+enum Item {
     /// The Model row.
     Model,
     /// A node.
-    Node(Node<'a>),
+    Node(Node),
     /// A weak line of text ("No matches", ...).
     Note(&'static str),
 }
 
 /// A node of the flattened tree.
-struct Node<'a> {
-    row: &'a OutlinerRow,
+struct Node {
+    row: RowRef,
+    id: EntityId,
     /// Nodes above it.
     depth: usize,
     /// The index of the parent's item.
@@ -269,11 +340,7 @@ struct Node<'a> {
 /// holding rows that show is expanded (under its own state, leaving the one kept without a
 /// filter), and nothing is listed past `MAX_FILTERED_ROWS` rows (the count goes one past it to
 /// say so).
-fn flatten<'a>(
-    ctx: &egui::Context,
-    view: &'a View,
-    filtering: &mut Option<Filtering>,
-) -> Vec<Item<'a>> {
+fn flatten(ctx: &egui::Context, view: &View, filtering: &mut Option<Filtering>) -> Vec<Item> {
     let mut items = Vec::with_capacity(view.outliner.roots.len() + 2);
     items.push(Item::Model);
     let mut flat = Flat {
@@ -283,8 +350,8 @@ fn flatten<'a>(
         items,
     };
     let mut path = Vec::new();
-    for row in &view.outliner.roots {
-        flat.node(row, &mut path, None, false);
+    for (i, row) in view.outliner.roots.iter().enumerate() {
+        flat.node(row, RowRef(None, i), &mut path, None, false);
     }
     if let Some(f) = flat.filtering.as_ref() {
         if f.drawn == 0 {
@@ -302,14 +369,15 @@ struct Flat<'a, 'b> {
     ctx: &'b egui::Context,
     view: &'a View<'a>,
     filtering: &'b mut Option<Filtering>,
-    items: Vec<Item<'a>>,
+    items: Vec<Item>,
 }
 
-impl<'a> Flat<'a, '_> {
+impl Flat<'_, '_> {
     /// One node and, when expanded, its children. `path` leads to the node's parent.
     fn node(
         &mut self,
-        row: &'a OutlinerRow,
+        row: &OutlinerRow,
+        at: RowRef,
         path: &mut Vec<EntityId>,
         parent: Option<usize>,
         hidden: bool,
@@ -347,7 +415,8 @@ impl<'a> Flat<'a, '_> {
         }
         let index = self.items.len();
         self.items.push(Item::Node(Node {
-            row,
+            row: at,
+            id: row.id,
             depth: path.len() - 1,
             parent,
             hidden,
@@ -355,8 +424,14 @@ impl<'a> Flat<'a, '_> {
             toggle,
         }));
         if toggle.is_some_and(|(_, _, expanded)| expanded) {
-            for child in children {
-                self.node(child, path, Some(index), hidden);
+            for (i, child) in children.iter().enumerate() {
+                self.node(
+                    child,
+                    RowRef(Some(row.definition), i),
+                    path,
+                    Some(index),
+                    hidden,
+                );
             }
         }
         path.pop();
@@ -369,7 +444,7 @@ fn node_path(items: &[Item], index: usize) -> Vec<EntityId> {
     let mut at = Some(index);
     while let Some(i) = at {
         let Item::Node(node) = &items[i] else { break };
-        path.push(node.row.id);
+        path.push(node.id);
         at = node.parent;
     }
     path.reverse();
@@ -381,10 +456,10 @@ fn draw_node(
     ui: &mut Ui,
     view: &View,
     node: &Node,
+    row: &OutlinerRow,
     path: &[EntityId],
     actions: &mut Vec<UiAction>,
 ) {
-    let row = node.row;
     let selected = path[..path.len() - 1] == *view.context && view.selection.contains(&row.id);
     let clicked = ui
         .horizontal(|ui| {
@@ -412,6 +487,9 @@ fn draw_node(
                             CollapsingState::load_with_default_open(ui.ctx(), id, default);
                         state.set_open(!expanded);
                         state.store(ui.ctx());
+                        ui.ctx().data_mut(|d| {
+                            *d.get_temp_mut_or_default::<u64>(toggles_key()) += 1;
+                        });
                         ui.ctx().request_repaint();
                     }
                 }

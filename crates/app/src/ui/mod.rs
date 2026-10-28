@@ -657,6 +657,9 @@ pub struct View<'a> {
     pub selection_tag: Option<SelectionTag>,
     /// The placed groups and components (`Document::outliner_rows`).
     pub outliner: &'a OutlinerTable,
+    /// Which table that is: the document count and revision it was built for. The Outliner
+    /// keeps its flat list while this stays the same.
+    pub outliner_stamp: (u64, u64),
     /// The open context's instances, from the root down.
     pub context: &'a [EntityId],
     /// The selection, in the open context.

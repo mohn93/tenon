@@ -601,8 +601,28 @@ fn draw_runs(pass: &mut wgpu::RenderPass<'_>, runs: &[std::ops::Range<u32>], cop
     }
 }
 
-/// What the glass was last sorted for: the view, and the vertex ranges in view (None: all).
-type SortedFor = ([f32; 4], Option<Vec<std::ops::Range<u32>>>);
+/// What every glass triangle was last sorted for: the view, and the distance from the eye to
+/// the nearest glass triangle then (infinite for a parallel view).
+type SortedFor = ([f32; 4], f32);
+
+/// How far the eye may move, as a fraction of the distance to the nearest glass triangle, before
+/// the order is worked out again. Triangles whose distances differ by less than twice this much
+/// can swap places, which at this size is not seen.
+const RESORT_MOVE: f32 = 0.01;
+
+/// Whether the order sorted for `prev` still holds for `view`.
+fn order_holds(prev: &SortedFor, view: [f32; 4]) -> bool {
+    let (old, nearest) = prev;
+    if *old == view {
+        return true;
+    }
+    // A parallel view has no eye to move: any change of direction sorts again.
+    if view[3] == 0.0 || old[3] == 0.0 {
+        return false;
+    }
+    let moved = glam::Vec3::new(view[0] - old[0], view[1] - old[1], view[2] - old[2]).length();
+    moved <= RESORT_MOVE * nearest
+}
 
 /// The triangles of `faces` with a see-through side, drawn after everything opaque.
 struct Glass {
@@ -615,8 +635,12 @@ struct Glass {
     triangles: Vec<(u32, glam::Vec3)>,
     /// How many vertices of `order` are drawn: those of the triangles in view when last sorted.
     drawn: u32,
-    /// The view and the chunks in view (None: all) `order` was sorted for.
+    /// What `sorted` was sorted for.
     sorted_for: Option<SortedFor>,
+    /// Every triangle (an index into `triangles`) far to near, as last sorted.
+    sorted: Vec<u32>,
+    /// The vertex ranges in view (None: all) `order` was last filled for.
+    drawn_for: Option<Option<Vec<std::ops::Range<u32>>>>,
 }
 
 impl Glass {
@@ -665,6 +689,8 @@ impl Glass {
             drawn: 3 * triangles.len() as u32,
             triangles,
             sorted_for: None,
+            sorted: Vec::new(),
+            drawn_for: None,
         })
     }
 
@@ -687,33 +713,75 @@ impl Glass {
         } else {
             [origin.x, origin.y, origin.z, 1.0]
         };
-        let key = (view, visible.map(<[_]>::to_vec));
-        if self.sorted_for.as_ref() == Some(&key) {
+        if !self
+            .sorted_for
+            .as_ref()
+            .is_some_and(|prev| order_holds(prev, view))
+        {
+            // Every triangle is sorted, in view or not, so that the set in view changing as the
+            // camera turns costs a filter, not a sort.
+            let nearest = if view[3] == 0.0 {
+                f32::INFINITY
+            } else {
+                let eye = glam::Vec3::new(view[0], view[1], view[2]);
+                let near = self
+                    .triangles
+                    .iter()
+                    .fold(f32::INFINITY, |m, t| m.min(t.1.distance_squared(eye)));
+                near.sqrt()
+            };
+            self.sorted = far_to_near(&self.triangles, view);
+            self.sorted_for = Some((view, nearest));
+            self.drawn_for = None;
+        }
+        let wanted = visible.map(<[_]>::to_vec);
+        if self.drawn_for.as_ref() == Some(&wanted) {
             return;
         }
-        let indices = match visible {
-            None => back_to_front(&self.triangles, view),
+        let mut indices = Vec::with_capacity(3 * self.sorted.len());
+        let mut push = |t: u32| {
+            let first = self.triangles[t as usize].0;
+            indices.extend([first, first + 1, first + 2]);
+        };
+        match visible {
+            None => self.sorted.iter().for_each(|&t| push(t)),
             Some(runs) => {
-                let mut seen = Vec::new();
+                let mut shown = vec![false; self.triangles.len()];
                 for r in runs {
                     let from = self.triangles.partition_point(|t| t.0 < r.start);
                     let to = self.triangles.partition_point(|t| t.0 < r.end);
-                    seen.extend_from_slice(&self.triangles[from..to]);
+                    shown[from..to].fill(true);
                 }
-                back_to_front(&seen, view)
+                for &t in &self.sorted {
+                    if shown[t as usize] {
+                        push(t);
+                    }
+                }
             }
-        };
+        }
         if !indices.is_empty() {
             queue.write_buffer(&self.order, 0, bytemuck::cast_slice(&indices));
         }
         self.drawn = indices.len() as u32;
-        self.sorted_for = Some(key);
+        self.drawn_for = Some(wanted);
     }
 }
 
 /// The vertices of `triangles` (first vertex, center) ordered far to near for `view`: the
 /// eye's position (w = 1), or the view direction of a parallel view (w = 0).
+#[cfg(test)]
 fn back_to_front(triangles: &[(u32, glam::Vec3)], view: [f32; 4]) -> Vec<u32> {
+    far_to_near(triangles, view)
+        .iter()
+        .flat_map(|&t| {
+            let first = triangles[t as usize].0;
+            [first, first + 1, first + 2]
+        })
+        .collect()
+}
+
+/// The indices of `triangles` ordered far to near for `view` (see `back_to_front`).
+fn far_to_near(triangles: &[(u32, glam::Vec3)], view: [f32; 4]) -> Vec<u32> {
     let [x, y, z, w] = view;
     let v = glam::Vec3::new(x, y, z);
     let depth = |c: glam::Vec3| {
@@ -723,9 +791,9 @@ fn back_to_front(triangles: &[(u32, glam::Vec3)], view: [f32; 4]) -> Vec<u32> {
             c.distance_squared(v)
         }
     };
-    // Each triangle's depth as an integer that orders like the float, over its index: sorting
-    // plain integers is several times quicker than comparing pairs.
-    let mut keyed: Vec<u64> = triangles
+    // Each triangle's depth as an integer that orders like the float, with its index, then
+    // a least-significant-digit radix sort: linear, where comparing sorts are not.
+    let mut keyed: Vec<(u32, u32)> = triangles
         .iter()
         .enumerate()
         .map(|(i, &(_, c))| {
@@ -735,17 +803,30 @@ fn back_to_front(triangles: &[(u32, glam::Vec3)], view: [f32; 4]) -> Vec<u32> {
             } else {
                 bits | 1 << 31
             };
-            u64::from(ordered) << 32 | i as u64
+            (ordered, i as u32)
         })
         .collect();
-    keyed.sort_unstable_by(|a, b| b.cmp(a));
-    keyed
-        .iter()
-        .flat_map(|&k| {
-            let first = triangles[(k & 0xFFFF_FFFF) as usize].0;
-            [first, first + 1, first + 2]
-        })
-        .collect()
+    let mut spare = vec![(0u32, 0u32); keyed.len()];
+    for shift in [0, 11, 22] {
+        let mut counts = [0usize; 2048];
+        for &(k, _) in &keyed {
+            counts[(k >> shift) as usize & 2047] += 1;
+        }
+        // Far to near: the largest digits first.
+        let mut at = 0;
+        for c in counts.iter_mut().rev() {
+            let n = *c;
+            *c = at;
+            at += n;
+        }
+        for &(k, i) in &keyed {
+            let slot = &mut counts[(k >> shift) as usize & 2047];
+            spare[*slot] = (k, i);
+            *slot += 1;
+        }
+        std::mem::swap(&mut keyed, &mut spare);
+    }
+    keyed.iter().map(|&(_, i)| i).collect()
 }
 
 pub struct Renderer {
@@ -3405,7 +3486,7 @@ fn edge_candidates(extras: &[EdgeExtra]) -> (Vec<u32>, Vec<u32>) {
 mod tests {
     use glam::Vec3;
 
-    use super::{back_to_front, spread};
+    use super::{back_to_front, order_holds, spread};
 
     #[test]
     fn wide_lines_spread_into_one_pixel_copies() {
@@ -3448,6 +3529,44 @@ mod tests {
         let (profiles, endpoints) = edge_candidates(&extras);
         assert_eq!(profiles, [2, 3, 8, 9, 10, 11, 12, 13]);
         assert_eq!(endpoints, [2, 3, 4, 5, 8, 9, 10, 11, 12, 13]);
+    }
+
+    #[test]
+    fn glass_order_is_kept_for_small_eye_moves_only() {
+        // Triangles in a row along x, 10 m apart, 100 m from an eye at the origin.
+        let triangles: Vec<(u32, Vec3)> = (0..5)
+            .map(|i| (3 * i, Vec3::new(10.0 * i as f32, 100.0, 0.0)))
+            .collect();
+        let eye = |x: f32| [x, 0.0, 0.0, 1.0];
+        let nearest = 100.0;
+        let prev = (eye(0.0), nearest);
+        let sorted = back_to_front(&triangles, eye(0.0));
+        let is_far_to_near = |order: &[u32], view: [f32; 4]| {
+            let d: Vec<f32> = order
+                .iter()
+                .step_by(3)
+                .map(|&k| {
+                    triangles[(k / 3) as usize]
+                        .1
+                        .distance_squared(Vec3::from_slice(&view))
+                })
+                .collect();
+            d.windows(2).all(|w| w[0] >= w[1])
+        };
+        // A small move keeps the order, and it is still back to front.
+        assert!(order_holds(&prev, eye(0.5)));
+        assert!(is_far_to_near(&sorted, eye(0.5)));
+        // A large move sorts again, and the old order is no longer right.
+        assert!(!order_holds(&prev, eye(40.0)));
+        assert!(!is_far_to_near(&sorted, eye(40.0)));
+        assert!(is_far_to_near(
+            &back_to_front(&triangles, eye(40.0)),
+            eye(40.0)
+        ));
+        // A parallel view keeps its order only when unchanged.
+        let par = ([0.0, -1.0, 0.0, 0.0], f32::INFINITY);
+        assert!(order_holds(&par, [0.0, -1.0, 0.0, 0.0]));
+        assert!(!order_holds(&par, [0.0, -0.99, 0.1, 0.0]));
     }
 
     #[test]

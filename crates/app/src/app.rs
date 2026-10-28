@@ -3032,6 +3032,10 @@ impl State {
             documents: self.editor.documents(),
             selection_tag: self.editor.selection_tag(),
             outliner: self.outliner.as_ref().map(|(_, t)| t).expect("built above"),
+            outliner_stamp: (
+                self.editor.documents(),
+                self.outliner.as_ref().map_or(0, |(r, _)| *r),
+            ),
             context: &context,
             selection: self.editor.doc().selection(),
             soften: self.editor.soften_window(),

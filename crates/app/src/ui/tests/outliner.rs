@@ -271,3 +271,31 @@ fn an_expandable_row_lines_up_with_its_children_one_indent_in() {
     let indent = h.ctx.global_style().spacing.indent;
     assert!((parent + indent - child).abs() < 0.5, "{parent} {child}");
 }
+
+#[test]
+fn the_flat_list_is_rebuilt_on_a_toggle_or_a_new_table_and_reused_otherwise() {
+    use crate::ui::outliner::builds;
+    let mut h = harness(boxes_fixture(&[], &[]));
+    let first = builds(&h.ctx);
+    assert!(first >= 1);
+    // Frames with nothing changed reuse the list.
+    h.run_steps(5);
+    assert_eq!(builds(&h.ctx), first);
+    // Expanding a node builds it again once.
+    let button = toggle_at(&rows(&h), &ids(&["i56"]));
+    click_at(&mut h, button, egui::Modifiers::NONE);
+    h.run_steps(3);
+    let toggled = builds(&h.ctx);
+    assert!(toggled > first);
+    assert!(row(&rows(&h), &ids(&["i56", "i27"])).is_some());
+    h.run_steps(5);
+    assert_eq!(builds(&h.ctx), toggled);
+    // A new table (a new revision) builds it again.
+    h.state_mut().outliner = boxes();
+    h.state_mut().outliner_revision += 1;
+    h.run_steps(3);
+    let table = builds(&h.ctx);
+    assert!(table > toggled);
+    h.run_steps(5);
+    assert_eq!(builds(&h.ctx), table);
+}

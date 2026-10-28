@@ -390,6 +390,11 @@ pub struct Layout {
 }
 
 impl Layout {
+    /// Whether any part has a dimension or note (hidden ones count).
+    pub fn has_annotations(&self) -> bool {
+        !self.annotations.is_empty()
+    }
+
     /// The whole scene seen from the open context `context` (a path of instances from the
     /// root; see `session::Document::context`). None if the path does not resolve.
     pub fn of(scene: &Scene, context: &[InstanceId]) -> Option<Layout> {
