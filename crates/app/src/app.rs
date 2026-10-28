@@ -707,6 +707,8 @@ fn make_renderer(
     if !occlusion {
         renderer.disable_ambient_occlusion();
     }
+    // The window draws far chunks of big models simplified; pictures made off screen do not.
+    renderer.set_lod(true);
     renderer
 }
 
@@ -4044,16 +4046,33 @@ impl ApplicationHandler<AppEvent> for App {
             .state
             .as_mut()
             .and_then(|s| wake_deadline(s.repaint_at, s.autosave_tick(now)));
+        // The simplified copies of a big model are made on a thread after the model settles:
+        // wake now and then to start them and to draw when they arrive (an idle app has no
+        // other reason to).
+        let lod_wake = self.state.as_mut().and_then(|s| {
+            if !s.renderer.lod_busy() {
+                return None;
+            }
+            if s.renderer.poll_lod() {
+                s.window.request_redraw();
+            }
+            s.renderer
+                .lod_busy()
+                .then(|| now + Duration::from_millis(80))
+        });
+        let sooner = |t: Instant| lod_wake.map_or(t, |w| w.min(t));
         match wake_decision(now, deadline) {
             Wake::Redraw => {
                 if let Some(s) = self.state.as_mut() {
                     s.repaint_at = None;
                     s.window.request_redraw();
                 }
-                event_loop.set_control_flow(ControlFlow::Wait);
+                event_loop
+                    .set_control_flow(lod_wake.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
             }
-            Wake::Until(t) => event_loop.set_control_flow(ControlFlow::WaitUntil(t)),
-            Wake::Wait => event_loop.set_control_flow(ControlFlow::Wait),
+            Wake::Until(t) => event_loop.set_control_flow(ControlFlow::WaitUntil(sooner(t))),
+            Wake::Wait => event_loop
+                .set_control_flow(lod_wake.map_or(ControlFlow::Wait, ControlFlow::WaitUntil)),
         }
     }
 

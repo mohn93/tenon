@@ -12,6 +12,7 @@ use crate::grid::{
 };
 use crate::guides::{GuideShape, guide_lines};
 use crate::lights::{Light, MAX_LIGHTS, strongest};
+use crate::lod::{CELL_PIXELS, Lod};
 use crate::scene::{
     BaseFaceVertex, CasterChunk, EdgeColors, EdgeExtra, GlassView, PartsCache, Ranges, Spans,
     scene_base_cached, shown_annotations, shown_guides, shown_sections,
@@ -568,6 +569,24 @@ struct Indices {
 /// leaving out those out of view. Smaller models are drawn whole, as one call.
 const CULL_FROM: usize = 20_000;
 
+/// How long after `set_model` the simplified copies are made: while the model is being changed
+/// again and again (a transition moving instances), they would be thrown away.
+const LOD_SETTLE: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// The simplified copies of a model's solid chunks: they are made from the vertices, which
+/// are kept until the model has settled, then built on another thread, so a frame never waits.
+enum LodState {
+    Off,
+    /// The model's vertices, waiting for the model to settle.
+    Pending(std::sync::Arc<Vec<BaseFaceVertex>>),
+    Building {
+        done: std::sync::mpsc::Receiver<Option<Lod>>,
+        /// Set to stop a build whose model has been replaced.
+        cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    },
+    Ready(Lod),
+}
+
 /// What a frame draws of the chunked vertex lists: the vertex ranges in view.
 #[derive(Default)]
 struct Visible {
@@ -863,6 +882,21 @@ pub struct Renderer {
     edge_chunks: Option<ChunkPlan>,
     /// How many triangles (or edges) a model needs before its drawing is culled by chunk.
     cull_from: usize,
+    /// Simplified copies of the opaque chunks of `faces` (see `set_lod`).
+    lod: LodState,
+    /// Whether chunks far enough away are drawn simplified, and how many pixels across the
+    /// cells of a simplified chunk may be.
+    lod_on: bool,
+    lod_pixels: f32,
+    /// When `set_model` last ran with LOD on, and the level each chunk was last drawn at
+    /// (0: whole).
+    lod_since: Option<std::time::Instant>,
+    /// The most bytes a level's buffer may hold (the device's limit and this).
+    lod_limit: u64,
+    lod_last: std::cell::RefCell<Vec<u8>>,
+    /// Which chunks of `face_chunks` hold something selected, and something hovered.
+    selected_chunks: Vec<bool>,
+    hovered_chunks: Vec<bool>,
     /// Whether any edge is selected, as of the last `set_selection`.
     edges_selected: bool,
     /// The hovered entity and its look, as of the last `set_hover`, and where it lies.
@@ -1583,6 +1617,14 @@ impl Renderer {
             face_chunks: None,
             edge_chunks: None,
             cull_from: CULL_FROM,
+            lod: LodState::Off,
+            lod_on: false,
+            lod_pixels: CELL_PIXELS,
+            lod_since: None,
+            lod_limit: u64::MAX,
+            lod_last: std::cell::RefCell::new(Vec::new()),
+            selected_chunks: Vec::new(),
+            hovered_chunks: Vec::new(),
             edges_selected: false,
             hover: None,
             hover_ranges: Ranges::default(),
@@ -1632,17 +1674,219 @@ impl Renderer {
         Some((ChunkPlan::covered(&runs.solid) / 3, plan.kept as u32 / 3))
     }
 
-    /// The chunked lists' ranges in view of `camera`.
-    fn visible(&self, camera: &Camera) -> Visible {
+    /// Turns on the drawing of far chunks of a big model as simplified copies (off by default:
+    /// pictures made off screen are full detail). Takes effect for models set from now on; the
+    /// copies are made on another thread once a view needs them, and until they are ready the
+    /// chunks are drawn whole. Turning it off draws whole at once, for comparing pictures. Not
+    /// on the web.
+    pub fn set_lod(&mut self, on: bool) {
+        self.lod_on = on && !cfg!(target_arch = "wasm32");
+        if !self.lod_on {
+            self.drop_lod();
+        }
+    }
+
+    /// Limits the bytes a level of the simplified copies may take to `bytes`, on top of the
+    /// device's own limit: a level over it is left out. For tests.
+    pub fn set_lod_buffer_limit(&mut self, bytes: u64) {
+        self.lod_limit = bytes;
+    }
+
+    /// True while the simplified copies are waiting to be made or being made, so a caller that
+    /// draws only on demand knows to call `poll_lod` soon.
+    pub fn lod_busy(&self) -> bool {
+        matches!(self.lod, LodState::Pending(_) | LodState::Building { .. })
+    }
+
+    /// Moves the making of the simplified copies on without drawing: starts it once the model
+    /// has settled, takes the copies when done. True when they arrived, so a frame should be
+    /// drawn.
+    pub fn poll_lod(&mut self) -> bool {
+        self.advance_lod()
+    }
+
+    /// Sets how many pixels across the cells of a simplified chunk may be on the screen (0.1
+    /// to 8); the default is 2, and what is dropped is of about that size.
+    pub fn set_lod_pixels(&mut self, pixels: f32) {
+        self.lod_pixels = if pixels.is_finite() {
+            pixels.clamp(0.1, 8.0)
+        } else {
+            CELL_PIXELS
+        };
+    }
+
+    /// Makes the simplified copies of the model now and waits for them, for tests and tools
+    /// that draw straight away.
+    pub fn wait_for_lod(&mut self) {
+        if let LodState::Pending(faces) = std::mem::replace(&mut self.lod, LodState::Off) {
+            self.start_lod(faces);
+        }
+        if let LodState::Building { done, .. } = std::mem::replace(&mut self.lod, LodState::Off) {
+            self.lod = done
+                .recv()
+                .ok()
+                .flatten()
+                .map_or(LodState::Off, LodState::Ready);
+            self.lod_last.get_mut().clear();
+        }
+    }
+
+    /// The bytes of vertices each level of the simplified copies holds, once they are made.
+    pub fn lod_level_bytes(&self) -> Vec<u64> {
+        match &self.lod {
+            LodState::Ready(lod) => lod.level_bytes(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Waits until the GPU has taken what `set_model` and the like uploaded, and frees what it
+    /// replaced; for offscreen use, which draws no frames in between.
+    pub fn settle(&self) {
+        self.queue.submit([]);
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
+    /// How many opaque triangles a frame seen by `camera` draws, counting the simplified ones
+    /// as drawn, and how many the model has in all; None when the faces are not chunked.
+    pub fn drawn_triangles(&self, camera: &Camera) -> Option<(u32, u32)> {
+        let plan = self.face_chunks.as_ref()?;
+        let runs = self.visible(camera, false).faces?;
+        let lod: u32 = runs.lod.iter().map(|r| ChunkPlan::covered(r)).sum();
+        Some((
+            (ChunkPlan::covered(&runs.solid) + lod) / 3,
+            plan.kept as u32 / 3,
+        ))
+    }
+
+    /// True when chunk `k` has something selected or hovered, so it is drawn whole.
+    fn chunk_marked(&self, k: usize) -> bool {
+        self.selected_chunks.get(k).copied().unwrap_or(false)
+            || self.hovered_chunks.get(k).copied().unwrap_or(false)
+    }
+
+    /// The chunked lists' ranges in view of `camera`. With `remember`, the levels chosen are
+    /// kept to choose the next ones by (see `Lod::pick`).
+    fn visible(&self, camera: &Camera, remember: bool) -> Visible {
+        let faces = self.face_chunks.as_ref().map(|c| match &self.lod {
+            LodState::Ready(lod) if self.lod_on => c.visible_by(camera, |k, per_pixel| {
+                let mut last = self.lod_last.borrow_mut();
+                if last.len() != c.chunks.len() {
+                    *last = vec![0; c.chunks.len()];
+                }
+                if self.chunk_marked(k) {
+                    if remember {
+                        last[k] = 0;
+                    }
+                    return None;
+                }
+                let (next, pick) = lod.pick(k, per_pixel, self.lod_pixels, last[k]);
+                if remember {
+                    last[k] = next;
+                }
+                pick
+            }),
+            _ => c.visible(camera),
+        });
         Visible {
-            faces: self.face_chunks.as_ref().map(|c| c.visible(camera)),
+            faces,
             edges: self.edge_chunks.as_ref().map(|c| c.visible(camera)),
         }
+    }
+
+    /// Drops the simplified copies, and stops a build of them.
+    fn drop_lod(&mut self) {
+        if let LodState::Building { cancel, .. } = &self.lod {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.lod = LodState::Off;
+        self.lod_last.get_mut().clear();
+    }
+
+    /// Starts making the simplified copies from `faces` on another thread.
+    fn start_lod(&mut self, faces: std::sync::Arc<Vec<BaseFaceVertex>>) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(plan) = self.face_chunks.clone() {
+            let device = self.device.clone();
+            let limit = self.lod_limit.min(device.limits().max_buffer_size);
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let (sender, done) = std::sync::mpsc::channel();
+            let flag = cancel.clone();
+            std::thread::spawn(move || {
+                let lod = Lod::build(&device, &plan, &faces, &flag, limit);
+                drop(faces);
+                let _ = sender.send(lod);
+            });
+            self.lod = LodState::Building { done, cancel };
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = faces;
+    }
+
+    /// Moves the making of the simplified copies on: takes them when they are done, starts
+    /// them when the model has settled. True when they arrived.
+    fn advance_lod(&mut self) -> bool {
+        match std::mem::replace(&mut self.lod, LodState::Off) {
+            LodState::Building { done, cancel } => match done.try_recv() {
+                Ok(lod) => {
+                    self.lod = lod.map_or(LodState::Off, LodState::Ready);
+                    self.lod_last.get_mut().clear();
+                    return true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.lod = LodState::Building { done, cancel }
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    eprintln!("the thread making the simplified copies ended without a result");
+                }
+            },
+            LodState::Pending(faces) => {
+                if self.lod_on && self.lod_since.is_some_and(|t| t.elapsed() >= LOD_SETTLE) {
+                    self.start_lod(faces);
+                } else {
+                    self.lod = LodState::Pending(faces);
+                }
+            }
+            other => self.lod = other,
+        }
+        false
+    }
+
+    /// Draws the vertices of the simplified levels in `runs`, with `pipeline` if given (else
+    /// the one set). True when it drew any.
+    fn draw_lod(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        runs: Option<&Runs>,
+        pipeline: Option<&wgpu::RenderPipeline>,
+    ) -> bool {
+        let (LodState::Ready(lod), Some(runs)) = (&self.lod, runs) else {
+            return false;
+        };
+        let mut drew = false;
+        for (level, list) in runs.lod.iter().enumerate() {
+            if let (Some((buffer, zeros)), false) = (lod.buffers(level), list.is_empty()) {
+                if let Some(pipeline) = pipeline {
+                    pass.set_pipeline(pipeline);
+                }
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.set_vertex_buffer(1, zeros.slice(..));
+                pass.set_vertex_buffer(2, zeros.slice(..));
+                draw_runs(pass, list, 1);
+                drew = true;
+            }
+        }
+        drew
     }
 
     /// Rebuilds the face and edge buffers from the scene with the open context `context`, with
     /// nothing selected until `set_selection`. Call when the model or the open context changes.
     pub fn set_model(&mut self, scene: &Scene, context: &[InstanceId]) {
+        // What the last model holds is freed first, so the new one is not built beside it.
+        self.drop_lod();
+        self.lod_since = self.lod_on.then(std::time::Instant::now);
+        self.faces = None;
+        self.glass = None;
+        self.edges = None;
         if !self.textures.holds(scene) {
             self.textures = TextureArray::new(&self.device, &self.queue, scene);
             self.rebind();
@@ -1677,6 +1921,8 @@ impl Renderer {
                 &|first| !faces[first].is_glass(),
             )
         });
+        self.selected_chunks = Vec::new();
+        self.hovered_chunks = Vec::new();
         self.edge_chunks = (base.edges.len() / 2 >= self.cull_from).then(|| {
             let edges = &base.edges;
             ChunkPlan::new(
@@ -1723,6 +1969,10 @@ impl Renderer {
         );
         self.cut_fill = mesh(&self.device, "cut fill", &base.cut_fill);
         self.cut_edges = mesh(&self.device, "cut edges", &base.cut_edges);
+        // The simplified copies are made later, from these vertices.
+        if self.lod_on && self.face_chunks.is_some() {
+            self.lod = LodState::Pending(std::sync::Arc::new(base.faces));
+        }
         self.spans = base.spans;
         self.guides = base.guides.clone();
         self.guide_flags = vec![false; base.guides.len()];
@@ -1759,6 +2009,10 @@ impl Renderer {
         if self.sun.is_some() {
             self.sync_sun_casters();
         }
+        // The uploads' staging buffers and the replaced ones are freed only after a submit and
+        // a poll; without frames in between, models would pile up.
+        self.queue.submit([]);
+        let _ = self.device.poll(wgpu::PollType::Poll);
     }
 
     /// Uploads the sun's casters, and makes the map draw again when they differ from the last
@@ -2039,18 +2293,44 @@ impl Renderer {
     /// the selection flags only. Call when just the selection changes.
     pub fn set_selection(&mut self, selection: &BTreeSet<EntityId>) {
         let flags = self.spans.flags(selection);
-        for (mesh, flags, plan) in [
-            (&self.faces, &flags.faces, &self.face_chunks),
-            (&self.edges, &flags.edges, &self.edge_chunks),
+        // The faces' flags in the chunks' order, worked out once.
+        let moved = self
+            .face_chunks
+            .as_ref()
+            .map(|plan| plan.permute(&flags.faces));
+        self.selected_chunks = match (&self.face_chunks, &moved) {
+            (Some(plan), Some(moved)) => plan
+                .chunks
+                .iter()
+                .map(|c| {
+                    moved
+                        .get(c.vertices.start as usize..c.vertices.end as usize)
+                        .is_some_and(|f| f.iter().any(|&f| f != 0.0))
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        for (mesh, flags, plan, moved) in [
+            (
+                &self.faces,
+                &flags.faces,
+                &self.face_chunks,
+                moved.as_deref(),
+            ),
+            (&self.edges, &flags.edges, &self.edge_chunks, None),
         ] {
             if let Some(buffer) = mesh.as_ref().and_then(|m| m.flags.as_ref()) {
-                match plan {
-                    Some(plan) => self.queue.write_buffer(
+                match (plan, moved) {
+                    (_, Some(moved)) => {
+                        self.queue
+                            .write_buffer(buffer, 0, bytemuck::cast_slice(moved))
+                    }
+                    (Some(plan), None) => self.queue.write_buffer(
                         buffer,
                         0,
                         bytemuck::cast_slice(&plan.permute(flags)),
                     ),
-                    None => self
+                    (None, None) => self
                         .queue
                         .write_buffer(buffer, 0, bytemuck::cast_slice(flags)),
                 }
@@ -2076,6 +2356,18 @@ impl Renderer {
         self.write_hover(&ranges, 1.0);
         self.hover = hover;
         self.hover_ranges = ranges;
+        self.hovered_chunks = match &self.face_chunks {
+            Some(plan) => {
+                let mut marked = vec![false; plan.chunks.len()];
+                if !self.hover_ranges.faces.is_empty() {
+                    for placed in plan.map_range(self.hover_ranges.faces.clone()) {
+                        marked[plan.chunks_in(placed)].fill(true);
+                    }
+                }
+                marked
+            }
+            None => Vec::new(),
+        };
         self.refresh_guides();
     }
 
@@ -2345,13 +2637,14 @@ impl Renderer {
         if self.targets.as_ref().map(|t| t.size) != Some(size) {
             self.targets = Some(self.make_targets(size));
         }
+        self.advance_lod();
         let occlusion = self.ambient_occlusion();
         self.prepare_ao(occlusion.is_some(), size);
 
         let uniforms = Uniforms::new(camera);
         self.queue
             .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
-        let visible = self.visible(camera);
+        let visible = self.visible(camera, true);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -2551,6 +2844,7 @@ impl Renderer {
                             visible.faces.as_ref().map_or(&[][..], |r| &r.solid),
                             1,
                         );
+                        self.draw_lod(&mut pass, visible.faces.as_ref(), Some(&self.face_pipeline));
                         if let Some(glass) = glass {
                             bind(&mut pass, &self.solid_side_pipeline, faces);
                             pass.set_index_buffer(glass.order.slice(..), wgpu::IndexFormat::Uint32);
@@ -2731,6 +3025,16 @@ impl Renderer {
                         visible.faces.as_ref().map_or(&[][..], |r| &r.solid),
                         1,
                     );
+                    if self.draw_lod(&mut pass, visible.faces.as_ref(), None) {
+                        // The glass below is drawn from the full vertices again.
+                        pass.set_vertex_buffer(0, faces.buffer.slice(..));
+                        if let Some(flags) = &faces.flags {
+                            pass.set_vertex_buffer(1, flags.slice(..));
+                        }
+                        if let Some(hover) = &faces.hover {
+                            pass.set_vertex_buffer(2, hover.slice(..));
+                        }
+                    }
                     if let Some(glass) = &self.glass {
                         pass.set_index_buffer(glass.order.slice(..), wgpu::IndexFormat::Uint32);
                         pass.draw_indexed(0..glass.count(), 0, 0..1);

@@ -7,6 +7,7 @@ mod finish;
 mod golden;
 mod headless;
 mod hide;
+mod lod;
 mod perf;
 mod pictures;
 mod profiles;
