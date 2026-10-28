@@ -2,10 +2,12 @@
 //! program per crate instead of one per file.
 
 mod ao;
+mod culling;
 mod finish;
 mod golden;
 mod headless;
 mod hide;
+mod lod;
 mod perf;
 mod pictures;
 mod profiles;

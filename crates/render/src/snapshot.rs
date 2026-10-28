@@ -161,6 +161,7 @@ impl Snapshotter {
         height: u32,
     ) -> Option<Vec<u8>> {
         self.renderer.set_scene(scene, context, selection);
+        self.renderer.settle();
         self.capture_prepared(camera, lighting, width, height)
     }
 
@@ -179,6 +180,7 @@ impl Snapshotter {
         overlay: Overlay,
     ) -> Option<Vec<u8>> {
         self.renderer.set_scene(scene, context, selection);
+        self.renderer.settle();
         self.capture_inner(camera, lighting, width, height, Some(overlay))
     }
 
@@ -191,6 +193,7 @@ impl Snapshotter {
         selection: &BTreeSet<EntityId>,
     ) {
         self.renderer.set_scene(scene, context, selection);
+        self.renderer.settle();
     }
 
     /// [`Snapshotter::capture`] of the scene [`Snapshotter::prepare`] set (or the last capture's).

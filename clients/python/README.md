@@ -126,6 +126,23 @@ images (the tests use it).
   kitchen, dining, bedroom) and planting as varied components. Glowing pendants, coves, pool
   lights, bollards and uplights light the night view. Writes `villa.png` (golden hour),
   `villa-dusk.png`, `villa-section.png`, `villa-plan.png` and `villa.tnn`.
+- `examples/dubai.py`: Dubai from the Gulf to the desert, about 3.5 km compressed but in the real
+  order along the coast: the Burj Khalifa (three wings round a hexagonal core, each wing a stack of
+  tier components that shorten in a spiral, fins, floor bands, a stepped steel spire), the lake and
+  fountain, the Dubai Mall and the Address; Sheikh Zayed Road with a median, a metro viaduct and
+  train, cars, street lights, an interchange and a canyon of towers (the Emirates Towers as
+  triangular prisms with sloped tops); Dubai Marina on a curving canal with yachts, Cayan Tower as
+  73 turned floor plates and a Princess-style slab; the Burj Al Arab on its island with a lattice
+  of cylinders on arbitrary axes and a helipad; the Palm Jumeirah (a trunk, 16 frond components
+  with villas, a crescent breakwater, an Atlantis with an arch), Ain Dubai, the Museum of the
+  Future, the Frame, mosques, the Creek with dhows, courtyard neighbourhoods, desert and ships.
+  Towers carry mullions, slab edges, balconies, crowns and rooftop plant; the road has gantry
+  signs, pod-roofed metro stations and dense traffic; Palm villas have pools and jetties. Towers,
+  villas, cars, palms and boats are components: about 46,000 placed, 188,000 solids and 5.4M
+  triangles, built in about a minute against a release app (`--quick` builds a small version).
+  Writes `dubai.png` (golden hour, from the Gulf), `dubai-night.png` (glowing windows, sail, wheel,
+  fountain and spire, switched on with `change_material`), `dubai-khalifa.png`, `dubai-palm.png`,
+  `dubai-szr.png`, `dubai-flyover.gif` (a camera path, needs `ffmpeg`) and `dubai.tnn`.
 - `examples/barn.py`: a pegged oak timber-frame barn, 8 m x 12 m on four bents: mortises and
   peg holes by `solid_subtract`, tenons by `solid_union`, chamfered timbers, rafters, purlins,
   board-and-batten cladding, standing-seam roof, a sliding door and a workbench. Writes

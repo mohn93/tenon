@@ -204,9 +204,32 @@ fn a_filter_draws_at_most_its_row_limit() {
         ..Default::default()
     });
     type_into(&mut h, "Filter outliner", 0, "group", egui::Key::Enter);
-    let named = rows(&h).iter().filter(|r| !r.path.is_empty()).count();
-    assert_eq!(named, MAX_FILTERED_ROWS);
+    // Only the rows in view are laid out: scroll to the end to see the last one and the note.
+    let at = row_at(&rows(&h), &ids(&["i200"]));
+    h.event(egui::Event::PointerMoved(at));
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::Vec2::new(0.0, -1.0e6),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_ok();
+    let last = format!("i{}", 200 + MAX_FILTERED_ROWS - 1);
+    assert!(row(&rows(&h), &ids(&[last.as_str()])).is_some());
+    let beyond = format!("i{}", 200 + MAX_FILTERED_ROWS);
+    assert!(row(&rows(&h), &ids(&[beyond.as_str()])).is_none());
     h.get_by_label("More matches: refine the filter");
+}
+
+#[test]
+fn only_the_rows_in_view_are_laid_out() {
+    let h = harness(Fixture {
+        outliner: super::layout::many_groups(10_000),
+        ..Default::default()
+    });
+    let laid = rows(&h).len();
+    assert!(laid > 1, "some rows show");
+    assert!(laid < 100, "{laid} rows laid out of 10001");
 }
 
 #[test]
@@ -237,4 +260,42 @@ fn a_node_collapsed_under_a_filter_opens_again_for_the_next_filter() {
         Some("kitchen")
     );
     h.get_by_label("<Kitchen>");
+}
+
+#[test]
+fn an_expandable_row_lines_up_with_its_children_one_indent_in() {
+    let h = harness(boxes_fixture(&["i55"], &[]));
+    let laid = rows(&h);
+    let parent = row(&laid, &ids(&["i55"])).unwrap().rect.left();
+    let child = row(&laid, &ids(&["i55", "i27"])).unwrap().rect.left();
+    let indent = h.ctx.global_style().spacing.indent;
+    assert!((parent + indent - child).abs() < 0.5, "{parent} {child}");
+}
+
+#[test]
+fn the_flat_list_is_rebuilt_on_a_toggle_or_a_new_table_and_reused_otherwise() {
+    use crate::ui::outliner::builds;
+    let mut h = harness(boxes_fixture(&[], &[]));
+    let first = builds(&h.ctx);
+    assert!(first >= 1);
+    // Frames with nothing changed reuse the list.
+    h.run_steps(5);
+    assert_eq!(builds(&h.ctx), first);
+    // Expanding a node builds it again once.
+    let button = toggle_at(&rows(&h), &ids(&["i56"]));
+    click_at(&mut h, button, egui::Modifiers::NONE);
+    h.run_steps(3);
+    let toggled = builds(&h.ctx);
+    assert!(toggled > first);
+    assert!(row(&rows(&h), &ids(&["i56", "i27"])).is_some());
+    h.run_steps(5);
+    assert_eq!(builds(&h.ctx), toggled);
+    // A new table (a new revision) builds it again.
+    h.state_mut().outliner = boxes();
+    h.state_mut().outliner_revision += 1;
+    h.run_steps(3);
+    let table = builds(&h.ctx);
+    assert!(table > toggled);
+    h.run_steps(5);
+    assert_eq!(builds(&h.ctx), table);
 }

@@ -152,6 +152,11 @@ class ExampleTests(unittest.TestCase):
                                    ("villa.png", "villa-dusk.png", "villa-section.png", "villa-plan.png")})
         self.assertTrue(os.path.isfile(os.path.join(self.out, "villa.tnn")))
 
+    def test_dubai(self):
+        self.run_example("dubai", {n: (320, 200) for n in
+                                   ("dubai.png", "dubai-night.png", "dubai-khalifa.png", "dubai-palm.png", "dubai-szr.png")})
+        self.assertTrue(os.path.isfile(os.path.join(self.out, "dubai.tnn")))
+
     def test_robot_cell(self):
         self.run_example("robot_cell", {n: (320, 200) for n in
                                         ("robot.png", "robot-detail.png", "robot-section.png")})

@@ -151,7 +151,46 @@ Total (bounding boards)      174                                   14.147
 
 ![The barn in a hand-drawn style with sketchy edges](docs/images/barn-sketch.jpg)
 
-## Scale: a city in a few batches
+## Scale: Dubai at 5.4 million triangles
+
+![Dubai at golden hour from the Gulf: the Palm Jumeirah in front, Ain Dubai and the Marina on the left, the Burj Al Arab in the middle, the Burj Khalifa over the fountain on the right, desert behind](docs/images/dubai.jpg)
+
+[`dubai.py`](clients/python/examples/dubai.py) builds Dubai from the Gulf to the desert, compressed
+but in the real order along the coast:
+- **Downtown:** the Burj Khalifa (three wings round a core, tiers that step back in a spiral, fins
+  on every mullion, a ringed spire) over the lake and fountain.
+- **Sheikh Zayed Road:** a canyon of towers with balconies, crowns and rooftop plant, the Emirates
+  Towers, and the metro on its viaduct with pod stations. Traffic, gantry signs and an
+  interchange fill the road.
+- **The Marina:** a curving canal with yachts and the twisting Cayan Tower.
+- **The coast:** the Burj Al Arab on its island, and the Palm Jumeirah with villas, pools and
+  jetties on all 16 fronds and Atlantis on the crescent.
+- **Around them:** Ain Dubai, the Museum of the Future, the Frame, mosques, courtyard
+  neighbourhoods, surf and desert dunes.
+
+Repeated parts are components. The script places about 46,000 of them, about 188,000 solids in
+all, in large batches, and the model builds in about a minute.
+
+| | |
+|---|---|
+| ![Dubai at night with lit towers, the glowing Burj Al Arab and Ain Dubai, the fountain lit and stars overhead](docs/images/dubai-night.jpg) | ![Looking down Sheikh Zayed Road between towers, with traffic, the metro train, gantry signs and palms](docs/images/dubai-szr.jpg) |
+| Night: glowing materials switched on with `change_material` | Sheikh Zayed Road |
+
+![The Palm Jumeirah from above: the trunk, 16 fronds lined with villas, the crescent and Atlantis, with the Marina and Burj Al Arab beyond](docs/images/dubai-palm.jpg)
+
+The window keeps up with it. Large models are drawn by spatial chunk: chunks out of view are
+skipped, and distant ones are drawn from simplified copies built in the background. Orbiting the
+whole city runs at about 60 fps on an M1 Max.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/dubai-orbit.gif" alt="Orbiting the whole Dubai model in the Tenon window"></td>
+<td width="50%"><img src="docs/images/dubai-app.jpg" alt="The Dubai model open in the Tenon window"></td>
+</tr>
+<tr><td>Orbiting with the mouse, screen-recorded</td><td>The model open in the window</td></tr>
+</table>
+
+## A city in a few batches
 
 ![An aerial view of a city grid with towers, mid-rise blocks, houses, a park and trees](docs/images/city.jpg)
 
@@ -256,6 +295,7 @@ python3 clients/python/examples/villa.py --out /tmp/shots
 python3 clients/python/examples/robot_cell.py --out /tmp/shots
 python3 clients/python/examples/gearbox.py --out /tmp/shots
 python3 clients/python/examples/barn.py --out /tmp/shots
+python3 clients/python/examples/dubai.py --out /tmp/shots
 python3 clients/python/examples/city.py --out /tmp/shots
 ```
 

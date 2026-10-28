@@ -6,11 +6,13 @@ use session::{Camera, Lighting, SectionDisplay, world_drawing_axes};
 use wgpu::util::DeviceExt;
 
 use crate::annotations::{AnnotationLook, annotation_lines};
+use crate::chunks::{CHUNK_PRIMITIVES, ChunkPlan, Runs};
 use crate::grid::{
     LineVertex, NIGHT_BACKGROUND, flat_axis_lines_at, flat_ground_lines_at, vertical_axis_lines_at,
 };
 use crate::guides::{GuideShape, guide_lines};
 use crate::lights::{Light, MAX_LIGHTS, strongest};
+use crate::lod::{CELL_PIXELS, Lod};
 use crate::scene::{
     BaseFaceVertex, CasterChunk, EdgeColors, EdgeExtra, GlassView, PartsCache, Ranges, Spans,
     scene_base_cached, shown_annotations, shown_guides, shown_sections,
@@ -47,7 +49,9 @@ const EDGE_EXTRA_ATTRIBS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
 ];
 
 /// The limits the renderer asks of a device: the defaults, with room for a cube shadow map per
-/// shadowed light (six array layers each) where the adapter has it.
+/// shadowed light (six array layers each) where the adapter has it, and buffers as large as the
+/// adapter allows, since the whole flattened model is one vertex buffer (the default's 256 MB
+/// holds under a million triangles).
 ///
 /// On the web, a GL (WebGL2) adapter gets `downlevel_webgl2_defaults` as the base instead, since
 /// the full defaults exceed what WebGL2 offers.
@@ -66,6 +70,7 @@ pub fn required_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
     let layers = wanted.min(adapter.limits().max_texture_array_layers);
     wgpu::Limits {
         max_texture_array_layers: layers.max(defaults.max_texture_array_layers),
+        max_buffer_size: adapter.limits().max_buffer_size,
         ..defaults
     }
 }
@@ -560,6 +565,65 @@ struct Indices {
     count: u32,
 }
 
+/// Triangles (or edges) a model needs before its faces (or edges) are drawn by spatial chunk,
+/// leaving out those out of view. Smaller models are drawn whole, as one call.
+const CULL_FROM: usize = 20_000;
+
+/// How long after `set_model` the simplified copies are made: while the model is being changed
+/// again and again (a transition moving instances), they would be thrown away.
+const LOD_SETTLE: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// The simplified copies of a model's solid chunks: they are made from the vertices, which
+/// are kept until the model has settled, then built on another thread, so a frame never waits.
+enum LodState {
+    Off,
+    /// The model's vertices, waiting for the model to settle.
+    Pending(std::sync::Arc<Vec<BaseFaceVertex>>),
+    Building {
+        done: std::sync::mpsc::Receiver<Option<Lod>>,
+        /// Set to stop a build whose model has been replaced.
+        cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    },
+    Ready(Lod),
+}
+
+/// What a frame draws of the chunked vertex lists: the vertex ranges in view.
+#[derive(Default)]
+struct Visible {
+    faces: Option<Runs>,
+    edges: Option<Runs>,
+}
+
+/// Draws `copies` instances of the vertex ranges `runs`.
+fn draw_runs(pass: &mut wgpu::RenderPass<'_>, runs: &[std::ops::Range<u32>], copies: u32) {
+    for r in runs {
+        pass.draw(r.clone(), 0..copies);
+    }
+}
+
+/// What every glass triangle was last sorted for: the view, and the distance from the eye to
+/// the nearest glass triangle then (infinite for a parallel view).
+type SortedFor = ([f32; 4], f32);
+
+/// How far the eye may move, as a fraction of the distance to the nearest glass triangle, before
+/// the order is worked out again. Triangles whose distances differ by less than twice this much
+/// can swap places, which at this size is not seen.
+const RESORT_MOVE: f32 = 0.01;
+
+/// Whether the order sorted for `prev` still holds for `view`.
+fn order_holds(prev: &SortedFor, view: [f32; 4]) -> bool {
+    let (old, nearest) = prev;
+    if *old == view {
+        return true;
+    }
+    // A parallel view has no eye to move: any change of direction sorts again.
+    if view[3] == 0.0 || old[3] == 0.0 {
+        return false;
+    }
+    let moved = glam::Vec3::new(view[0] - old[0], view[1] - old[1], view[2] - old[2]).length();
+    moved <= RESORT_MOVE * nearest
+}
+
 /// The triangles of `faces` with a see-through side, drawn after everything opaque.
 struct Glass {
     /// The first vertex of each opaque triangle, for drawing them alone.
@@ -567,29 +631,45 @@ struct Glass {
     solid_count: u32,
     /// The vertices of the see-through triangles, far to near as last sorted.
     order: wgpu::Buffer,
-    /// Each see-through triangle's first vertex and center.
+    /// Each see-through triangle's first vertex and center, by first vertex.
     triangles: Vec<(u32, glam::Vec3)>,
-    /// The view `order` was sorted for.
-    sorted_for: Option<[f32; 4]>,
+    /// How many vertices of `order` are drawn: those of the triangles in view when last sorted.
+    drawn: u32,
+    /// What `sorted` was sorted for.
+    sorted_for: Option<SortedFor>,
+    /// Every triangle (an index into `triangles`) far to near, as last sorted.
+    sorted: Vec<u32>,
+    /// The vertex ranges in view (None: all) `order` was last filled for.
+    drawn_for: Option<Option<Vec<std::ops::Range<u32>>>>,
 }
 
 impl Glass {
     /// The see-through triangles of `faces`, or None when there are none.
-    fn new(device: &wgpu::Device, faces: &[BaseFaceVertex], glass: &[u32]) -> Option<Glass> {
+    /// `solid_list` is false when the opaque triangles are listed elsewhere (in chunks).
+    fn new(
+        device: &wgpu::Device,
+        vertex_count: usize,
+        pos: &dyn Fn(usize) -> [f32; 3],
+        glass: &[u32],
+        solid_list: bool,
+    ) -> Option<Glass> {
         if glass.is_empty() {
             return None;
         }
-        let mut solid = Vec::with_capacity(faces.len() - 3 * glass.len());
-        let mut next = glass.iter().peekable();
-        for first in (0..faces.len() as u32).step_by(3) {
-            if next.next_if_eq(&&first).is_none() {
-                solid.extend([first, first + 1, first + 2]);
+        let mut solid = Vec::new();
+        if solid_list {
+            solid.reserve(vertex_count - 3 * glass.len());
+            let mut next = glass.iter().peekable();
+            for first in (0..vertex_count as u32).step_by(3) {
+                if next.next_if_eq(&&first).is_none() {
+                    solid.extend([first, first + 1, first + 2]);
+                }
             }
         }
         let triangles: Vec<(u32, glam::Vec3)> = glass
             .iter()
             .map(|&k| {
-                let corner = |i: u32| glam::Vec3::from(faces[i as usize].pos);
+                let corner = |i: u32| glam::Vec3::from(pos(i as usize));
                 (k, (corner(k) + corner(k + 1) + corner(k + 2)) / 3.0)
             })
             .collect();
@@ -606,35 +686,102 @@ impl Glass {
             solid: index_buffer("solid faces", &solid, wgpu::BufferUsages::empty()),
             solid_count: solid.len() as u32,
             order: index_buffer("glass faces", &unsorted, wgpu::BufferUsages::COPY_DST),
+            drawn: 3 * triangles.len() as u32,
             triangles,
             sorted_for: None,
+            sorted: Vec::new(),
+            drawn_for: None,
         })
     }
 
     fn count(&self) -> u32 {
-        3 * self.triangles.len() as u32
+        self.drawn
     }
 
     /// Sorts the triangles far to near from `camera`, unless they already are for its view.
-    fn sort(&mut self, queue: &wgpu::Queue, camera: &Camera) {
+    /// `visible` are the vertex ranges in view when the faces are culled by chunk: only the
+    /// triangles in them are sorted and drawn.
+    fn sort(
+        &mut self,
+        queue: &wgpu::Queue,
+        camera: &Camera,
+        visible: Option<&[std::ops::Range<u32>]>,
+    ) {
         let (origin, toward) = (camera.eye.as_vec3(), camera.forward().as_vec3());
         let view = if camera.is_parallel() {
             [toward.x, toward.y, toward.z, 0.0]
         } else {
             [origin.x, origin.y, origin.z, 1.0]
         };
-        if self.sorted_for == Some(view) {
+        if !self
+            .sorted_for
+            .as_ref()
+            .is_some_and(|prev| order_holds(prev, view))
+        {
+            // Every triangle is sorted, in view or not, so that the set in view changing as the
+            // camera turns costs a filter, not a sort.
+            let nearest = if view[3] == 0.0 {
+                f32::INFINITY
+            } else {
+                let eye = glam::Vec3::new(view[0], view[1], view[2]);
+                let near = self
+                    .triangles
+                    .iter()
+                    .fold(f32::INFINITY, |m, t| m.min(t.1.distance_squared(eye)));
+                near.sqrt()
+            };
+            self.sorted = far_to_near(&self.triangles, view);
+            self.sorted_for = Some((view, nearest));
+            self.drawn_for = None;
+        }
+        let wanted = visible.map(<[_]>::to_vec);
+        if self.drawn_for.as_ref() == Some(&wanted) {
             return;
         }
-        let indices = back_to_front(&self.triangles, view);
-        queue.write_buffer(&self.order, 0, bytemuck::cast_slice(&indices));
-        self.sorted_for = Some(view);
+        let mut indices = Vec::with_capacity(3 * self.sorted.len());
+        let mut push = |t: u32| {
+            let first = self.triangles[t as usize].0;
+            indices.extend([first, first + 1, first + 2]);
+        };
+        match visible {
+            None => self.sorted.iter().for_each(|&t| push(t)),
+            Some(runs) => {
+                let mut shown = vec![false; self.triangles.len()];
+                for r in runs {
+                    let from = self.triangles.partition_point(|t| t.0 < r.start);
+                    let to = self.triangles.partition_point(|t| t.0 < r.end);
+                    shown[from..to].fill(true);
+                }
+                for &t in &self.sorted {
+                    if shown[t as usize] {
+                        push(t);
+                    }
+                }
+            }
+        }
+        if !indices.is_empty() {
+            queue.write_buffer(&self.order, 0, bytemuck::cast_slice(&indices));
+        }
+        self.drawn = indices.len() as u32;
+        self.drawn_for = Some(wanted);
     }
 }
 
 /// The vertices of `triangles` (first vertex, center) ordered far to near for `view`: the
 /// eye's position (w = 1), or the view direction of a parallel view (w = 0).
+#[cfg(test)]
 fn back_to_front(triangles: &[(u32, glam::Vec3)], view: [f32; 4]) -> Vec<u32> {
+    far_to_near(triangles, view)
+        .iter()
+        .flat_map(|&t| {
+            let first = triangles[t as usize].0;
+            [first, first + 1, first + 2]
+        })
+        .collect()
+}
+
+/// The indices of `triangles` ordered far to near for `view` (see `back_to_front`).
+fn far_to_near(triangles: &[(u32, glam::Vec3)], view: [f32; 4]) -> Vec<u32> {
     let [x, y, z, w] = view;
     let v = glam::Vec3::new(x, y, z);
     let depth = |c: glam::Vec3| {
@@ -644,9 +791,42 @@ fn back_to_front(triangles: &[(u32, glam::Vec3)], view: [f32; 4]) -> Vec<u32> {
             c.distance_squared(v)
         }
     };
-    let mut keyed: Vec<(f32, u32)> = triangles.iter().map(|&(k, c)| (depth(c), k)).collect();
-    keyed.sort_unstable_by(|a, b| b.0.total_cmp(&a.0));
-    keyed.iter().flat_map(|&(_, k)| [k, k + 1, k + 2]).collect()
+    // Each triangle's depth as an integer that orders like the float, with its index, then
+    // a least-significant-digit radix sort: linear, where comparing sorts are not.
+    let mut keyed: Vec<(u32, u32)> = triangles
+        .iter()
+        .enumerate()
+        .map(|(i, &(_, c))| {
+            let bits = depth(c).to_bits();
+            let ordered = if bits >> 31 == 1 {
+                !bits
+            } else {
+                bits | 1 << 31
+            };
+            (ordered, i as u32)
+        })
+        .collect();
+    let mut spare = vec![(0u32, 0u32); keyed.len()];
+    for shift in [0, 11, 22] {
+        let mut counts = [0usize; 2048];
+        for &(k, _) in &keyed {
+            counts[(k >> shift) as usize & 2047] += 1;
+        }
+        // Far to near: the largest digits first.
+        let mut at = 0;
+        for c in counts.iter_mut().rev() {
+            let n = *c;
+            *c = at;
+            at += n;
+        }
+        for &(k, i) in &keyed {
+            let slot = &mut counts[(k >> shift) as usize & 2047];
+            spare[*slot] = (k, i);
+            *slot += 1;
+        }
+        std::mem::swap(&mut keyed, &mut spare);
+    }
+    keyed.iter().map(|&(_, i)| i).collect()
 }
 
 pub struct Renderer {
@@ -777,6 +957,27 @@ pub struct Renderer {
     /// The see-through triangles of `faces`, if any.
     glass: Option<Glass>,
     edges: Option<Mesh>,
+    /// The opaque triangles of `faces` and the vertices of `edges` in spatial chunks, for
+    /// models big enough to be worth culling (see `set_culling_from`).
+    face_chunks: Option<ChunkPlan>,
+    edge_chunks: Option<ChunkPlan>,
+    /// How many triangles (or edges) a model needs before its drawing is culled by chunk.
+    cull_from: usize,
+    /// Simplified copies of the opaque chunks of `faces` (see `set_lod`).
+    lod: LodState,
+    /// Whether chunks far enough away are drawn simplified, and how many pixels across the
+    /// cells of a simplified chunk may be.
+    lod_on: bool,
+    lod_pixels: f32,
+    /// When `set_model` last ran with LOD on, and the level each chunk was last drawn at
+    /// (0: whole).
+    lod_since: Option<std::time::Instant>,
+    /// The most bytes a level's buffer may hold (the device's limit and this).
+    lod_limit: u64,
+    lod_last: std::cell::RefCell<Vec<u8>>,
+    /// Which chunks of `face_chunks` hold something selected, and something hovered.
+    selected_chunks: Vec<bool>,
+    hovered_chunks: Vec<bool>,
     /// Whether any edge is selected, as of the last `set_selection`.
     edges_selected: bool,
     /// The hovered entity and its look, as of the last `set_hover`, and where it lies.
@@ -1494,6 +1695,17 @@ impl Renderer {
             cut_edges: None,
             glass: None,
             edges: None,
+            face_chunks: None,
+            edge_chunks: None,
+            cull_from: CULL_FROM,
+            lod: LodState::Off,
+            lod_on: false,
+            lod_pixels: CELL_PIXELS,
+            lod_since: None,
+            lod_limit: u64::MAX,
+            lod_last: std::cell::RefCell::new(Vec::new()),
+            selected_chunks: Vec::new(),
+            hovered_chunks: Vec::new(),
             edges_selected: false,
             hover: None,
             hover_ranges: Ranges::default(),
@@ -1527,9 +1739,235 @@ impl Renderer {
         self.set_selection(selection);
     }
 
+    /// Sets how many triangles (or edges) a model needs for its drawing to be culled by
+    /// spatial chunk, from the next `set_model` on: with fewer, it is drawn whole. 0 culls
+    /// every model. Chunks hold up to that many triangles (or edges) too, at most a few
+    /// thousand.
+    pub fn set_culling_from(&mut self, count: usize) {
+        self.cull_from = count;
+    }
+
+    /// How many of the model's opaque triangles a frame seen by `camera` draws, and how many
+    /// it has in all, when the faces are culled by chunk; None when they are drawn whole.
+    pub fn visible_triangles(&self, camera: &Camera) -> Option<(u32, u32)> {
+        let plan = self.face_chunks.as_ref()?;
+        let runs = plan.visible(camera);
+        Some((ChunkPlan::covered(&runs.solid) / 3, plan.kept as u32 / 3))
+    }
+
+    /// Turns on the drawing of far chunks of a big model as simplified copies (off by default:
+    /// pictures made off screen are full detail). Takes effect for models set from now on; the
+    /// copies are made on another thread once a view needs them, and until they are ready the
+    /// chunks are drawn whole. Turning it off draws whole at once, for comparing pictures. Not
+    /// on the web.
+    pub fn set_lod(&mut self, on: bool) {
+        self.lod_on = on && !cfg!(target_arch = "wasm32");
+        if !self.lod_on {
+            self.drop_lod();
+        }
+    }
+
+    /// Limits the bytes a level of the simplified copies may take to `bytes`, on top of the
+    /// device's own limit: a level over it is left out. For tests.
+    pub fn set_lod_buffer_limit(&mut self, bytes: u64) {
+        self.lod_limit = bytes;
+    }
+
+    /// True while the simplified copies are waiting to be made or being made, so a caller that
+    /// draws only on demand knows to call `poll_lod` soon.
+    pub fn lod_busy(&self) -> bool {
+        matches!(self.lod, LodState::Pending(_) | LodState::Building { .. })
+    }
+
+    /// Moves the making of the simplified copies on without drawing: starts it once the model
+    /// has settled, takes the copies when done. True when they arrived, so a frame should be
+    /// drawn.
+    pub fn poll_lod(&mut self) -> bool {
+        self.advance_lod()
+    }
+
+    /// Sets how many pixels across the cells of a simplified chunk may be on the screen (0.1
+    /// to 8); the default is 2, and what is dropped is of about that size.
+    pub fn set_lod_pixels(&mut self, pixels: f32) {
+        self.lod_pixels = if pixels.is_finite() {
+            pixels.clamp(0.1, 8.0)
+        } else {
+            CELL_PIXELS
+        };
+    }
+
+    /// Makes the simplified copies of the model now and waits for them, for tests and tools
+    /// that draw straight away.
+    pub fn wait_for_lod(&mut self) {
+        if let LodState::Pending(faces) = std::mem::replace(&mut self.lod, LodState::Off) {
+            self.start_lod(faces);
+        }
+        if let LodState::Building { done, .. } = std::mem::replace(&mut self.lod, LodState::Off) {
+            self.lod = done
+                .recv()
+                .ok()
+                .flatten()
+                .map_or(LodState::Off, LodState::Ready);
+            self.lod_last.get_mut().clear();
+        }
+    }
+
+    /// The bytes of vertices each level of the simplified copies holds, once they are made.
+    pub fn lod_level_bytes(&self) -> Vec<u64> {
+        match &self.lod {
+            LodState::Ready(lod) => lod.level_bytes(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Waits until the GPU has taken what `set_model` and the like uploaded, and frees what it
+    /// replaced; for offscreen use, which draws no frames in between.
+    pub fn settle(&self) {
+        self.queue.submit([]);
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
+    /// How many opaque triangles a frame seen by `camera` draws, counting the simplified ones
+    /// as drawn, and how many the model has in all; None when the faces are not chunked.
+    pub fn drawn_triangles(&self, camera: &Camera) -> Option<(u32, u32)> {
+        let plan = self.face_chunks.as_ref()?;
+        let runs = self.visible(camera, false).faces?;
+        let lod: u32 = runs.lod.iter().map(|r| ChunkPlan::covered(r)).sum();
+        Some((
+            (ChunkPlan::covered(&runs.solid) + lod) / 3,
+            plan.kept as u32 / 3,
+        ))
+    }
+
+    /// True when chunk `k` has something selected or hovered, so it is drawn whole.
+    fn chunk_marked(&self, k: usize) -> bool {
+        self.selected_chunks.get(k).copied().unwrap_or(false)
+            || self.hovered_chunks.get(k).copied().unwrap_or(false)
+    }
+
+    /// The chunked lists' ranges in view of `camera`. With `remember`, the levels chosen are
+    /// kept to choose the next ones by (see `Lod::pick`).
+    fn visible(&self, camera: &Camera, remember: bool) -> Visible {
+        let faces = self.face_chunks.as_ref().map(|c| match &self.lod {
+            LodState::Ready(lod) if self.lod_on => c.visible_by(camera, |k, per_pixel| {
+                let mut last = self.lod_last.borrow_mut();
+                if last.len() != c.chunks.len() {
+                    *last = vec![0; c.chunks.len()];
+                }
+                if self.chunk_marked(k) {
+                    if remember {
+                        last[k] = 0;
+                    }
+                    return None;
+                }
+                let (next, pick) = lod.pick(k, per_pixel, self.lod_pixels, last[k]);
+                if remember {
+                    last[k] = next;
+                }
+                pick
+            }),
+            _ => c.visible(camera),
+        });
+        Visible {
+            faces,
+            edges: self.edge_chunks.as_ref().map(|c| c.visible(camera)),
+        }
+    }
+
+    /// Drops the simplified copies, and stops a build of them.
+    fn drop_lod(&mut self) {
+        if let LodState::Building { cancel, .. } = &self.lod {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.lod = LodState::Off;
+        self.lod_last.get_mut().clear();
+    }
+
+    /// Starts making the simplified copies from `faces` on another thread.
+    fn start_lod(&mut self, faces: std::sync::Arc<Vec<BaseFaceVertex>>) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(plan) = self.face_chunks.clone() {
+            let device = self.device.clone();
+            let limit = self.lod_limit.min(device.limits().max_buffer_size);
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let (sender, done) = std::sync::mpsc::channel();
+            let flag = cancel.clone();
+            std::thread::spawn(move || {
+                let lod = Lod::build(&device, &plan, &faces, &flag, limit);
+                drop(faces);
+                let _ = sender.send(lod);
+            });
+            self.lod = LodState::Building { done, cancel };
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = faces;
+    }
+
+    /// Moves the making of the simplified copies on: takes them when they are done, starts
+    /// them when the model has settled. True when they arrived.
+    fn advance_lod(&mut self) -> bool {
+        match std::mem::replace(&mut self.lod, LodState::Off) {
+            LodState::Building { done, cancel } => match done.try_recv() {
+                Ok(lod) => {
+                    self.lod = lod.map_or(LodState::Off, LodState::Ready);
+                    self.lod_last.get_mut().clear();
+                    return true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.lod = LodState::Building { done, cancel }
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    eprintln!("the thread making the simplified copies ended without a result");
+                }
+            },
+            LodState::Pending(faces) => {
+                if self.lod_on && self.lod_since.is_some_and(|t| t.elapsed() >= LOD_SETTLE) {
+                    self.start_lod(faces);
+                } else {
+                    self.lod = LodState::Pending(faces);
+                }
+            }
+            other => self.lod = other,
+        }
+        false
+    }
+
+    /// Draws the vertices of the simplified levels in `runs`, with `pipeline` if given (else
+    /// the one set). True when it drew any.
+    fn draw_lod(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        runs: Option<&Runs>,
+        pipeline: Option<&wgpu::RenderPipeline>,
+    ) -> bool {
+        let (LodState::Ready(lod), Some(runs)) = (&self.lod, runs) else {
+            return false;
+        };
+        let mut drew = false;
+        for (level, list) in runs.lod.iter().enumerate() {
+            if let (Some((buffer, zeros)), false) = (lod.buffers(level), list.is_empty()) {
+                if let Some(pipeline) = pipeline {
+                    pass.set_pipeline(pipeline);
+                }
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.set_vertex_buffer(1, zeros.slice(..));
+                pass.set_vertex_buffer(2, zeros.slice(..));
+                draw_runs(pass, list, 1);
+                drew = true;
+            }
+        }
+        drew
+    }
+
     /// Rebuilds the face and edge buffers from the scene with the open context `context`, with
     /// nothing selected until `set_selection`. Call when the model or the open context changes.
     pub fn set_model(&mut self, scene: &Scene, context: &[InstanceId]) {
+        // What the last model holds is freed first, so the new one is not built beside it.
+        self.drop_lod();
+        self.lod_since = self.lod_on.then(std::time::Instant::now);
+        self.faces = None;
+        self.glass = None;
+        self.edges = None;
         if !self.textures.holds(scene) {
             self.textures = TextureArray::new(&self.device, &self.queue, scene);
             self.rebind();
@@ -1549,11 +1987,73 @@ impl Renderer {
             &mut self.parts,
         );
         self.set_axes(axes);
-        self.faces = flagged_mesh(&self.device, "faces", &base.faces);
-        self.glass = Glass::new(&self.device, &base.faces, &base.glass());
-        self.edges = edge_mesh(&self.device, &base.edges, &base.edge_extras);
+        let (face_groups, edge_groups) = base.spans.instance_groups();
+        let chunk = self.cull_from.clamp(1, CHUNK_PRIMITIVES);
+        // Big models are reordered so that nearby placements lie together (see `ChunkPlan`);
+        // the see-through triangles go last, for the glass pass.
+        self.face_chunks = (base.faces.len() / 3 >= self.cull_from).then(|| {
+            let faces = &base.faces;
+            ChunkPlan::new(
+                faces.len(),
+                &face_groups,
+                3,
+                chunk,
+                &|i| faces[i].pos,
+                &|first| !faces[first].is_glass(),
+            )
+        });
+        self.selected_chunks = Vec::new();
+        self.hovered_chunks = Vec::new();
+        self.edge_chunks = (base.edges.len() / 2 >= self.cull_from).then(|| {
+            let edges = &base.edges;
+            ChunkPlan::new(
+                edges.len(),
+                &edge_groups,
+                2,
+                chunk,
+                &|i| edges[i].pos,
+                &|_| true,
+            )
+        });
+        self.faces = flagged_mesh(
+            &self.device,
+            "faces",
+            &base.faces,
+            self.face_chunks.as_ref(),
+        );
+        self.glass = match &self.face_chunks {
+            Some(plan) => {
+                // The see-through triangles are the last ones.
+                let tail = plan.permute_tail(&base.faces, plan.kept);
+                let glass: Vec<u32> = (plan.kept as u32..plan.total() as u32).step_by(3).collect();
+                Glass::new(
+                    &self.device,
+                    plan.total(),
+                    &|i| tail[i - plan.kept].pos,
+                    &glass,
+                    false,
+                )
+            }
+            None => Glass::new(
+                &self.device,
+                base.faces.len(),
+                &|i| base.faces[i].pos,
+                &base.glass(),
+                true,
+            ),
+        };
+        self.edges = edge_mesh(
+            &self.device,
+            &base.edges,
+            &base.edge_extras,
+            self.edge_chunks.as_ref(),
+        );
         self.cut_fill = mesh(&self.device, "cut fill", &base.cut_fill);
         self.cut_edges = mesh(&self.device, "cut edges", &base.cut_edges);
+        // The simplified copies are made later, from these vertices.
+        if self.lod_on && self.face_chunks.is_some() {
+            self.lod = LodState::Pending(std::sync::Arc::new(base.faces));
+        }
         self.spans = base.spans;
         self.guides = base.guides.clone();
         self.guide_flags = vec![false; base.guides.len()];
@@ -1590,6 +2090,10 @@ impl Renderer {
         if self.sun.is_some() {
             self.sync_sun_casters();
         }
+        // The uploads' staging buffers and the replaced ones are freed only after a submit and
+        // a poll; without frames in between, models would pile up.
+        self.queue.submit([]);
+        let _ = self.device.poll(wgpu::PollType::Poll);
     }
 
     /// Uploads the sun's casters, and makes the map draw again when they differ from the last
@@ -1870,10 +2374,47 @@ impl Renderer {
     /// the selection flags only. Call when just the selection changes.
     pub fn set_selection(&mut self, selection: &BTreeSet<EntityId>) {
         let flags = self.spans.flags(selection);
-        for (mesh, flags) in [(&self.faces, &flags.faces), (&self.edges, &flags.edges)] {
+        // The faces' flags in the chunks' order, worked out once.
+        let moved = self
+            .face_chunks
+            .as_ref()
+            .map(|plan| plan.permute(&flags.faces));
+        self.selected_chunks = match (&self.face_chunks, &moved) {
+            (Some(plan), Some(moved)) => plan
+                .chunks
+                .iter()
+                .map(|c| {
+                    moved
+                        .get(c.vertices.start as usize..c.vertices.end as usize)
+                        .is_some_and(|f| f.iter().any(|&f| f != 0.0))
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        for (mesh, flags, plan, moved) in [
+            (
+                &self.faces,
+                &flags.faces,
+                &self.face_chunks,
+                moved.as_deref(),
+            ),
+            (&self.edges, &flags.edges, &self.edge_chunks, None),
+        ] {
             if let Some(buffer) = mesh.as_ref().and_then(|m| m.flags.as_ref()) {
-                self.queue
-                    .write_buffer(buffer, 0, bytemuck::cast_slice(flags));
+                match (plan, moved) {
+                    (_, Some(moved)) => {
+                        self.queue
+                            .write_buffer(buffer, 0, bytemuck::cast_slice(moved))
+                    }
+                    (Some(plan), None) => self.queue.write_buffer(
+                        buffer,
+                        0,
+                        bytemuck::cast_slice(&plan.permute(flags)),
+                    ),
+                    (None, None) => self
+                        .queue
+                        .write_buffer(buffer, 0, bytemuck::cast_slice(flags)),
+                }
             }
         }
         self.edges_selected = flags.edges.iter().any(|&f| f > 0.5);
@@ -1896,19 +2437,41 @@ impl Renderer {
         self.write_hover(&ranges, 1.0);
         self.hover = hover;
         self.hover_ranges = ranges;
+        self.hovered_chunks = match &self.face_chunks {
+            Some(plan) => {
+                let mut marked = vec![false; plan.chunks.len()];
+                if !self.hover_ranges.faces.is_empty() {
+                    for placed in plan.map_range(self.hover_ranges.faces.clone()) {
+                        marked[plan.chunks_in(placed)].fill(true);
+                    }
+                }
+                marked
+            }
+            None => Vec::new(),
+        };
         self.refresh_guides();
     }
 
     /// Sets the hover flags of `ranges` to `value`.
     fn write_hover(&self, ranges: &Ranges, value: f32) {
-        for (mesh, range) in [(&self.faces, &ranges.faces), (&self.edges, &ranges.edges)] {
+        for (mesh, range, plan) in [
+            (&self.faces, &ranges.faces, &self.face_chunks),
+            (&self.edges, &ranges.edges, &self.edge_chunks),
+        ] {
             if let Some(buffer) = mesh.as_ref().and_then(|m| m.hover.as_ref())
                 && !range.is_empty()
             {
-                let offset = (range.start * std::mem::size_of::<f32>()) as u64;
-                let flags = vec![value; range.len()];
-                self.queue
-                    .write_buffer(buffer, offset, bytemuck::cast_slice(&flags));
+                // A chunked list is reordered; the range may lie in several places now.
+                let placed = match plan {
+                    Some(plan) => plan.map_range(range.clone()),
+                    None => vec![range.clone()],
+                };
+                for range in placed {
+                    let offset = (range.start * std::mem::size_of::<f32>()) as u64;
+                    let flags = vec![value; range.len()];
+                    self.queue
+                        .write_buffer(buffer, offset, bytemuck::cast_slice(&flags));
+                }
             }
         }
     }
@@ -2155,12 +2718,14 @@ impl Renderer {
         if self.targets.as_ref().map(|t| t.size) != Some(size) {
             self.targets = Some(self.make_targets(size));
         }
+        self.advance_lod();
         let occlusion = self.ambient_occlusion();
         self.prepare_ao(occlusion.is_some(), size);
 
         let uniforms = Uniforms::new(camera);
         self.queue
             .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
+        let visible = self.visible(camera, true);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -2226,7 +2791,11 @@ impl Renderer {
         );
         let guides = mesh(&self.device, "guides", &guide_vertices);
         if let Some(glass) = &mut self.glass {
-            glass.sort(&self.queue, camera);
+            glass.sort(
+                &self.queue,
+                camera,
+                visible.faces.as_ref().map(|r| &r.rest[..]),
+            );
         }
 
         let [r, g, b, a] = if self.print {
@@ -2246,7 +2815,7 @@ impl Renderer {
             && w > 0
             && h > 0
         {
-            self.encode_ao(&mut encoder, camera, [x, y, w, h], occlusion);
+            self.encode_ao(&mut encoder, camera, [x, y, w, h], occlusion, &visible);
         }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2349,6 +2918,20 @@ impl Renderer {
                     }
                 }
                 match (&self.faces, &self.glass) {
+                    (Some(faces), glass) if self.face_chunks.is_some() => {
+                        bind(&mut pass, &self.face_pipeline, faces);
+                        draw_runs(
+                            &mut pass,
+                            visible.faces.as_ref().map_or(&[][..], |r| &r.solid),
+                            1,
+                        );
+                        self.draw_lod(&mut pass, visible.faces.as_ref(), Some(&self.face_pipeline));
+                        if let Some(glass) = glass {
+                            bind(&mut pass, &self.solid_side_pipeline, faces);
+                            pass.set_index_buffer(glass.order.slice(..), wgpu::IndexFormat::Uint32);
+                            pass.draw_indexed(0..glass.count(), 0, 0..1);
+                        }
+                    }
                     (Some(faces), Some(glass)) => {
                         if glass.solid_count > 0 {
                             bind(&mut pass, &self.face_pipeline, faces);
@@ -2368,14 +2951,31 @@ impl Renderer {
                 } else {
                     (&self.edge_pipeline, &self.wide_edge_pipeline)
                 };
-                draw(&mut pass, edge_pipeline, self.edges.as_ref());
+                match (&self.edges, &self.edge_chunks) {
+                    (Some(edges), Some(_)) => {
+                        bind(&mut pass, edge_pipeline, edges);
+                        draw_runs(
+                            &mut pass,
+                            visible.edges.as_ref().map_or(&[][..], |r| &r.solid),
+                            1,
+                        );
+                    }
+                    (edges, _) => draw(&mut pass, edge_pipeline, edges.as_ref()),
+                }
                 let edges_hovered = !self.hover_ranges.edges.is_empty();
                 if self.style.wide_selected_edges
                     && (self.edges_selected || edges_hovered)
                     && let Some(edges) = &self.edges
                 {
                     bind(&mut pass, wide_pipeline, edges);
-                    pass.draw(0..edges.count, 0..wide_copies);
+                    match &self.edge_chunks {
+                        Some(_) => draw_runs(
+                            &mut pass,
+                            visible.edges.as_ref().map_or(&[][..], |r| &r.solid),
+                            wide_copies,
+                        ),
+                        None => pass.draw(0..edges.count, 0..wide_copies),
+                    }
                 }
                 if with_effects
                     && profile_copies > 0
@@ -2450,6 +3050,7 @@ impl Renderer {
         camera: &Camera,
         rect: [u32; 4],
         occlusion: kernel::AmbientOcclusion,
+        visible: &Visible,
     ) {
         let Some(ssao) = &self.ssao else { return };
         let Some(t) = ssao.targets() else { return };
@@ -2499,18 +3100,43 @@ impl Renderer {
                 if let Some(hover) = &faces.hover {
                     pass.set_vertex_buffer(2, hover.slice(..));
                 }
-                match &self.glass {
-                    // The see-through sides are left out (the shader discards them from the
-                    // sides that have both).
-                    Some(glass) => {
-                        if glass.solid_count > 0 {
-                            pass.set_index_buffer(glass.solid.slice(..), wgpu::IndexFormat::Uint32);
-                            pass.draw_indexed(0..glass.solid_count, 0, 0..1);
+                if self.face_chunks.is_some() {
+                    draw_runs(
+                        &mut pass,
+                        visible.faces.as_ref().map_or(&[][..], |r| &r.solid),
+                        1,
+                    );
+                    if self.draw_lod(&mut pass, visible.faces.as_ref(), None) {
+                        // The glass below is drawn from the full vertices again.
+                        pass.set_vertex_buffer(0, faces.buffer.slice(..));
+                        if let Some(flags) = &faces.flags {
+                            pass.set_vertex_buffer(1, flags.slice(..));
                         }
+                        if let Some(hover) = &faces.hover {
+                            pass.set_vertex_buffer(2, hover.slice(..));
+                        }
+                    }
+                    if let Some(glass) = &self.glass {
                         pass.set_index_buffer(glass.order.slice(..), wgpu::IndexFormat::Uint32);
                         pass.draw_indexed(0..glass.count(), 0, 0..1);
                     }
-                    None => pass.draw(0..faces.count, 0..1),
+                } else {
+                    match &self.glass {
+                        // The see-through sides are left out (the shader discards them from the
+                        // sides that have both).
+                        Some(glass) => {
+                            if glass.solid_count > 0 {
+                                pass.set_index_buffer(
+                                    glass.solid.slice(..),
+                                    wgpu::IndexFormat::Uint32,
+                                );
+                                pass.draw_indexed(0..glass.solid_count, 0, 0..1);
+                            }
+                            pass.set_index_buffer(glass.order.slice(..), wgpu::IndexFormat::Uint32);
+                            pass.draw_indexed(0..glass.count(), 0, 0..1);
+                        }
+                        None => pass.draw(0..faces.count, 0..1),
+                    }
                 }
             }
         }
@@ -2709,13 +3335,47 @@ fn mesh<T: bytemuck::Pod>(device: &wgpu::Device, label: &str, vertices: &[T]) ->
 }
 
 /// Uploads vertices with selection and hover flag buffers beside them, every flag 0 (wgpu
-/// zeroes new buffers), or None when there are none to draw.
+/// zeroes new buffers), or None when there are none to draw. With a `plan`, the vertices are
+/// uploaded in the order it gives them (the flags are in that order too).
 fn flagged_mesh<T: bytemuck::Pod>(
     device: &wgpu::Device,
     label: &str,
     vertices: &[T],
+    plan: Option<&ChunkPlan>,
 ) -> Option<Mesh> {
-    let mut mesh = mesh(device, label, vertices)?;
+    let mut mesh = match plan {
+        Some(plan) if !vertices.is_empty() => {
+            // Written straight into the buffer, as a model this big is a lot to copy twice.
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: std::mem::size_of_val(vertices) as u64,
+                usage: wgpu::BufferUsages::VERTEX,
+                mapped_at_creation: true,
+            });
+            {
+                let mut view = buffer
+                    .slice(..)
+                    .get_mapped_range_mut()
+                    .expect("the buffer was created mapped");
+                let stride = std::mem::size_of::<T>();
+                for s in plan.segments() {
+                    view.slice(s.new * stride..(s.new + s.len) * stride)
+                        .copy_from_slice(bytemuck::cast_slice(&vertices[s.old..s.old + s.len]));
+                }
+            }
+            buffer.unmap();
+            Mesh {
+                buffer,
+                count: vertices.len() as u32,
+                flags: None,
+                hover: None,
+                extras: None,
+                profile_edges: None,
+                endpoint_edges: None,
+            }
+        }
+        _ => mesh(device, label, vertices)?,
+    };
     let flags = || {
         device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
@@ -2731,8 +3391,21 @@ fn flagged_mesh<T: bytemuck::Pod>(
 
 /// `flagged_mesh` of model edges, with a fourth buffer holding `extras` when there are any (with
 /// none, no edge effect is on and nothing more is held).
-fn edge_mesh(device: &wgpu::Device, vertices: &[LineVertex], extras: &[EdgeExtra]) -> Option<Mesh> {
-    let mut mesh = flagged_mesh(device, "edges", vertices)?;
+fn edge_mesh(
+    device: &wgpu::Device,
+    vertices: &[LineVertex],
+    extras: &[EdgeExtra],
+    plan: Option<&ChunkPlan>,
+) -> Option<Mesh> {
+    let mut mesh = flagged_mesh(device, "edges", vertices, plan)?;
+    let moved;
+    let extras = match plan {
+        Some(plan) => {
+            moved = plan.permute(extras);
+            &moved[..]
+        }
+        None => extras,
+    };
     if !extras.is_empty() {
         let (profiles, endpoints) = edge_candidates(extras);
         let indices = |list: Vec<u32>| {
@@ -2813,7 +3486,7 @@ fn edge_candidates(extras: &[EdgeExtra]) -> (Vec<u32>, Vec<u32>) {
 mod tests {
     use glam::Vec3;
 
-    use super::{back_to_front, spread};
+    use super::{back_to_front, order_holds, spread};
 
     #[test]
     fn wide_lines_spread_into_one_pixel_copies() {
@@ -2856,6 +3529,44 @@ mod tests {
         let (profiles, endpoints) = edge_candidates(&extras);
         assert_eq!(profiles, [2, 3, 8, 9, 10, 11, 12, 13]);
         assert_eq!(endpoints, [2, 3, 4, 5, 8, 9, 10, 11, 12, 13]);
+    }
+
+    #[test]
+    fn glass_order_is_kept_for_small_eye_moves_only() {
+        // Triangles in a row along x, 10 m apart, 100 m from an eye at the origin.
+        let triangles: Vec<(u32, Vec3)> = (0..5)
+            .map(|i| (3 * i, Vec3::new(10.0 * i as f32, 100.0, 0.0)))
+            .collect();
+        let eye = |x: f32| [x, 0.0, 0.0, 1.0];
+        let nearest = 100.0;
+        let prev = (eye(0.0), nearest);
+        let sorted = back_to_front(&triangles, eye(0.0));
+        let is_far_to_near = |order: &[u32], view: [f32; 4]| {
+            let d: Vec<f32> = order
+                .iter()
+                .step_by(3)
+                .map(|&k| {
+                    triangles[(k / 3) as usize]
+                        .1
+                        .distance_squared(Vec3::from_slice(&view))
+                })
+                .collect();
+            d.windows(2).all(|w| w[0] >= w[1])
+        };
+        // A small move keeps the order, and it is still back to front.
+        assert!(order_holds(&prev, eye(0.5)));
+        assert!(is_far_to_near(&sorted, eye(0.5)));
+        // A large move sorts again, and the old order is no longer right.
+        assert!(!order_holds(&prev, eye(40.0)));
+        assert!(!is_far_to_near(&sorted, eye(40.0)));
+        assert!(is_far_to_near(
+            &back_to_front(&triangles, eye(40.0)),
+            eye(40.0)
+        ));
+        // A parallel view keeps its order only when unchanged.
+        let par = ([0.0, -1.0, 0.0, 0.0], f32::INFINITY);
+        assert!(order_holds(&par, [0.0, -1.0, 0.0, 0.0]));
+        assert!(!order_holds(&par, [0.0, -0.99, 0.1, 0.0]));
     }
 
     #[test]
