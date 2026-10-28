@@ -6,6 +6,7 @@ use session::{Camera, Lighting, SectionDisplay, world_drawing_axes};
 use wgpu::util::DeviceExt;
 
 use crate::annotations::{AnnotationLook, annotation_lines};
+use crate::chunks::{CHUNK_PRIMITIVES, ChunkPlan, Runs};
 use crate::grid::{
     LineVertex, NIGHT_BACKGROUND, flat_axis_lines_at, flat_ground_lines_at, vertical_axis_lines_at,
 };
@@ -563,6 +564,27 @@ struct Indices {
     count: u32,
 }
 
+/// Triangles (or edges) a model needs before its faces (or edges) are drawn by spatial chunk,
+/// leaving out those out of view. Smaller models are drawn whole, as one call.
+const CULL_FROM: usize = 20_000;
+
+/// What a frame draws of the chunked vertex lists: the vertex ranges in view.
+#[derive(Default)]
+struct Visible {
+    faces: Option<Runs>,
+    edges: Option<Runs>,
+}
+
+/// Draws `copies` instances of the vertex ranges `runs`.
+fn draw_runs(pass: &mut wgpu::RenderPass<'_>, runs: &[std::ops::Range<u32>], copies: u32) {
+    for r in runs {
+        pass.draw(r.clone(), 0..copies);
+    }
+}
+
+/// What the glass was last sorted for: the view, and the vertex ranges in view (None: all).
+type SortedFor = ([f32; 4], Option<Vec<std::ops::Range<u32>>>);
+
 /// The triangles of `faces` with a see-through side, drawn after everything opaque.
 struct Glass {
     /// The first vertex of each opaque triangle, for drawing them alone.
@@ -570,29 +592,41 @@ struct Glass {
     solid_count: u32,
     /// The vertices of the see-through triangles, far to near as last sorted.
     order: wgpu::Buffer,
-    /// Each see-through triangle's first vertex and center.
+    /// Each see-through triangle's first vertex and center, by first vertex.
     triangles: Vec<(u32, glam::Vec3)>,
-    /// The view `order` was sorted for.
-    sorted_for: Option<[f32; 4]>,
+    /// How many vertices of `order` are drawn: those of the triangles in view when last sorted.
+    drawn: u32,
+    /// The view and the chunks in view (None: all) `order` was sorted for.
+    sorted_for: Option<SortedFor>,
 }
 
 impl Glass {
     /// The see-through triangles of `faces`, or None when there are none.
-    fn new(device: &wgpu::Device, faces: &[BaseFaceVertex], glass: &[u32]) -> Option<Glass> {
+    /// `solid_list` is false when the opaque triangles are listed elsewhere (in chunks).
+    fn new(
+        device: &wgpu::Device,
+        vertex_count: usize,
+        pos: &dyn Fn(usize) -> [f32; 3],
+        glass: &[u32],
+        solid_list: bool,
+    ) -> Option<Glass> {
         if glass.is_empty() {
             return None;
         }
-        let mut solid = Vec::with_capacity(faces.len() - 3 * glass.len());
-        let mut next = glass.iter().peekable();
-        for first in (0..faces.len() as u32).step_by(3) {
-            if next.next_if_eq(&&first).is_none() {
-                solid.extend([first, first + 1, first + 2]);
+        let mut solid = Vec::new();
+        if solid_list {
+            solid.reserve(vertex_count - 3 * glass.len());
+            let mut next = glass.iter().peekable();
+            for first in (0..vertex_count as u32).step_by(3) {
+                if next.next_if_eq(&&first).is_none() {
+                    solid.extend([first, first + 1, first + 2]);
+                }
             }
         }
         let triangles: Vec<(u32, glam::Vec3)> = glass
             .iter()
             .map(|&k| {
-                let corner = |i: u32| glam::Vec3::from(faces[i as usize].pos);
+                let corner = |i: u32| glam::Vec3::from(pos(i as usize));
                 (k, (corner(k) + corner(k + 1) + corner(k + 2)) / 3.0)
             })
             .collect();
@@ -609,29 +643,52 @@ impl Glass {
             solid: index_buffer("solid faces", &solid, wgpu::BufferUsages::empty()),
             solid_count: solid.len() as u32,
             order: index_buffer("glass faces", &unsorted, wgpu::BufferUsages::COPY_DST),
+            drawn: 3 * triangles.len() as u32,
             triangles,
             sorted_for: None,
         })
     }
 
     fn count(&self) -> u32 {
-        3 * self.triangles.len() as u32
+        self.drawn
     }
 
     /// Sorts the triangles far to near from `camera`, unless they already are for its view.
-    fn sort(&mut self, queue: &wgpu::Queue, camera: &Camera) {
+    /// `visible` are the vertex ranges in view when the faces are culled by chunk: only the
+    /// triangles in them are sorted and drawn.
+    fn sort(
+        &mut self,
+        queue: &wgpu::Queue,
+        camera: &Camera,
+        visible: Option<&[std::ops::Range<u32>]>,
+    ) {
         let (origin, toward) = (camera.eye.as_vec3(), camera.forward().as_vec3());
         let view = if camera.is_parallel() {
             [toward.x, toward.y, toward.z, 0.0]
         } else {
             [origin.x, origin.y, origin.z, 1.0]
         };
-        if self.sorted_for == Some(view) {
+        let key = (view, visible.map(<[_]>::to_vec));
+        if self.sorted_for.as_ref() == Some(&key) {
             return;
         }
-        let indices = back_to_front(&self.triangles, view);
-        queue.write_buffer(&self.order, 0, bytemuck::cast_slice(&indices));
-        self.sorted_for = Some(view);
+        let indices = match visible {
+            None => back_to_front(&self.triangles, view),
+            Some(runs) => {
+                let mut seen = Vec::new();
+                for r in runs {
+                    let from = self.triangles.partition_point(|t| t.0 < r.start);
+                    let to = self.triangles.partition_point(|t| t.0 < r.end);
+                    seen.extend_from_slice(&self.triangles[from..to]);
+                }
+                back_to_front(&seen, view)
+            }
+        };
+        if !indices.is_empty() {
+            queue.write_buffer(&self.order, 0, bytemuck::cast_slice(&indices));
+        }
+        self.drawn = indices.len() as u32;
+        self.sorted_for = Some(key);
     }
 }
 
@@ -647,9 +704,29 @@ fn back_to_front(triangles: &[(u32, glam::Vec3)], view: [f32; 4]) -> Vec<u32> {
             c.distance_squared(v)
         }
     };
-    let mut keyed: Vec<(f32, u32)> = triangles.iter().map(|&(k, c)| (depth(c), k)).collect();
-    keyed.sort_unstable_by(|a, b| b.0.total_cmp(&a.0));
-    keyed.iter().flat_map(|&(_, k)| [k, k + 1, k + 2]).collect()
+    // Each triangle's depth as an integer that orders like the float, over its index: sorting
+    // plain integers is several times quicker than comparing pairs.
+    let mut keyed: Vec<u64> = triangles
+        .iter()
+        .enumerate()
+        .map(|(i, &(_, c))| {
+            let bits = depth(c).to_bits();
+            let ordered = if bits >> 31 == 1 {
+                !bits
+            } else {
+                bits | 1 << 31
+            };
+            u64::from(ordered) << 32 | i as u64
+        })
+        .collect();
+    keyed.sort_unstable_by(|a, b| b.cmp(a));
+    keyed
+        .iter()
+        .flat_map(|&k| {
+            let first = triangles[(k & 0xFFFF_FFFF) as usize].0;
+            [first, first + 1, first + 2]
+        })
+        .collect()
 }
 
 pub struct Renderer {
@@ -780,6 +857,12 @@ pub struct Renderer {
     /// The see-through triangles of `faces`, if any.
     glass: Option<Glass>,
     edges: Option<Mesh>,
+    /// The opaque triangles of `faces` and the vertices of `edges` in spatial chunks, for
+    /// models big enough to be worth culling (see `set_culling_from`).
+    face_chunks: Option<ChunkPlan>,
+    edge_chunks: Option<ChunkPlan>,
+    /// How many triangles (or edges) a model needs before its drawing is culled by chunk.
+    cull_from: usize,
     /// Whether any edge is selected, as of the last `set_selection`.
     edges_selected: bool,
     /// The hovered entity and its look, as of the last `set_hover`, and where it lies.
@@ -1497,6 +1580,9 @@ impl Renderer {
             cut_edges: None,
             glass: None,
             edges: None,
+            face_chunks: None,
+            edge_chunks: None,
+            cull_from: CULL_FROM,
             edges_selected: false,
             hover: None,
             hover_ranges: Ranges::default(),
@@ -1530,6 +1616,30 @@ impl Renderer {
         self.set_selection(selection);
     }
 
+    /// Sets how many triangles (or edges) a model needs for its drawing to be culled by
+    /// spatial chunk, from the next `set_model` on: with fewer, it is drawn whole. 0 culls
+    /// every model. Chunks hold up to that many triangles (or edges) too, at most a few
+    /// thousand.
+    pub fn set_culling_from(&mut self, count: usize) {
+        self.cull_from = count;
+    }
+
+    /// How many of the model's opaque triangles a frame seen by `camera` draws, and how many
+    /// it has in all, when the faces are culled by chunk; None when they are drawn whole.
+    pub fn visible_triangles(&self, camera: &Camera) -> Option<(u32, u32)> {
+        let plan = self.face_chunks.as_ref()?;
+        let runs = plan.visible(camera);
+        Some((ChunkPlan::covered(&runs.solid) / 3, plan.kept as u32 / 3))
+    }
+
+    /// The chunked lists' ranges in view of `camera`.
+    fn visible(&self, camera: &Camera) -> Visible {
+        Visible {
+            faces: self.face_chunks.as_ref().map(|c| c.visible(camera)),
+            edges: self.edge_chunks.as_ref().map(|c| c.visible(camera)),
+        }
+    }
+
     /// Rebuilds the face and edge buffers from the scene with the open context `context`, with
     /// nothing selected until `set_selection`. Call when the model or the open context changes.
     pub fn set_model(&mut self, scene: &Scene, context: &[InstanceId]) {
@@ -1552,9 +1662,65 @@ impl Renderer {
             &mut self.parts,
         );
         self.set_axes(axes);
-        self.faces = flagged_mesh(&self.device, "faces", &base.faces);
-        self.glass = Glass::new(&self.device, &base.faces, &base.glass());
-        self.edges = edge_mesh(&self.device, &base.edges, &base.edge_extras);
+        let (face_groups, edge_groups) = base.spans.instance_groups();
+        let chunk = self.cull_from.clamp(1, CHUNK_PRIMITIVES);
+        // Big models are reordered so that nearby placements lie together (see `ChunkPlan`);
+        // the see-through triangles go last, for the glass pass.
+        self.face_chunks = (base.faces.len() / 3 >= self.cull_from).then(|| {
+            let faces = &base.faces;
+            ChunkPlan::new(
+                faces.len(),
+                &face_groups,
+                3,
+                chunk,
+                &|i| faces[i].pos,
+                &|first| !faces[first].is_glass(),
+            )
+        });
+        self.edge_chunks = (base.edges.len() / 2 >= self.cull_from).then(|| {
+            let edges = &base.edges;
+            ChunkPlan::new(
+                edges.len(),
+                &edge_groups,
+                2,
+                chunk,
+                &|i| edges[i].pos,
+                &|_| true,
+            )
+        });
+        self.faces = flagged_mesh(
+            &self.device,
+            "faces",
+            &base.faces,
+            self.face_chunks.as_ref(),
+        );
+        self.glass = match &self.face_chunks {
+            Some(plan) => {
+                // The see-through triangles are the last ones.
+                let tail = plan.permute_tail(&base.faces, plan.kept);
+                let glass: Vec<u32> = (plan.kept as u32..plan.total() as u32).step_by(3).collect();
+                Glass::new(
+                    &self.device,
+                    plan.total(),
+                    &|i| tail[i - plan.kept].pos,
+                    &glass,
+                    false,
+                )
+            }
+            None => Glass::new(
+                &self.device,
+                base.faces.len(),
+                &|i| base.faces[i].pos,
+                &base.glass(),
+                true,
+            ),
+        };
+        self.edges = edge_mesh(
+            &self.device,
+            &base.edges,
+            &base.edge_extras,
+            self.edge_chunks.as_ref(),
+        );
         self.cut_fill = mesh(&self.device, "cut fill", &base.cut_fill);
         self.cut_edges = mesh(&self.device, "cut edges", &base.cut_edges);
         self.spans = base.spans;
@@ -1873,10 +2039,21 @@ impl Renderer {
     /// the selection flags only. Call when just the selection changes.
     pub fn set_selection(&mut self, selection: &BTreeSet<EntityId>) {
         let flags = self.spans.flags(selection);
-        for (mesh, flags) in [(&self.faces, &flags.faces), (&self.edges, &flags.edges)] {
+        for (mesh, flags, plan) in [
+            (&self.faces, &flags.faces, &self.face_chunks),
+            (&self.edges, &flags.edges, &self.edge_chunks),
+        ] {
             if let Some(buffer) = mesh.as_ref().and_then(|m| m.flags.as_ref()) {
-                self.queue
-                    .write_buffer(buffer, 0, bytemuck::cast_slice(flags));
+                match plan {
+                    Some(plan) => self.queue.write_buffer(
+                        buffer,
+                        0,
+                        bytemuck::cast_slice(&plan.permute(flags)),
+                    ),
+                    None => self
+                        .queue
+                        .write_buffer(buffer, 0, bytemuck::cast_slice(flags)),
+                }
             }
         }
         self.edges_selected = flags.edges.iter().any(|&f| f > 0.5);
@@ -1904,14 +2081,24 @@ impl Renderer {
 
     /// Sets the hover flags of `ranges` to `value`.
     fn write_hover(&self, ranges: &Ranges, value: f32) {
-        for (mesh, range) in [(&self.faces, &ranges.faces), (&self.edges, &ranges.edges)] {
+        for (mesh, range, plan) in [
+            (&self.faces, &ranges.faces, &self.face_chunks),
+            (&self.edges, &ranges.edges, &self.edge_chunks),
+        ] {
             if let Some(buffer) = mesh.as_ref().and_then(|m| m.hover.as_ref())
                 && !range.is_empty()
             {
-                let offset = (range.start * std::mem::size_of::<f32>()) as u64;
-                let flags = vec![value; range.len()];
-                self.queue
-                    .write_buffer(buffer, offset, bytemuck::cast_slice(&flags));
+                // A chunked list is reordered; the range may lie in several places now.
+                let placed = match plan {
+                    Some(plan) => plan.map_range(range.clone()),
+                    None => vec![range.clone()],
+                };
+                for range in placed {
+                    let offset = (range.start * std::mem::size_of::<f32>()) as u64;
+                    let flags = vec![value; range.len()];
+                    self.queue
+                        .write_buffer(buffer, offset, bytemuck::cast_slice(&flags));
+                }
             }
         }
     }
@@ -2164,6 +2351,7 @@ impl Renderer {
         let uniforms = Uniforms::new(camera);
         self.queue
             .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
+        let visible = self.visible(camera);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -2229,7 +2417,11 @@ impl Renderer {
         );
         let guides = mesh(&self.device, "guides", &guide_vertices);
         if let Some(glass) = &mut self.glass {
-            glass.sort(&self.queue, camera);
+            glass.sort(
+                &self.queue,
+                camera,
+                visible.faces.as_ref().map(|r| &r.rest[..]),
+            );
         }
 
         let [r, g, b, a] = if self.print {
@@ -2249,7 +2441,7 @@ impl Renderer {
             && w > 0
             && h > 0
         {
-            self.encode_ao(&mut encoder, camera, [x, y, w, h], occlusion);
+            self.encode_ao(&mut encoder, camera, [x, y, w, h], occlusion, &visible);
         }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2352,6 +2544,19 @@ impl Renderer {
                     }
                 }
                 match (&self.faces, &self.glass) {
+                    (Some(faces), glass) if self.face_chunks.is_some() => {
+                        bind(&mut pass, &self.face_pipeline, faces);
+                        draw_runs(
+                            &mut pass,
+                            visible.faces.as_ref().map_or(&[][..], |r| &r.solid),
+                            1,
+                        );
+                        if let Some(glass) = glass {
+                            bind(&mut pass, &self.solid_side_pipeline, faces);
+                            pass.set_index_buffer(glass.order.slice(..), wgpu::IndexFormat::Uint32);
+                            pass.draw_indexed(0..glass.count(), 0, 0..1);
+                        }
+                    }
                     (Some(faces), Some(glass)) => {
                         if glass.solid_count > 0 {
                             bind(&mut pass, &self.face_pipeline, faces);
@@ -2371,14 +2576,31 @@ impl Renderer {
                 } else {
                     (&self.edge_pipeline, &self.wide_edge_pipeline)
                 };
-                draw(&mut pass, edge_pipeline, self.edges.as_ref());
+                match (&self.edges, &self.edge_chunks) {
+                    (Some(edges), Some(_)) => {
+                        bind(&mut pass, edge_pipeline, edges);
+                        draw_runs(
+                            &mut pass,
+                            visible.edges.as_ref().map_or(&[][..], |r| &r.solid),
+                            1,
+                        );
+                    }
+                    (edges, _) => draw(&mut pass, edge_pipeline, edges.as_ref()),
+                }
                 let edges_hovered = !self.hover_ranges.edges.is_empty();
                 if self.style.wide_selected_edges
                     && (self.edges_selected || edges_hovered)
                     && let Some(edges) = &self.edges
                 {
                     bind(&mut pass, wide_pipeline, edges);
-                    pass.draw(0..edges.count, 0..wide_copies);
+                    match &self.edge_chunks {
+                        Some(_) => draw_runs(
+                            &mut pass,
+                            visible.edges.as_ref().map_or(&[][..], |r| &r.solid),
+                            wide_copies,
+                        ),
+                        None => pass.draw(0..edges.count, 0..wide_copies),
+                    }
                 }
                 if with_effects
                     && profile_copies > 0
@@ -2453,6 +2675,7 @@ impl Renderer {
         camera: &Camera,
         rect: [u32; 4],
         occlusion: kernel::AmbientOcclusion,
+        visible: &Visible,
     ) {
         let Some(ssao) = &self.ssao else { return };
         let Some(t) = ssao.targets() else { return };
@@ -2502,18 +2725,33 @@ impl Renderer {
                 if let Some(hover) = &faces.hover {
                     pass.set_vertex_buffer(2, hover.slice(..));
                 }
-                match &self.glass {
-                    // The see-through sides are left out (the shader discards them from the
-                    // sides that have both).
-                    Some(glass) => {
-                        if glass.solid_count > 0 {
-                            pass.set_index_buffer(glass.solid.slice(..), wgpu::IndexFormat::Uint32);
-                            pass.draw_indexed(0..glass.solid_count, 0, 0..1);
-                        }
+                if self.face_chunks.is_some() {
+                    draw_runs(
+                        &mut pass,
+                        visible.faces.as_ref().map_or(&[][..], |r| &r.solid),
+                        1,
+                    );
+                    if let Some(glass) = &self.glass {
                         pass.set_index_buffer(glass.order.slice(..), wgpu::IndexFormat::Uint32);
                         pass.draw_indexed(0..glass.count(), 0, 0..1);
                     }
-                    None => pass.draw(0..faces.count, 0..1),
+                } else {
+                    match &self.glass {
+                        // The see-through sides are left out (the shader discards them from the
+                        // sides that have both).
+                        Some(glass) => {
+                            if glass.solid_count > 0 {
+                                pass.set_index_buffer(
+                                    glass.solid.slice(..),
+                                    wgpu::IndexFormat::Uint32,
+                                );
+                                pass.draw_indexed(0..glass.solid_count, 0, 0..1);
+                            }
+                            pass.set_index_buffer(glass.order.slice(..), wgpu::IndexFormat::Uint32);
+                            pass.draw_indexed(0..glass.count(), 0, 0..1);
+                        }
+                        None => pass.draw(0..faces.count, 0..1),
+                    }
                 }
             }
         }
@@ -2712,13 +2950,47 @@ fn mesh<T: bytemuck::Pod>(device: &wgpu::Device, label: &str, vertices: &[T]) ->
 }
 
 /// Uploads vertices with selection and hover flag buffers beside them, every flag 0 (wgpu
-/// zeroes new buffers), or None when there are none to draw.
+/// zeroes new buffers), or None when there are none to draw. With a `plan`, the vertices are
+/// uploaded in the order it gives them (the flags are in that order too).
 fn flagged_mesh<T: bytemuck::Pod>(
     device: &wgpu::Device,
     label: &str,
     vertices: &[T],
+    plan: Option<&ChunkPlan>,
 ) -> Option<Mesh> {
-    let mut mesh = mesh(device, label, vertices)?;
+    let mut mesh = match plan {
+        Some(plan) if !vertices.is_empty() => {
+            // Written straight into the buffer, as a model this big is a lot to copy twice.
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: std::mem::size_of_val(vertices) as u64,
+                usage: wgpu::BufferUsages::VERTEX,
+                mapped_at_creation: true,
+            });
+            {
+                let mut view = buffer
+                    .slice(..)
+                    .get_mapped_range_mut()
+                    .expect("the buffer was created mapped");
+                let stride = std::mem::size_of::<T>();
+                for s in plan.segments() {
+                    view.slice(s.new * stride..(s.new + s.len) * stride)
+                        .copy_from_slice(bytemuck::cast_slice(&vertices[s.old..s.old + s.len]));
+                }
+            }
+            buffer.unmap();
+            Mesh {
+                buffer,
+                count: vertices.len() as u32,
+                flags: None,
+                hover: None,
+                extras: None,
+                profile_edges: None,
+                endpoint_edges: None,
+            }
+        }
+        _ => mesh(device, label, vertices)?,
+    };
     let flags = || {
         device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
@@ -2734,8 +3006,21 @@ fn flagged_mesh<T: bytemuck::Pod>(
 
 /// `flagged_mesh` of model edges, with a fourth buffer holding `extras` when there are any (with
 /// none, no edge effect is on and nothing more is held).
-fn edge_mesh(device: &wgpu::Device, vertices: &[LineVertex], extras: &[EdgeExtra]) -> Option<Mesh> {
-    let mut mesh = flagged_mesh(device, "edges", vertices)?;
+fn edge_mesh(
+    device: &wgpu::Device,
+    vertices: &[LineVertex],
+    extras: &[EdgeExtra],
+    plan: Option<&ChunkPlan>,
+) -> Option<Mesh> {
+    let mut mesh = flagged_mesh(device, "edges", vertices, plan)?;
+    let moved;
+    let extras = match plan {
+        Some(plan) => {
+            moved = plan.permute(extras);
+            &moved[..]
+        }
+        None => extras,
+    };
     if !extras.is_empty() {
         let (profiles, endpoints) = edge_candidates(extras);
         let indices = |list: Vec<u32>| {

@@ -2,6 +2,7 @@
 //! program per crate instead of one per file.
 
 mod ao;
+mod culling;
 mod finish;
 mod golden;
 mod headless;

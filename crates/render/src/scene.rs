@@ -676,6 +676,24 @@ impl Spans {
         }
     }
 
+    /// The face and edge vertex ranges of the instances placed in the open context, each
+    /// sorted by start: the groups of vertices that belong to one placement.
+    pub fn instance_groups(&self) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+        let mut faces: Vec<_> = self
+            .instances
+            .iter()
+            .map(|(_, r)| r.faces.clone())
+            .collect();
+        let mut edges: Vec<_> = self
+            .instances
+            .iter()
+            .map(|(_, r)| r.edges.clone())
+            .collect();
+        faces.sort_by_key(|r| r.start);
+        edges.sort_by_key(|r| r.start);
+        (faces, edges)
+    }
+
     /// The flags for `selection`, ids of the open context the spans were built for. Ids not
     /// found there, and vertices, light nothing.
     pub fn flags(&self, selection: &BTreeSet<EntityId>) -> Flags {
