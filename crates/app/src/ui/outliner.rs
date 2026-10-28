@@ -105,31 +105,36 @@ pub(super) fn outliner(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     }
     let mut filtering =
         Filter::new(view.outliner, &query).map(|filter| Filtering { filter, drawn: 0 });
+    // Only the rows in view are laid out; flattening the visible tree is cheap by comparison.
+    let items = flatten(ui.ctx(), view, &mut filtering);
+    let row_height = ui.spacing().interact_size.y;
     let tree = egui::ScrollArea::vertical()
         .id_salt("outliner")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
-            let at_root = view.context.is_empty();
-            let mut model = RichText::new("Model");
-            if at_root {
-                model = model.strong();
-            }
-            let row = row_button(ui, false, model);
-            #[cfg(test)]
-            super::tests::record(ui, &[], row.rect, false, false, at_root);
-            // Already at the root: nothing to do (and the tool keeps its operation).
-            if row.clicked() && !at_root {
-                actions.push(UiAction::OpenPath(Vec::new()));
-            }
-            let mut path = Vec::new();
-            for row in &view.outliner.roots {
-                outliner_node(ui, view, row, &mut path, false, &mut filtering, actions);
-            }
-            if let Some(f) = &filtering {
-                if f.drawn == 0 {
-                    ui.weak("No matches");
-                } else if f.drawn > MAX_FILTERED_ROWS {
-                    ui.weak("More matches: refine the filter");
+        .show_rows(ui, row_height, items.len(), |ui, range| {
+            for index in range {
+                match &items[index] {
+                    Item::Model => {
+                        let at_root = view.context.is_empty();
+                        let mut model = RichText::new("Model");
+                        if at_root {
+                            model = model.strong();
+                        }
+                        let row = row_button(ui, false, model);
+                        #[cfg(test)]
+                        super::tests::record(ui, &[], row.rect, false, false, at_root);
+                        // Already at the root: nothing to do (and the tool keeps its operation).
+                        if row.clicked() && !at_root {
+                            actions.push(UiAction::OpenPath(Vec::new()));
+                        }
+                    }
+                    Item::Note(text) => {
+                        ui.weak(*text);
+                    }
+                    Item::Node(node) => {
+                        let path = node_path(&items, index);
+                        draw_node(ui, view, node, &path, actions);
+                    }
                 }
             }
         });
@@ -234,73 +239,191 @@ fn expand_open_path(ctx: &egui::Context, context: &[EntityId]) {
     ctx.data_mut(|d| d.insert_temp(key, context.to_vec()));
 }
 
-/// One node and, when expanded, its children. `path` leads to the node's parent. With a
-/// filter, a node that does not show is skipped, one holding rows that show is drawn expanded
-/// (under its own state, leaving the one kept without a filter), and nothing is drawn past
-/// `MAX_FILTERED_ROWS` rows (the count goes one past it to say so). A node that is hidden (its
-/// own flag or tag, or `hidden` for one above it) is greyed.
-fn outliner_node(
+/// A line of the flattened Outliner.
+enum Item<'a> {
+    /// The Model row.
+    Model,
+    /// A node.
+    Node(Node<'a>),
+    /// A weak line of text ("No matches", ...).
+    Note(&'static str),
+}
+
+/// A node of the flattened tree.
+struct Node<'a> {
+    row: &'a OutlinerRow,
+    /// Nodes above it.
+    depth: usize,
+    /// The index of the parent's item.
+    parent: Option<usize>,
+    /// Its own flag or tag, or one above it, hides it.
+    hidden: bool,
+    /// On the open path.
+    open: bool,
+    /// For a node with children shown: the state's id, its default and whether it is expanded.
+    toggle: Option<(egui::Id, bool, bool)>,
+}
+
+/// The tree as drawn: the Model row, then every visible node in order, expanded nodes
+/// followed by their children. With a filter, a node that does not show is skipped, one
+/// holding rows that show is expanded (under its own state, leaving the one kept without a
+/// filter), and nothing is listed past `MAX_FILTERED_ROWS` rows (the count goes one past it to
+/// say so).
+fn flatten<'a>(
+    ctx: &egui::Context,
+    view: &'a View,
+    filtering: &mut Option<Filtering>,
+) -> Vec<Item<'a>> {
+    let mut items = Vec::with_capacity(view.outliner.roots.len() + 2);
+    items.push(Item::Model);
+    let mut flat = Flat {
+        ctx,
+        view,
+        filtering,
+        items,
+    };
+    let mut path = Vec::new();
+    for row in &view.outliner.roots {
+        flat.node(row, &mut path, None, false);
+    }
+    if let Some(f) = flat.filtering.as_ref() {
+        if f.drawn == 0 {
+            flat.items.push(Item::Note("No matches"));
+        } else if f.drawn > MAX_FILTERED_ROWS {
+            flat.items
+                .push(Item::Note("More matches: refine the filter"));
+        }
+    }
+    flat.items
+}
+
+/// What flattening the tree works with.
+struct Flat<'a, 'b> {
+    ctx: &'b egui::Context,
+    view: &'a View<'a>,
+    filtering: &'b mut Option<Filtering>,
+    items: Vec<Item<'a>>,
+}
+
+impl<'a> Flat<'a, '_> {
+    /// One node and, when expanded, its children. `path` leads to the node's parent.
+    fn node(
+        &mut self,
+        row: &'a OutlinerRow,
+        path: &mut Vec<EntityId>,
+        parent: Option<usize>,
+        hidden: bool,
+    ) {
+        let view = self.view;
+        let mut opens = false;
+        if let Some(f) = self.filtering.as_mut() {
+            if !f.filter.shows(row) || f.drawn > MAX_FILTERED_ROWS {
+                return;
+            }
+            f.drawn += 1;
+            if f.drawn > MAX_FILTERED_ROWS {
+                return;
+            }
+            opens = f.filter.opens(row);
+        }
+        let filtered = self.filtering.is_some();
+        let hidden = hidden || row.hidden;
+        path.push(row.id);
+        let open = view.context.starts_with(path);
+        let children = view.outliner.children(row.definition);
+        // A filtered node shows its children only when some of them show.
+        let leaf = children.is_empty() || (filtered && !opens);
+        let mut toggle = None;
+        if !leaf {
+            // Nodes on the open path start expanded; with a filter, every node shown with
+            // children does.
+            let (id, default) = if filtered {
+                (filtered_id(self.ctx, path), true)
+            } else {
+                (outliner_id(path), open)
+            };
+            let expanded = CollapsingState::load_with_default_open(self.ctx, id, default).is_open();
+            toggle = Some((id, default, expanded));
+        }
+        let index = self.items.len();
+        self.items.push(Item::Node(Node {
+            row,
+            depth: path.len() - 1,
+            parent,
+            hidden,
+            open,
+            toggle,
+        }));
+        if toggle.is_some_and(|(_, _, expanded)| expanded) {
+            for child in children {
+                self.node(child, path, Some(index), hidden);
+            }
+        }
+        path.pop();
+    }
+}
+
+/// The path to the node at `index`.
+fn node_path(items: &[Item], index: usize) -> Vec<EntityId> {
+    let mut path = Vec::new();
+    let mut at = Some(index);
+    while let Some(i) = at {
+        let Item::Node(node) = &items[i] else { break };
+        path.push(node.row.id);
+        at = node.parent;
+    }
+    path.reverse();
+    path
+}
+
+/// One node's line: indent, expand button or the space for one, and the name.
+fn draw_node(
     ui: &mut Ui,
     view: &View,
-    row: &OutlinerRow,
-    path: &mut Vec<EntityId>,
-    hidden: bool,
-    filtering: &mut Option<Filtering>,
+    node: &Node,
+    path: &[EntityId],
     actions: &mut Vec<UiAction>,
 ) {
-    let mut opens = false;
-    if let Some(f) = filtering {
-        if !f.filter.shows(row) || f.drawn > MAX_FILTERED_ROWS {
-            return;
-        }
-        f.drawn += 1;
-        if f.drawn > MAX_FILTERED_ROWS {
-            return;
-        }
-        opens = f.filter.opens(row);
-    }
-    let selected = path.as_slice() == view.context && view.selection.contains(&row.id);
-    let hidden = hidden || row.hidden;
-    path.push(row.id);
-    let open = view.context.starts_with(path);
-    let children = view.outliner.children(row.definition);
-    // A filtered node shows its children only when some of them show.
-    let leaf = children.is_empty() || (filtering.is_some() && !opens);
-    if leaf {
-        let clicked = ui
-            .horizontal(|ui| {
-                // Lined up with the names of nodes that have an expand button.
-                ui.add_space(ui.spacing().indent);
-                outliner_row(ui, row, path, selected, open, hidden)
-            })
-            .inner;
-        actions.extend(clicked);
-    } else {
-        // Nodes on the open path start expanded; with a filter, every node shown with
-        // children does.
-        let state = if filtering.is_some() {
-            CollapsingState::load_with_default_open(ui.ctx(), filtered_id(ui.ctx(), path), true)
-        } else {
-            CollapsingState::load_with_default_open(ui.ctx(), outliner_id(path), open)
-        };
-        let expanded = state.is_open();
-        let (toggle, header, _) = state
-            .show_header(ui, |ui| outliner_row(ui, row, path, selected, open, hidden))
-            .body(|ui| {
-                for child in children {
-                    outliner_node(ui, view, child, path, hidden, filtering, actions);
+    let row = node.row;
+    let selected = path[..path.len() - 1] == *view.context && view.selection.contains(&row.id);
+    let clicked = ui
+        .horizontal(|ui| {
+            let indent = ui.spacing().indent;
+            // As `CollapsingState::show_header` did: the name follows the button flush.
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.add_space(indent * node.depth as f32);
+            match node.toggle {
+                Some((id, default, expanded)) => {
+                    let (_, toggle) = ui.allocate_exact_size(
+                        Vec2::new(indent, ui.spacing().icon_width),
+                        egui::Sense::click(),
+                    );
+                    let openness = if expanded { 1.0 } else { 0.0 };
+                    egui::collapsing_header::paint_default_icon(ui, openness, &toggle);
+                    let verb = if expanded { "Collapse" } else { "Expand" };
+                    toggle.widget_info(|| {
+                        let name = format!("{verb} {}", display_name(row));
+                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name)
+                    });
+                    #[cfg(test)]
+                    super::tests::record(ui, path, toggle.rect, true, false, false);
+                    if toggle.clicked() {
+                        let mut state =
+                            CollapsingState::load_with_default_open(ui.ctx(), id, default);
+                        state.set_open(!expanded);
+                        state.store(ui.ctx());
+                        ui.ctx().request_repaint();
+                    }
                 }
-            });
-        let verb = if expanded { "Collapse" } else { "Expand" };
-        toggle.widget_info(|| {
-            let name = format!("{verb} {}", display_name(row));
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name)
-        });
-        #[cfg(test)]
-        super::tests::record(ui, path, toggle.rect, true, false, false);
-        actions.extend(header.inner);
-    }
-    path.pop();
+                // Lined up with the names of nodes that have an expand button.
+                None => {
+                    ui.add_space(indent);
+                }
+            }
+            outliner_row(ui, row, path, selected, node.open, node.hidden)
+        })
+        .inner;
+    actions.extend(clicked);
 }
 
 /// A node's name and what clicking it asks for. `path` leads to the node.
