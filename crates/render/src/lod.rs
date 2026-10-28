@@ -3,60 +3,83 @@
 //!
 //! Each chunk is simplified by vertex clustering (Rossignac and Borrel): space is cut into
 //! cubic cells, the vertices of a cell become one, and the triangles that then have two
-//! corners in one cell are dropped. The cells lie on one grid for all chunks, so neighbouring
-//! chunks of a level meet. What the dropped triangles looked like is not lost: a cell's colors,
-//! glow and finish are the area-weighted average of everything in it, and each kept triangle
-//! takes its corners' from their cells. A frame draws a chunk's coarsest level whose cells are
-//! small on the screen (see `Lod::pick`).
+//! corners in one cell are dropped. The cells lie on one grid for all chunks and the sizes of
+//! the levels nest, so each level is clustered from the one before it. What the dropped
+//! triangles looked like is not lost: a cell's colors and finish are the area-weighted average
+//! of everything in it, kept apart by the way the surface faces, and each kept triangle takes
+//! its corners' from their cells.
+//!
+//! Left as they are, in every level: triangles that glow or show a texture (an average would
+//! make lit windows vanish or the texture wrong), and triangles much longer than a cell (spires,
+//! masts, strips), which clustering would drop whole.
+//!
+//! The cells of neighbouring chunks of different levels are not stitched: a gap up to the cell
+//! size may open between them, which the choice of level keeps to about a pixel.
 
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::ops::Range;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use glam::Vec3;
 
 use crate::chunks::ChunkPlan;
 use crate::scene::BaseFaceVertex;
 
-/// The cell size of each level in meters, finest first.
-const CELLS: [f32; 4] = [1.0, 2.5, 6.0, 15.0];
+/// The cell size of each level in meters, finest first. Each is a whole multiple of the one
+/// before, so the cells nest.
+pub const CELLS: [f32; 3] = [2.0, 4.0, 8.0];
 
 /// A level is kept for a chunk only when it has at most this share of the triangles of the
-/// level before it: otherwise it costs memory and saves little.
+/// level before it that is kept (or of the chunk itself): otherwise it costs memory and saves
+/// little.
 const WORTH: f32 = 0.65;
 
-/// How many pixels across a level's cells may be on the screen, by default. The cells' colors are averages, so a little over a pixel is not seen.
-pub const CELL_PIXELS: f32 = 1.5;
+/// Triangles with a side this many cells long are kept as they are.
+const LONG: f32 = 3.0;
+
+/// How many pixels across a level's cells may be on the screen, by default.
+pub const CELL_PIXELS: f32 = 2.0;
+
+/// A level is entered at this share of the limit and left at the limit, so the choice does not
+/// flicker as the view moves.
+pub const ENTER: f32 = 0.8;
 
 /// One level of simplification of every solid chunk.
 struct Level {
     /// The cell size, in meters.
     cell: f32,
-    /// Each chunk's vertices in `Lod::vertices`; None for a chunk this level does not help.
+    /// Each chunk's vertices in `buffer`; None for a chunk this level does not help.
     ranges: Vec<Option<Range<u32>>>,
+    buffer: Option<wgpu::Buffer>,
+    vertices: u32,
 }
 
-/// The simplified solid chunks of a model, in the order of the chunk plan's chunks.
-#[derive(Default)]
+/// The simplified solid chunks of a model, on the GPU, one vertex buffer a level.
 pub struct Lod {
-    /// The vertices of every level, level after level and chunk after chunk, so neighbours
-    /// that share a level form one run.
-    pub vertices: Vec<BaseFaceVertex>,
     levels: Vec<Level>,
+    /// Zero flags for every level's vertices (nothing in them is selected or hovered).
+    zeros: Option<wgpu::Buffer>,
 }
 
 /// What one chunk simplifies to at each level: the vertices, or None when it does not help.
 type ChunkLevels = Vec<Option<Vec<BaseFaceVertex>>>;
 
 impl Lod {
-    /// Simplifies the solid chunks of `plan`, which orders `faces`.
-    pub fn build(plan: &ChunkPlan, faces: &[BaseFaceVertex]) -> Lod {
+    /// Simplifies the solid chunks of `plan`, which orders `faces`, and uploads them; None when
+    /// `cancel` is set meanwhile. Written for a worker thread.
+    pub fn build(
+        device: &wgpu::Device,
+        plan: &ChunkPlan,
+        faces: &[BaseFaceVertex],
+        cancel: &AtomicBool,
+    ) -> Option<Lod> {
         let count = plan.solid_chunks;
         let threads = std::thread::available_parallelism()
             .map_or(1, |n| n.get())
             .min(16);
-        let chunk_levels = |k: usize| -> ChunkLevels { simplify_chunk(plan, faces, k) };
-        let results: Vec<ChunkLevels> = if threads < 2 || count < 16 {
+        let chunk_levels = |k: usize| -> ChunkLevels { simplify_chunk(plan, faces, k, cancel) };
+        let mut results: Vec<ChunkLevels> = if threads < 2 || count < 16 {
             (0..count).map(chunk_levels).collect()
         } else {
             let per = count.div_ceil(threads);
@@ -77,53 +100,158 @@ impl Lod {
                     .collect()
             })
         };
-        let mut lod = Lod::default();
-        for (l, &cell) in CELLS.iter().enumerate() {
-            let ranges: Vec<Option<Range<u32>>> = results
-                .iter()
-                .map(|chunk| {
-                    chunk[l].as_ref().map(|tris| {
-                        let start = lod.vertices.len() as u32;
-                        lod.vertices.extend_from_slice(tris);
-                        start..lod.vertices.len() as u32
-                    })
-                })
-                .collect();
-            lod.levels.push(Level { cell, ranges });
+        if cancel.load(Ordering::Relaxed) {
+            return None;
         }
-        lod
+        // One level at a time goes into its buffer, and its chunks' vertices are freed.
+        let stride = std::mem::size_of::<BaseFaceVertex>();
+        let mut levels = Vec::new();
+        for (l, &cell) in CELLS.iter().enumerate() {
+            let total: usize = results
+                .iter()
+                .map(|c| c[l].as_ref().map_or(0, Vec::len))
+                .sum();
+            let mut ranges = vec![None; count];
+            let mut buffer = None;
+            if total > 0 {
+                let b = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("lod faces"),
+                    size: (total * stride) as u64,
+                    usage: wgpu::BufferUsages::VERTEX,
+                    mapped_at_creation: true,
+                });
+                {
+                    let mut view = b
+                        .slice(..)
+                        .get_mapped_range_mut()
+                        .expect("the buffer was created mapped");
+                    let mut at = 0;
+                    for (k, chunk) in results.iter_mut().enumerate() {
+                        if let Some(v) = chunk[l].take() {
+                            view.slice(at * stride..(at + v.len()) * stride)
+                                .copy_from_slice(bytemuck::cast_slice(&v));
+                            ranges[k] = Some(at as u32..(at + v.len()) as u32);
+                            at += v.len();
+                        }
+                    }
+                }
+                b.unmap();
+                buffer = Some(b);
+            }
+            levels.push(Level {
+                cell,
+                ranges,
+                buffer,
+                vertices: total as u32,
+            });
+        }
+        let most = levels.iter().map(|l| l.vertices).max().unwrap_or(0);
+        let zeros = (most > 0).then(|| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("lod flags"),
+                size: u64::from(most) * std::mem::size_of::<f32>() as u64,
+                usage: wgpu::BufferUsages::VERTEX,
+                mapped_at_creation: false,
+            })
+        });
+        Some(Lod { levels, zeros })
     }
 
-    /// The vertices of the coarsest level of chunk `k` whose cells are at most `pixels` across
-    /// where a pixel is `per_pixel` meters long, or None when none is.
-    pub fn pick(&self, k: usize, per_pixel: f32, pixels: f32) -> Option<Range<u32>> {
+    /// The level to draw chunk `k` at, with its vertices, where a pixel is `per_pixel` meters
+    /// long and cells may be `pixels` across; and the level to remember for the next frame
+    /// (0: none, else the level plus one). `last` is the one remembered.
+    ///
+    /// A level is chosen when its cells are at most `ENTER` of the limit, and kept while they
+    /// are within the limit.
+    pub fn pick(
+        &self,
+        k: usize,
+        per_pixel: f32,
+        pixels: f32,
+        last: u8,
+    ) -> (u8, Option<(usize, Range<u32>)>) {
+        let limit = pixels * per_pixel;
+        let at = |l: usize| self.levels[l].ranges.get(k)?.clone();
+        let fresh = (0..self.levels.len())
+            .rev()
+            .find(|&l| self.levels[l].cell <= ENTER * limit && at(l).is_some());
+        let kept = usize::from(last)
+            .checked_sub(1)
+            .filter(|&l| self.levels[l].cell <= limit && at(l).is_some());
+        let level = match (fresh, kept) {
+            (Some(f), Some(c)) => Some(f.max(c)),
+            (f, c) => f.or(c),
+        };
+        match level {
+            Some(l) => (l as u8 + 1, at(l).map(|r| (l, r))),
+            None => (0, None),
+        }
+    }
+
+    /// The vertex buffer of `level` and the zero flag buffer to draw it with.
+    pub fn buffers(&self, level: usize) -> Option<(&wgpu::Buffer, &wgpu::Buffer)> {
+        Some((
+            self.levels.get(level)?.buffer.as_ref()?,
+            self.zeros.as_ref()?,
+        ))
+    }
+
+    /// The bytes of vertices each level holds.
+    pub fn level_bytes(&self) -> Vec<u64> {
+        let stride = std::mem::size_of::<BaseFaceVertex>() as u64;
         self.levels
             .iter()
-            .rev()
-            .filter(|level| level.cell <= pixels * per_pixel)
-            .find_map(|level| level.ranges.get(k)?.clone())
+            .map(|l| u64::from(l.vertices) * stride)
+            .collect()
     }
 }
 
 /// Simplifies chunk `k` to each level.
-fn simplify_chunk(plan: &ChunkPlan, faces: &[BaseFaceVertex], k: usize) -> ChunkLevels {
-    let chunk = &plan.chunks[k];
-    let mut tris: Vec<BaseFaceVertex> =
-        Vec::with_capacity((chunk.vertices.end - chunk.vertices.start) as usize);
-    for run in plan.sources(chunk.vertices.start as usize..chunk.vertices.end as usize) {
-        tris.extend_from_slice(&faces[run]);
+fn simplify_chunk(
+    plan: &ChunkPlan,
+    faces: &[BaseFaceVertex],
+    k: usize,
+    cancel: &AtomicBool,
+) -> ChunkLevels {
+    let none = || CELLS.iter().map(|_| None).collect();
+    if cancel.load(Ordering::Relaxed) {
+        return none();
     }
-    let mut before = tris.len() / 3;
+    let chunk = &plan.chunks[k];
+    let (mut plain, mut kept) = (Vec::new(), Vec::new());
+    for run in plan.sources(chunk.vertices.start as usize..chunk.vertices.end as usize) {
+        for tri in faces[run].as_chunks::<3>().0 {
+            let list = if stays_whole(tri) {
+                &mut kept
+            } else {
+                &mut plain
+            };
+            list.extend_from_slice(tri);
+        }
+    }
+    let mut before = (plain.len() + kept.len()) / 3;
     CELLS
         .iter()
         .map(|&cell| {
-            let simple = cluster(&tris, chunk.lo, cell);
-            let now = simple.len() / 3;
+            plain = cluster(&plain, cell);
+            let now = (plain.len() + kept.len()) / 3;
             let worth = now as f32 <= WORTH * before as f32;
-            before = now.min(before);
-            worth.then_some(simple)
+            if worth {
+                before = now;
+            }
+            worth.then(|| {
+                let mut all = plain.clone();
+                all.extend_from_slice(&kept);
+                all
+            })
         })
         .collect()
+}
+
+/// True for a triangle that glows or shows a texture on either side.
+fn stays_whole(tri: &[BaseFaceVertex; 3]) -> bool {
+    tri.iter()
+        .any(|v| v.glow[0] > 0.0 || v.glow[1] > 0.0 || v.layer[0] >= 0.0 || v.layer[1] >= 0.0)
 }
 
 /// A hasher for small integer keys: a multiplication, as `HashMap`'s default is slow for the
@@ -142,10 +270,6 @@ impl Hasher for Mix {
         }
     }
 
-    fn write_u32(&mut self, v: u32) {
-        self.write_u64(u64::from(v));
-    }
-
     fn write_u64(&mut self, v: u64) {
         self.0 = (self.0.rotate_left(5) ^ v).wrapping_mul(0x9E37_79B9_7F4A_7C15);
         self.0 ^= self.0 >> 29;
@@ -160,47 +284,70 @@ struct Cell {
     /// The sum of the positions and how many there are.
     pos: Vec3,
     corners: u32,
-    /// The sums of the looks, each weighted by the area its corner stands for.
+    /// The looks of the surfaces facing each of the six ways.
+    looks: [Look; 6],
+}
+
+/// Sums of looks, each weighted by the area its corner stands for.
+#[derive(Clone, Copy, Default)]
+struct Look {
     weight: f32,
     front: [f32; 3],
     back: [f32; 3],
     finish: [f32; 4],
-    glow: [f32; 2],
 }
 
 impl Cell {
-    fn add(&mut self, v: &BaseFaceVertex, w: f32) {
-        self.weight += w;
+    fn add(&mut self, side: usize, v: &BaseFaceVertex, w: f32) {
+        let l = &mut self.looks[side];
+        l.weight += w;
         for i in 0..3 {
-            self.front[i] += w * v.front[i];
-            self.back[i] += w * v.back[i];
+            l.front[i] += w * v.front[i];
+            l.back[i] += w * v.back[i];
         }
         for i in 0..4 {
-            self.finish[i] += w * v.finish[i];
-        }
-        for i in 0..2 {
-            self.glow[i] += w * v.glow[i];
+            l.finish[i] += w * v.finish[i];
         }
     }
 
-    /// `v` with the cell's position and looks.
-    fn put(&self, v: &mut BaseFaceVertex) {
-        v.pos = (self.pos / self.corners as f32).to_array();
-        if self.weight > 0.0 {
-            let k = 1.0 / self.weight;
-            v.front = self.front.map(|x| x * k);
-            v.back = self.back.map(|x| x * k);
-            v.finish = self.finish.map(|x| x * k);
-            v.glow = self.glow.map(|x| x * k);
+    fn position(&self) -> Vec3 {
+        self.pos / self.corners as f32
+    }
+
+    /// `v` with the cell's position and the look of the surfaces facing `side`.
+    fn put(&self, side: usize, v: &mut BaseFaceVertex) {
+        v.pos = self.position().to_array();
+        let l = &self.looks[side];
+        if l.weight > 0.0 {
+            let k = 1.0 / l.weight;
+            v.front = l.front.map(|x| x * k);
+            v.back = l.back.map(|x| x * k);
+            v.finish = l.finish.map(|x| x * k);
         }
     }
 }
 
-/// The triangles `tris` (three vertices each) clustered on the grid of `cell`-sized cells,
-/// which `lo` (a corner of the triangles' box) fixes the numbering of.
-pub fn cluster(tris: &[BaseFaceVertex], lo: Vec3, cell: f32) -> Vec<BaseFaceVertex> {
+/// Which of the six directions (axis by axis, positive then negative) `n` points most to.
+fn side_of(n: Vec3) -> usize {
+    let a = n.abs();
+    let axis = if a.x >= a.y && a.x >= a.z {
+        0
+    } else if a.y >= a.z {
+        1
+    } else {
+        2
+    };
+    2 * axis + usize::from(n[axis] < 0.0)
+}
+
+/// The triangles `tris` (three vertices each) clustered on the grid of `cell`-sized cells
+/// that has a corner at the origin.
+pub fn cluster(tris: &[BaseFaceVertex], cell: f32) -> Vec<BaseFaceVertex> {
     let inv = 1.0 / cell;
-    let base = (lo * inv).floor();
+    let low = tris
+        .iter()
+        .fold(Vec3::splat(f32::MAX), |m, v| m.min(Vec3::from(v.pos)));
+    let base = (low * inv).floor();
     let mut index: Map<u64, u32> = Map::default();
     let mut cells: Vec<Cell> = Vec::new();
     let mut cell_of: Vec<u32> = Vec::with_capacity(tris.len());
@@ -220,15 +367,24 @@ pub fn cluster(tris: &[BaseFaceVertex], lo: Vec3, cell: f32) -> Vec<BaseFaceVert
         c.corners += 1;
         cell_of.push(i);
     }
-    // Every triangle, kept or not, lends its looks to its corners' cells.
     let area = |tri: &[BaseFaceVertex]| {
         let p = |v: &BaseFaceVertex| Vec3::from(v.pos);
         (p(&tri[1]) - p(&tri[0])).cross(p(&tri[2]) - p(&tri[0]))
     };
+    // The side each triangle faces, by its front.
+    let facing = |tri: &[BaseFaceVertex], was: Vec3| {
+        let n = Vec3::from(tri[0].normal) + Vec3::from(tri[1].normal) + Vec3::from(tri[2].normal);
+        if was.dot(n) < 0.0 { -was } else { was }
+    };
+    // Every triangle, kept or not, lends its looks to its corners' cells.
+    let mut sides: Vec<u8> = Vec::with_capacity(tris.len() / 3);
     for (t, tri) in tris.as_chunks::<3>().0.iter().enumerate() {
-        let third = area(tri).length() / 6.0;
+        let was = area(tri);
+        let side = side_of(facing(tri, was));
+        sides.push(side as u8);
+        let third = was.length() / 6.0;
         for (j, v) in tri.iter().enumerate() {
-            cells[cell_of[3 * t + j] as usize].add(v, third);
+            cells[cell_of[3 * t + j] as usize].add(side, v, third);
         }
     }
 
@@ -238,14 +394,23 @@ pub fn cluster(tris: &[BaseFaceVertex], lo: Vec3, cell: f32) -> Vec<BaseFaceVert
     let too_thin = (cell * cell * 1e-4).powi(2);
     for (t, tri) in tris.as_chunks::<3>().0.iter().enumerate() {
         let c = [cell_of[3 * t], cell_of[3 * t + 1], cell_of[3 * t + 2]];
-        if c[0] == c[1] || c[1] == c[2] || c[0] == c[2] {
-            continue;
-        }
         let was = area(tri);
         if was.length_squared() <= 0.0 {
             continue;
         }
-        let at = |i: usize| Vec3::from_array(position(&cells[c[i] as usize]));
+        if c[0] == c[1] || c[1] == c[2] || c[0] == c[2] {
+            // A triangle with a long side would vanish: it stays as it is.
+            let p = |i: usize| Vec3::from(tri[i].pos);
+            let longest = (p(1) - p(0))
+                .length()
+                .max((p(2) - p(1)).length())
+                .max((p(0) - p(2)).length());
+            if longest >= LONG * cell {
+                out.extend_from_slice(tri);
+            }
+            continue;
+        }
+        let at = |i: usize| cells[c[i] as usize].position();
         let mut now = (at(1) - at(0)).cross(at(2) - at(0));
         if now.length_squared() <= too_thin {
             continue;
@@ -257,9 +422,8 @@ pub fn cluster(tris: &[BaseFaceVertex], lo: Vec3, cell: f32) -> Vec<BaseFaceVert
             now = -now;
         }
         // The normal points to the side the old one did.
-        let side =
-            Vec3::from(tri[0].normal) + Vec3::from(tri[1].normal) + Vec3::from(tri[2].normal);
-        let normal = (now.normalize() * if was.dot(side) < 0.0 { -1.0 } else { 1.0 }).to_array();
+        let flip = facing(tri, was).dot(was) < 0.0;
+        let normal = (now.normalize() * if flip { -1.0 } else { 1.0 }).to_array();
 
         let ids = order.map(|i| c[i]);
         let mut sorted = ids;
@@ -280,16 +444,12 @@ pub fn cluster(tris: &[BaseFaceVertex], lo: Vec3, cell: f32) -> Vec<BaseFaceVert
         kept.insert(key, (out.len(), forward));
         for i in order {
             let mut v = tri[i];
-            cells[c[i] as usize].put(&mut v);
+            cells[c[i] as usize].put(usize::from(sides[t]), &mut v);
             v.normal = normal;
             out.push(v);
         }
     }
     out
-}
-
-fn position(cell: &Cell) -> [f32; 3] {
-    (cell.pos / cell.corners as f32).to_array()
 }
 
 /// Makes the three vertices show their front side's look on the back too.
@@ -316,6 +476,7 @@ mod tests {
             front,
             back: [0.5; 3],
             alpha: [1.0; 2],
+            layer: [-1.0; 2],
             ..BaseFaceVertex::zeroed()
         }
     }
@@ -348,7 +509,7 @@ mod tests {
     #[test]
     fn clustering_drops_degenerate_triangles_and_keeps_bounds_and_colors() {
         let tris = grid(40, 0.25);
-        let simple = cluster(&tris, Vec3::ZERO, 1.0);
+        let simple = cluster(&tris, 1.0);
         assert!(!simple.is_empty());
         assert!(
             simple.len() * 8 < tris.len(),
@@ -384,7 +545,7 @@ mod tests {
             corner([0.2, 0.1, 0.0], [1.0; 3]),
             corner([0.1, 0.2, 0.0], [1.0; 3]),
         ];
-        assert!(cluster(&small, Vec3::ZERO, 1.0).is_empty());
+        assert!(cluster(&small, 1.0).is_empty());
         // Wound the other way round, facing down.
         let mut big = [
             corner([0.0, 0.0, 0.0], [1.0; 3]),
@@ -394,8 +555,107 @@ mod tests {
         for v in &mut big {
             v.normal = [0.0, 0.0, -1.0];
         }
-        let kept = cluster(&big, Vec3::ZERO, 1.0);
+        let kept = cluster(&big, 1.0);
         assert_eq!(kept.len(), 3);
         assert!(kept.iter().all(|v| v.normal[2] < -0.99));
+    }
+
+    #[test]
+    fn a_thin_triangle_longer_than_a_few_cells_stays() {
+        let spire = [
+            corner([0.1, 0.1, 0.0], [1.0; 3]),
+            corner([0.2, 0.1, 0.0], [1.0; 3]),
+            corner([0.15, 0.1, 10.0], [1.0; 3]),
+        ];
+        let kept = cluster(&spire, 1.0);
+        assert_eq!(kept.len(), 3);
+        assert_eq!(kept[2].pos, [0.15, 0.1, 10.0]);
+    }
+
+    #[test]
+    fn glowing_and_textured_triangles_stay_whole_in_every_level() {
+        let mut tris = grid(40, 0.25);
+        for v in &mut tris[300..303] {
+            v.glow = [1.0, 0.0];
+        }
+        for v in &mut tris[600..603] {
+            v.layer = [2.0, -1.0];
+        }
+        let lit: Vec<_> = tris[300..303].iter().map(|v| v.pos).collect();
+        let textured: Vec<_> = tris[600..603].iter().map(|v| v.pos).collect();
+        let plan = ChunkPlan::new(tris.len(), &[], 3, 100_000, &|i| tris[i].pos, &|_| true);
+        assert_eq!(plan.chunks.len(), 1);
+        let levels = simplify_chunk(&plan, &tris, 0, &AtomicBool::new(false));
+        let level = levels[0].as_ref().expect("the first level helps");
+        assert!(level.len() * 4 < tris.len());
+        let has = |positions: &[[f32; 3]]| {
+            level
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .any(|t| t.iter().map(|v| v.pos).eq(positions.iter().copied()))
+        };
+        assert!(has(&lit) && has(&textured));
+        let lit_vertex = level.iter().find(|v| v.glow[0] > 0.5).unwrap();
+        assert_eq!(lit_vertex.glow, [1.0, 0.0]);
+    }
+
+    fn levels_of_chunk_zero() -> Lod {
+        let level = |cell: f32| Level {
+            cell,
+            ranges: vec![Some(0..3)],
+            buffer: None,
+            vertices: 3,
+        };
+        Lod {
+            levels: vec![level(1.0), level(3.0), level(9.0)],
+            zeros: None,
+        }
+    }
+
+    #[test]
+    fn a_level_is_entered_at_a_part_of_the_limit_and_kept_up_to_it() {
+        let lod = levels_of_chunk_zero();
+        // The limit is 1.5 cells per pixel of `per_pixel` meters.
+        let level = |per_pixel: f32, last: u8| lod.pick(0, per_pixel, 1.5, last).0;
+        assert_eq!(level(0.5, 0), 0, "a pixel of half a meter: nothing to gain");
+        assert_eq!(
+            level(2.0, 0),
+            1,
+            "the finest enters at 1.2 m cells (2.4 limit)"
+        );
+        assert_eq!(level(2.6, 0), 2, "the next enters at 3.12");
+        // Once in, it stays while within the limit (3.15) and goes finer past it.
+        assert_eq!(level(2.1, 2), 2);
+        assert_eq!(level(1.9, 2), 1);
+        // And a coarser one is chosen at once when it enters.
+        assert_eq!(level(2.6, 1), 2);
+    }
+
+    #[test]
+    fn surfaces_facing_different_ways_keep_their_own_colors() {
+        // A red floor and a blue wall meeting in the same cells.
+        let mut tris = Vec::new();
+        let floor = |c: [f32; 3]| {
+            let v = |x: f32, y: f32| corner([x, y, 0.0], c);
+            [v(0.0, 0.0), v(2.0, 0.0), v(0.0, 2.0)]
+        };
+        let wall = |c: [f32; 3]| {
+            let v = |x: f32, z: f32| {
+                let mut v = corner([x, 0.0, z], c);
+                v.normal = [0.0, -1.0, 0.0];
+                v
+            };
+            // Wound to face -y.
+            [v(0.0, 0.0), v(0.0, 2.0), v(2.0, 0.0)]
+        };
+        tris.extend(floor([1.0, 0.0, 0.0]));
+        tris.extend(wall([0.0, 0.0, 1.0]));
+        let simple = cluster(&tris, 1.0);
+        let floors: Vec<_> = simple.iter().filter(|v| v.normal[2] > 0.5).collect();
+        let walls: Vec<_> = simple.iter().filter(|v| v.normal[1] < -0.5).collect();
+        assert_eq!((floors.len(), walls.len()), (3, 3));
+        assert!(floors.iter().all(|v| v.front == [1.0, 0.0, 0.0]));
+        assert!(walls.iter().all(|v| v.front == [0.0, 0.0, 1.0]));
     }
 }

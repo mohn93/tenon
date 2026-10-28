@@ -37,7 +37,7 @@ pub struct Chunk {
 }
 
 /// The chunks of one vertex list.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ChunkPlan {
     /// Where every vertex went, in new order; they cover the list.
     segments: Vec<Segment>,
@@ -292,13 +292,13 @@ impl ChunkPlan {
         self.visible_by(camera, |_, _| None)
     }
 
-    /// Like `visible`, but a chunk for which `pick(chunk, world_per_pixel)` gives a range
-    /// has that range listed in `Runs::lod` instead of its own. `world_per_pixel` is how long
+    /// Like `visible`, but a chunk for which `pick(chunk, world_per_pixel)` gives a level and a
+    /// range has that range listed in `Runs::lod` under the level instead of its own. `world_per_pixel` is how long
     /// a pixel is at the chunk's nearest point.
     pub fn visible_by(
         &self,
         camera: &Camera,
-        pick: impl Fn(usize, f32) -> Option<Range<u32>>,
+        pick: impl Fn(usize, f32) -> Option<(usize, Range<u32>)>,
     ) -> Runs {
         let m = camera.view_proj_f32();
         let mut runs = Runs::default();
@@ -356,7 +356,12 @@ impl ChunkPlan {
                 }
             }
             let (list, range) = match per_pixel.and_then(|p| pick(k, p)) {
-                Some(range) => (&mut runs.lod, range),
+                Some((level, range)) => {
+                    if runs.lod.len() <= level {
+                        runs.lod.resize(level + 1, Vec::new());
+                    }
+                    (&mut runs.lod[level], range)
+                }
                 None if k < self.solid_chunks => (&mut runs.solid, c.vertices.clone()),
                 None => (&mut runs.rest, c.vertices.clone()),
             };
@@ -379,8 +384,9 @@ impl ChunkPlan {
 pub struct Runs {
     pub solid: Vec<Range<u32>>,
     pub rest: Vec<Range<u32>>,
-    /// Vertex ranges of the simplified meshes (see `lod`) drawn in place of some solid chunks.
-    pub lod: Vec<Range<u32>>,
+    /// Vertex ranges of the simplified meshes (see `lod`) drawn in place of some solid chunks,
+    /// by level.
+    pub lod: Vec<Vec<Range<u32>>>,
 }
 
 /// `ranges` with the box of the primitives `keep` lists, and again with that of the others;

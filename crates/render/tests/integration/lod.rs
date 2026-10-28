@@ -12,7 +12,7 @@ use crate::headless::{H, Offscreen, W};
 
 /// Squares along a side of the plane, and how long a square is: a fine mesh of one flat color.
 const SIDE: usize = 30;
-const STEP: f64 = 0.5;
+const STEP: f64 = 1.0;
 
 /// A flat plane of `SIDE` x `SIDE` squares of `STEP` m, the faces' ids.
 fn plane() -> (Scene, Vec<EntityId>) {
@@ -46,12 +46,17 @@ fn style() -> StyleSettings {
     }
 }
 
-fn renderer(screen: &Offscreen, scene: &Scene) -> Renderer {
+/// A renderer of `scene`; with `lod`, one with the simplified copies made.
+fn renderer(screen: &Offscreen, scene: &Scene, lod: bool) -> Renderer {
     let mut r = screen.renderer();
     // Small chunks, so a model this size has many.
     r.set_culling_from(100);
     r.set_model_style(Some(&style()));
+    r.set_lod(lod);
     r.set_scene(scene, &[], &BTreeSet::new());
+    if lod {
+        r.wait_for_lod();
+    }
     r
 }
 
@@ -64,7 +69,7 @@ fn camera(height: f64) -> Camera {
     cam
 }
 
-const FAR: f64 = 400.0;
+const FAR: f64 = 700.0;
 const NEAR: f64 = 12.0;
 
 /// How many pixels differ by more than `levels` in a channel.
@@ -81,7 +86,7 @@ fn a_far_view_draws_fewer_triangles_and_the_picture_is_the_same() {
         return;
     };
     let (scene, _) = plane();
-    let mut r = renderer(&screen, &scene);
+    let mut r = renderer(&screen, &scene, true);
     let cam = camera(FAR);
     let full = Viewport::full((W, H));
     let (kept, all) = r.visible_triangles(&cam).unwrap();
@@ -112,7 +117,7 @@ fn a_near_view_draws_full_detail_and_the_picture_is_identical() {
         return;
     };
     let (scene, _) = plane();
-    let mut r = renderer(&screen, &scene);
+    let mut r = renderer(&screen, &scene, true);
     let cam = camera(NEAR);
     let full = Viewport::full((W, H));
     let (kept, _) = r.visible_triangles(&cam).unwrap();
@@ -135,9 +140,8 @@ fn selection_and_hover_light_a_chunk_that_would_be_simplified() {
         face_mix: 0.8,
         edge: [1.0, 0.0, 0.0, 1.0],
     };
-    let mut on = renderer(&screen, &scene);
-    let mut off = renderer(&screen, &scene);
-    off.set_lod(false);
+    let mut on = renderer(&screen, &scene, true);
+    let mut off = renderer(&screen, &scene, false);
     let plain = screen.draw(&mut on, &cam, full, &[]);
     let (base, _) = on.drawn_triangles(&cam).unwrap();
 
@@ -165,4 +169,89 @@ fn selection_and_hover_light_a_chunk_that_would_be_simplified() {
     assert!(d * 100 <= W as usize * H as usize, "hover: {d} differ");
     on.set_hover(None);
     assert_eq!(on.drawn_triangles(&cam).map(|d| d.0), Some(base));
+}
+
+#[test]
+fn a_renderer_that_was_not_asked_for_lod_draws_full_detail_however_far_the_view() {
+    // What the snapshotter wraps: pictures made off screen are never simplified.
+    let Some(screen) = Offscreen::new() else {
+        return;
+    };
+    let (scene, _) = plane();
+    let mut r = renderer(&screen, &scene, false);
+    r.wait_for_lod();
+    let cam = camera(FAR);
+    let full = Viewport::full((W, H));
+    for _ in 0..12 {
+        screen.draw(&mut r, &cam, full, &[]);
+    }
+    assert!(r.lod_level_bytes().is_empty());
+    let (kept, all) = r.visible_triangles(&cam).unwrap();
+    assert_eq!(r.drawn_triangles(&cam), Some((kept, all)));
+}
+
+#[test]
+fn the_copies_are_made_on_a_thread_once_a_view_needs_them() {
+    let Some(screen) = Offscreen::new() else {
+        return;
+    };
+    let (scene, _) = plane();
+    let mut r = screen.renderer();
+    r.set_culling_from(100);
+    r.set_model_style(Some(&style()));
+    r.set_lod(true);
+    r.set_scene(&scene, &[], &BTreeSet::new());
+    let full = Viewport::full((W, H));
+    // A near view never needs them.
+    for _ in 0..20 {
+        screen.draw(&mut r, &camera(NEAR), full, &[]);
+    }
+    assert!(r.lod_level_bytes().is_empty());
+    // A far one starts them, and frames go on, whole, until they are ready.
+    let far = camera(FAR);
+    let (kept, _) = r.visible_triangles(&far).unwrap();
+    let started = std::time::Instant::now();
+    while r.lod_level_bytes().is_empty() {
+        assert!(started.elapsed().as_secs() < 30, "the copies never came");
+        screen.draw(&mut r, &far, full, &[]);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    screen.draw(&mut r, &far, full, &[]);
+    assert!(r.drawn_triangles(&far).unwrap().0 * 3 < kept);
+}
+
+#[test]
+fn a_new_model_drops_the_copies_of_the_old_one() {
+    let Some(screen) = Offscreen::new() else {
+        return;
+    };
+    let (scene, _) = plane();
+    let mut r = renderer(&screen, &scene, true);
+    assert!(!r.lod_level_bytes().is_empty());
+    let bytes = r.lod_level_bytes();
+    // Many sets without a frame between, as an edit or a transition makes.
+    for _ in 0..5 {
+        r.set_scene(&scene, &[], &BTreeSet::new());
+        assert!(r.lod_level_bytes().is_empty(), "the old copies are gone");
+    }
+    r.wait_for_lod();
+    assert_eq!(r.lod_level_bytes(), bytes);
+}
+
+#[test]
+fn the_pixel_limit_is_kept_finite_and_positive() {
+    let Some(screen) = Offscreen::new() else {
+        return;
+    };
+    let (scene, _) = plane();
+    let mut r = renderer(&screen, &scene, true);
+    let cam = camera(FAR);
+    let (drawn, _) = r.drawn_triangles(&cam).unwrap();
+    for bad in [f32::NAN, f32::INFINITY, -3.0, 0.0] {
+        r.set_lod_pixels(bad);
+        let (now, _) = r.drawn_triangles(&cam).unwrap();
+        assert!(now > 0 && now <= 2 * (SIDE * SIDE) as u32, "{bad}: {now}");
+    }
+    r.set_lod_pixels(f32::NAN);
+    assert_eq!(r.drawn_triangles(&cam).unwrap().0, drawn);
 }

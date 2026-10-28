@@ -707,6 +707,8 @@ fn make_renderer(
     if !occlusion {
         renderer.disable_ambient_occlusion();
     }
+    // The window draws far chunks of big models simplified; pictures made off screen do not.
+    renderer.set_lod(true);
     renderer
 }
 
