@@ -338,6 +338,7 @@ const REFUSE_WAIT: Duration = Duration::from_secs(1);
 /// answer, sends a FIN, then waits (without blocking on any one socket) for the client's request
 /// head or end of stream, at most `REFUSE_WAIT` and `LINGER_BYTES` each, so closing does not
 /// reset the connection (see `Drop for Out`). Ends when the accept loop drops its sender.
+/// On shutdown, sockets still waiting with unread data are dropped (an RST, which is acceptable).
 fn refuser(rx: std::sync::mpsc::Receiver<TcpStream>, shared: Arc<Shared>) {
     struct Waiting {
         stream: TcpStream,
@@ -535,7 +536,10 @@ fn serve(stream: TcpStream, shared: &Shared) {
     };
     // The head was read whole and no body is announced: nothing is left unread, so the slot
     // frees at once instead of waiting for the client to close.
-    if header(&head, "content-length").is_none() && header(&head, "transfer-encoding").is_none() {
+    if std::str::from_utf8(&head).is_ok()
+        && header(&head, "content-length").is_none()
+        && header(&head, "transfer-encoding").is_none()
+    {
         stream.linger = Duration::ZERO;
     }
     let bad = |stream: &mut Out| {

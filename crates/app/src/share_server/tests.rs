@@ -915,3 +915,12 @@ fn a_refused_client_that_sends_late_still_reads_the_503() {
     c.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
     assert_eq!(read_reply(c).status, 503);
 }
+
+#[test]
+fn a_bad_request_with_a_body_and_a_non_utf8_header_is_still_answered() {
+    let d = viewer();
+    let s = start(&d);
+    let mut req = b"GET / HTTP/9.9\r\nX-Bad: \xff\xfe\r\nContent-Length: 4000\r\n\r\n".to_vec();
+    req.extend_from_slice(&[b'x'; 4000]);
+    assert_eq!(raw(s.port(), &req).status, 400);
+}
