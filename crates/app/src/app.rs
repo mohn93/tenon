@@ -3240,6 +3240,11 @@ impl State {
         if self.editor.hover_deferred() {
             self.repaint_at = Some(earliest(self.repaint_at, now + HOVER_SETTLE));
         }
+        // Glass drawn in a held order (the camera was moving) is sorted exactly by one more
+        // frame with the camera unchanged; an idle app would not draw one.
+        if self.renderer.needs_settle_frame() {
+            self.repaint_at = Some(earliest(self.repaint_at, now + render::GLASS_SETTLE));
+        }
         // The chip's rest and the flash's end, as of the HUD this frame showed.
         self.repaint_at = with_feedback(self.repaint_at, &self.timing, dressed_at, chip_at_rest);
         // Actions from a pass with a sheet open (or after one opened) are only the sheet's own.

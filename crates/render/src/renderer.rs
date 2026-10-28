@@ -563,6 +563,9 @@ struct Mesh {
 struct Indices {
     buffer: wgpu::Buffer,
     count: u32,
+    /// For chunked edges: where each edge chunk's indices start in the list (one more entry
+    /// than there are chunks, the last the list's length). Empty when not chunked.
+    chunk_starts: Vec<u32>,
 }
 
 /// Triangles (or edges) a model needs before its faces (or edges) are drawn by spatial chunk,
@@ -601,13 +604,19 @@ fn draw_runs(pass: &mut wgpu::RenderPass<'_>, runs: &[std::ops::Range<u32>], cop
     }
 }
 
+/// How long the camera must have been still before a held glass order is made exact. The app
+/// draws a frame this long after one that drew a held order.
+pub const GLASS_SETTLE: std::time::Duration = std::time::Duration::from_millis(80);
+
 /// What every glass triangle was last sorted for: the view, and the distance from the eye to
 /// the nearest glass triangle then (infinite for a parallel view).
 type SortedFor = ([f32; 4], f32);
 
 /// How far the eye may move, as a fraction of the distance to the nearest glass triangle, before
-/// the order is worked out again. Triangles whose distances differ by less than twice this much
-/// can swap places, which at this size is not seen.
+/// the order is worked out again. Meanwhile the eye has moved by up to this much, so triangles
+/// whose distances from it differ by less than twice that can be in the wrong order, which
+/// while the camera moves is not seen; once it stops, the order is made exact (see
+/// `Glass::sort`).
 const RESORT_MOVE: f32 = 0.01;
 
 /// Whether the order sorted for `prev` still holds for `view`.
@@ -641,6 +650,12 @@ struct Glass {
     sorted: Vec<u32>,
     /// The vertex ranges in view (None: all) `order` was last filled for.
     drawn_for: Option<Option<Vec<std::ops::Range<u32>>>>,
+    /// The view of the last frame, and since when it has not changed, to tell a camera that
+    /// has stopped.
+    last_view: Option<[f32; 4]>,
+    still_since: Option<web_time::Instant>,
+    /// Whether `sorted` is a held order, not exact for the last frame's view.
+    held: bool,
 }
 
 impl Glass {
@@ -691,11 +706,20 @@ impl Glass {
             sorted_for: None,
             sorted: Vec::new(),
             drawn_for: None,
+            last_view: None,
+            still_since: None,
+            held: false,
         })
     }
 
     fn count(&self) -> u32 {
         self.drawn
+    }
+
+    /// True while the order drawn last is a held one, not exact for the view: a frame with
+    /// the camera unchanged sorts it exactly.
+    fn needs_settle(&self) -> bool {
+        self.held
     }
 
     /// Sorts the triangles far to near from `camera`, unless they already are for its view.
@@ -707,16 +731,39 @@ impl Glass {
         camera: &Camera,
         visible: Option<&[std::ops::Range<u32>]>,
     ) {
+        self.sort_at(queue, camera, visible, web_time::Instant::now());
+    }
+
+    /// `sort` at the time `now`.
+    fn sort_at(
+        &mut self,
+        queue: &wgpu::Queue,
+        camera: &Camera,
+        visible: Option<&[std::ops::Range<u32>]>,
+        now: web_time::Instant,
+    ) {
         let (origin, toward) = (camera.eye.as_vec3(), camera.forward().as_vec3());
         let view = if camera.is_parallel() {
             [toward.x, toward.y, toward.z, 0.0]
         } else {
             [origin.x, origin.y, origin.z, 1.0]
         };
+        // A held order is only for a moving eye: once the view has been still for
+        // `GLASS_SETTLE`, it is sorted exactly if it is not already. (A frame or two with the
+        // camera unchanged in the middle of a stuttering orbit keeps the hold.)
+        if self.last_view != Some(view) || self.still_since.is_none() {
+            self.still_since = Some(now);
+        }
+        let stopped = self
+            .still_since
+            .is_some_and(|t| now.saturating_duration_since(t) >= GLASS_SETTLE);
+        self.last_view = Some(view);
+        let exact = self.sorted_for.as_ref().is_some_and(|prev| prev.0 == view);
         if !self
             .sorted_for
             .as_ref()
             .is_some_and(|prev| order_holds(prev, view))
+            || (stopped && !exact)
         {
             // Every triangle is sorted, in view or not, so that the set in view changing as the
             // camera turns costs a filter, not a sort.
@@ -734,6 +781,9 @@ impl Glass {
             self.sorted_for = Some((view, nearest));
             self.drawn_for = None;
         }
+        // (A view that is not finite is never exact and never moves on: nothing to settle.)
+        self.held = view.iter().all(|v| v.is_finite())
+            && self.sorted_for.as_ref().is_none_or(|prev| prev.0 != view);
         let wanted = visible.map(<[_]>::to_vec);
         if self.drawn_for.as_ref() == Some(&wanted) {
             return;
@@ -1747,6 +1797,27 @@ impl Renderer {
         self.cull_from = count;
     }
 
+    /// How many edges the profile copies draw in a frame seen by `camera`, and how many they
+    /// would draw whole, when the edges are culled by chunk; None when they are drawn whole
+    /// or there are no edge effects.
+    pub fn visible_profile_edges(&self, camera: &Camera) -> Option<(u32, u32)> {
+        let plan = self.edge_chunks.as_ref()?;
+        let edges = self.edges.as_ref()?;
+        edges.extras.as_ref()?;
+        let runs = plan.visible_wide(camera, self.edge_effect_reach(self.pixels_per_point));
+        Some(match &edges.profile_edges {
+            Some(list) if !list.chunk_starts.is_empty() => {
+                let drawn = candidate_runs(plan, list, &runs.solid)
+                    .iter()
+                    .map(|r| r.end - r.start)
+                    .sum::<u32>();
+                (drawn / 2, list.count / 2)
+            }
+            Some(list) => (list.count / 2, list.count / 2),
+            None => (ChunkPlan::covered(&runs.solid) / 2, edges.count / 2),
+        })
+    }
+
     /// How many of the model's opaque triangles a frame seen by `camera` draws, and how many
     /// it has in all, when the faces are culled by chunk; None when they are drawn whole.
     pub fn visible_triangles(&self, camera: &Camera) -> Option<(u32, u32)> {
@@ -2551,6 +2622,13 @@ impl Renderer {
         }
     }
 
+    /// True when the glass drawn last is in a held order that is not exact for the camera:
+    /// one more frame with the camera unchanged sorts it. A caller that draws only on demand
+    /// should draw once shortly after the camera stops.
+    pub fn needs_settle_frame(&self) -> bool {
+        self.glass.as_ref().is_some_and(Glass::needs_settle)
+    }
+
     /// Draws the frames from now on for a display of `scale` physical pixels per point, which
     /// widths given in points are multiplied by. render_view and headless keep 1.
     pub fn set_pixels_per_point(&mut self, scale: f32) {
@@ -2681,6 +2759,21 @@ impl Renderer {
             endpoint_copies = 2 * (shifted + 2);
         }
         (profile_copies, endpoint_copies)
+    }
+
+    /// How far, in pixels, the edge effects draw beyond an edge: the widest of the profile
+    /// copies, the endpoint marks and the sketchy jitter and extension, added.
+    fn edge_effect_reach(&self, scale: f32) -> f32 {
+        let Some(edges) = self.model_style.map(|s| s.edges) else {
+            return 0.0;
+        };
+        let sketchy = edges
+            .sketchy
+            .map_or(0.0, |k| k.jitter.abs() + k.extension.abs());
+        (edges.profiles.unwrap_or(0.0)
+            + edges.endpoints.map_or(0.0, |l| l + ENDPOINT_WIDTH_PT)
+            + sketchy)
+            * scale
     }
 
     /// What the negative axes fade toward by day: the model style's background, else the
@@ -2977,6 +3070,20 @@ impl Renderer {
                         None => pass.draw(0..edges.count, 0..wide_copies),
                     }
                 }
+                // The effects reach past the edge's own box and show even from a chunk too small
+                // to see, so they use their own, wider view of the chunks.
+                let fx_runs = (profile_copies > 0 || endpoint_copies > 0)
+                    .then(|| {
+                        self.edge_chunks
+                            .as_ref()
+                            .map(|plan| plan.visible_wide(camera, self.edge_effect_reach(ppp)))
+                    })
+                    .flatten();
+                let cull = self
+                    .edge_chunks
+                    .as_ref()
+                    .zip(fx_runs.as_ref())
+                    .map(|(plan, r)| (plan, &r.solid[..]));
                 if with_effects
                     && profile_copies > 0
                     && let Some(edges) = &self.edges
@@ -2986,6 +3093,7 @@ impl Renderer {
                         &mut pass,
                         edges,
                         edges.profile_edges.as_ref(),
+                        cull,
                         profile_copies,
                     );
                 }
@@ -2998,6 +3106,7 @@ impl Renderer {
                         &mut pass,
                         edges,
                         edges.endpoint_edges.as_ref(),
+                        cull,
                         endpoint_copies,
                     );
                 }
@@ -3412,6 +3521,14 @@ fn edge_mesh(
             // Only worth an index buffer when it leaves edges out.
             (list.len() < extras.len()).then(|| Indices {
                 count: list.len() as u32,
+                // The list ascends in the new vertex order, as the chunks do.
+                chunk_starts: plan.map_or_else(Vec::new, |plan| {
+                    plan.chunks
+                        .iter()
+                        .map(|c| list.partition_point(|&v| v < c.vertices.start) as u32)
+                        .chain([list.len() as u32])
+                        .collect()
+                }),
                 buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("edge candidates"),
                     // A buffer is never empty; `count` says how much of it is read.
@@ -3433,22 +3550,56 @@ fn edge_mesh(
     Some(mesh)
 }
 
+/// The index ranges of `list` holding the edges of the chunks in the vertex ranges `runs`
+/// (ascending), adjacent ones merged. Each range starts and ends on a pair.
+fn candidate_runs(
+    plan: &ChunkPlan,
+    list: &Indices,
+    runs: &[std::ops::Range<u32>],
+) -> Vec<std::ops::Range<u32>> {
+    let mut out: Vec<std::ops::Range<u32>> = Vec::new();
+    for r in runs {
+        let chunks = plan.chunks_in(r.start as usize..r.end as usize);
+        let (from, to) = (
+            list.chunk_starts[chunks.start],
+            list.chunk_starts[chunks.end],
+        );
+        if from == to {
+            continue;
+        }
+        match out.last_mut() {
+            Some(last) if last.end == from => last.end = to,
+            _ => out.push(from..to),
+        }
+    }
+    out
+}
+
 /// Draws `copies` instances of the edges in `candidates`, or of all of `edges` when it is None.
-/// Edge vertices come in pairs, so an index keeps its parity (the shader tells an edge's ends
-/// apart by `vertex_index`).
+/// With `cull` (the edge chunks and the vertex ranges in view), only the edges of those
+/// chunks. Edge vertices come in pairs, so an index keeps its parity (the shader tells an
+/// edge's ends apart by `vertex_index`).
 fn draw_candidates(
     pass: &mut wgpu::RenderPass<'_>,
     edges: &Mesh,
     candidates: Option<&Indices>,
+    cull: Option<(&ChunkPlan, &[std::ops::Range<u32>])>,
     copies: u32,
 ) {
-    match candidates {
-        Some(list) if list.count == 0 => {}
-        Some(list) => {
+    match (candidates, cull) {
+        (Some(list), _) if list.count == 0 => {}
+        (Some(list), Some((plan, runs))) if !list.chunk_starts.is_empty() => {
+            pass.set_index_buffer(list.buffer.slice(..), wgpu::IndexFormat::Uint32);
+            for r in candidate_runs(plan, list, runs) {
+                pass.draw_indexed(r, 0, 0..copies);
+            }
+        }
+        (Some(list), _) => {
             pass.set_index_buffer(list.buffer.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..list.count, 0, 0..copies);
         }
-        None => pass.draw(0..edges.count, 0..copies),
+        (None, Some((_, runs))) => draw_runs(pass, runs, copies),
+        (None, None) => pass.draw(0..edges.count, 0..copies),
     }
 }
 
@@ -3567,6 +3718,58 @@ mod tests {
         let par = ([0.0, -1.0, 0.0, 0.0], f32::INFINITY);
         assert!(order_holds(&par, [0.0, -1.0, 0.0, 0.0]));
         assert!(!order_holds(&par, [0.0, -0.99, 0.1, 0.0]));
+    }
+
+    #[test]
+    fn a_held_glass_order_is_made_exact_once_the_camera_stops() {
+        use super::Glass;
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+        else {
+            return;
+        };
+        let Ok((device, queue)) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+        else {
+            return;
+        };
+        // Two triangles 10 cm apart sideways, 10 m from the eye.
+        let centers = [[0.0, 10.0, 0.0], [0.1, 10.0, 0.0]];
+        let mut glass = Glass::new(&device, 6, &|i| centers[i / 3], &[0, 3], false).unwrap();
+        let camera = |x: f64| {
+            let mut c = session::Camera::new(glam::DVec2::new(64.0, 64.0));
+            c.eye = glam::DVec3::new(x, 0.0, 0.0);
+            c.target = glam::DVec3::new(x, 10.0, 0.0);
+            c
+        };
+        assert!(!glass.needs_settle());
+        let t0 = web_time::Instant::now();
+        let at = |ms: u64| t0 + std::time::Duration::from_millis(ms);
+        glass.sort_at(&queue, &camera(0.0), None, at(0));
+        // The second triangle is farther from an eye at x = 0.
+        assert_eq!(glass.sorted, [1, 0]);
+        assert!(!glass.needs_settle(), "the first order is exact");
+        // Moved 9.9 cm: within the hold distance, so the old order stays while moving.
+        glass.sort_at(&queue, &camera(0.099), None, at(16));
+        assert_eq!(glass.sorted, [1, 0]);
+        assert!(glass.needs_settle());
+        // A frame with the camera unchanged soon after keeps the hold (a stuttering orbit).
+        glass.sort_at(&queue, &camera(0.099), None, at(32));
+        assert_eq!(glass.sorted, [1, 0]);
+        assert!(glass.needs_settle());
+        // Still for the settle time: sorted exactly, the first is now farther.
+        glass.sort_at(&queue, &camera(0.099), None, at(16) + super::GLASS_SETTLE);
+        assert_eq!(glass.sorted, [0, 1]);
+        assert!(!glass.needs_settle());
+        // An exact order asks for nothing more.
+        glass.sort_at(&queue, &camera(0.099), None, at(500));
+        assert!(!glass.needs_settle());
+        // A camera that is not finite is never waited for.
+        glass.sort_at(&queue, &camera(f64::NAN), None, at(600));
+        assert!(!glass.needs_settle());
+        glass.sort_at(&queue, &camera(f64::NAN), None, at(900));
+        assert!(!glass.needs_settle());
     }
 
     #[test]
