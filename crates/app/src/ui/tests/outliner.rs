@@ -204,9 +204,32 @@ fn a_filter_draws_at_most_its_row_limit() {
         ..Default::default()
     });
     type_into(&mut h, "Filter outliner", 0, "group", egui::Key::Enter);
-    let named = rows(&h).iter().filter(|r| !r.path.is_empty()).count();
-    assert_eq!(named, MAX_FILTERED_ROWS);
+    // Only the rows in view are laid out: scroll to the end to see the last one and the note.
+    let at = row_at(&rows(&h), &ids(&["i200"]));
+    h.event(egui::Event::PointerMoved(at));
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::Vec2::new(0.0, -1.0e6),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_ok();
+    let last = format!("i{}", 200 + MAX_FILTERED_ROWS - 1);
+    assert!(row(&rows(&h), &ids(&[last.as_str()])).is_some());
+    let beyond = format!("i{}", 200 + MAX_FILTERED_ROWS);
+    assert!(row(&rows(&h), &ids(&[beyond.as_str()])).is_none());
     h.get_by_label("More matches: refine the filter");
+}
+
+#[test]
+fn only_the_rows_in_view_are_laid_out() {
+    let h = harness(Fixture {
+        outliner: super::layout::many_groups(10_000),
+        ..Default::default()
+    });
+    let laid = rows(&h).len();
+    assert!(laid > 1, "some rows show");
+    assert!(laid < 100, "{laid} rows laid out of 10001");
 }
 
 #[test]
