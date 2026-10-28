@@ -47,7 +47,9 @@ const EDGE_EXTRA_ATTRIBS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
 ];
 
 /// The limits the renderer asks of a device: the defaults, with room for a cube shadow map per
-/// shadowed light (six array layers each) where the adapter has it.
+/// shadowed light (six array layers each) where the adapter has it, and buffers as large as the
+/// adapter allows, since the whole flattened model is one vertex buffer (the default's 256 MB
+/// holds under a million triangles).
 ///
 /// On the web, a GL (WebGL2) adapter gets `downlevel_webgl2_defaults` as the base instead, since
 /// the full defaults exceed what WebGL2 offers.
@@ -66,6 +68,7 @@ pub fn required_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
     let layers = wanted.min(adapter.limits().max_texture_array_layers);
     wgpu::Limits {
         max_texture_array_layers: layers.max(defaults.max_texture_array_layers),
+        max_buffer_size: adapter.limits().max_buffer_size,
         ..defaults
     }
 }

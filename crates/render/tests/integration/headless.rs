@@ -40,6 +40,25 @@ fn warp_adapter() -> bool {
     )
 }
 
+/// The device gets buffers as large as the adapter allows, not the default 256 MB: the flattened
+/// model is one vertex buffer, and the default held under a million triangles.
+#[test]
+fn buffers_may_be_as_large_as_the_adapter_allows() {
+    let instance = wgpu::Instance::default();
+    let Ok(adapter) =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+    else {
+        return;
+    };
+    let limits = render::required_limits(&adapter);
+    assert_eq!(limits.max_buffer_size, adapter.limits().max_buffer_size);
+    let device = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_limits: limits,
+        ..Default::default()
+    }));
+    assert!(device.is_ok());
+}
+
 /// Skips a pixel check that differs on WARP (seen on the Windows CI runner); it passes on Mesa
 /// lavapipe and real GPUs, which still run it.
 fn skip_on_warp(what: &str) -> bool {
