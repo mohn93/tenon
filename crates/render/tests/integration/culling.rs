@@ -16,6 +16,11 @@ const STEP: f64 = 6.0;
 
 /// A row of 4 m square components on the ground, and the first instance's id.
 fn row() -> (Scene, EntityId) {
+    row_of(SQUARES)
+}
+
+/// `row` with `count` squares.
+fn row_of(count: u32) -> (Scene, EntityId) {
     let mut m = Model::new();
     let p = |x: f64, y: f64| DVec3::new(x, y, 0.0);
     m.add_polygon(&[p(0.0, 0.0), p(4.0, 0.0), p(4.0, 4.0), p(0.0, 4.0)])
@@ -37,7 +42,7 @@ fn row() -> (Scene, EntityId) {
         MeshId::Root,
         &[first],
         DVec3::new(STEP, 0.0, 0.0),
-        SQUARES - 1,
+        count - 1,
     )
     .unwrap();
     (s, EntityId::Instance(first))
@@ -232,4 +237,49 @@ fn see_through_faces_are_culled_and_sorted_by_chunk_and_look_the_same() {
         DVec3::new(1750.0, 0.0, 0.0),
     );
     assert!(screen.draw(&mut culled, &cam, full, &[]) == screen.draw(&mut whole, &cam, full, &[]));
+}
+
+#[test]
+fn a_parallel_view_culls_by_chunk_and_looks_the_same() {
+    let Some(screen) = Offscreen::new() else {
+        return;
+    };
+    let (scene, _) = row();
+    let mut cam = near_start();
+    cam.projection = session::Projection::Parallel;
+    let full = Viewport::full((W, H));
+    let make = |from: usize| {
+        let mut r = screen.renderer();
+        r.set_culling_from(from);
+        r.set_scene(&scene, &[], &BTreeSet::new());
+        r
+    };
+    let (mut culled, mut whole) = (make(100), make(usize::MAX));
+    let (drawn, all) = culled.visible_triangles(&cam).unwrap();
+    assert!(drawn > 0 && drawn < all, "drew {drawn} of {all}");
+    let a = screen.draw(&mut culled, &cam, full, &[]);
+    assert!(coloured(&a) > 500, "the squares are in the picture");
+    assert!(a == screen.draw(&mut whole, &cam, full, &[]));
+}
+
+#[test]
+fn a_model_that_grows_past_the_threshold_is_chunked_on_the_same_renderer() {
+    let Some(screen) = Offscreen::new() else {
+        return;
+    };
+    let (small, _) = row_of(20);
+    let (big, _) = row();
+    let cam = near_start();
+    let full = Viewport::full((W, H));
+    let mut r = screen.renderer();
+    r.set_culling_from(100);
+    let mut whole = screen.renderer();
+    whole.set_culling_from(usize::MAX);
+    // 40 triangles: drawn whole; then 600: chunked; then back.
+    for (scene, chunked) in [(&small, false), (&big, true), (&small, false), (&big, true)] {
+        r.set_scene(scene, &[], &BTreeSet::new());
+        whole.set_scene(scene, &[], &BTreeSet::new());
+        assert_eq!(r.visible_triangles(&cam).is_some(), chunked);
+        assert!(screen.draw(&mut r, &cam, full, &[]) == screen.draw(&mut whole, &cam, full, &[]));
+    }
 }

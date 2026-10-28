@@ -8,7 +8,7 @@
 
 use std::ops::Range;
 
-use glam::{DVec3, Vec3, Vec4};
+use glam::{Vec2, Vec3, Vec4};
 use session::Camera;
 
 /// About how many primitives (triangles, or edges) a chunk holds, by default: a few thousand.
@@ -263,16 +263,10 @@ impl ChunkPlan {
     /// its view and are not smaller than `SMALL_PIXELS`.
     pub fn visible(&self, camera: &Camera) -> Runs {
         let m = camera.view_proj_f32();
-        let parallel = camera.is_parallel();
-        // World size of a pixel at depth 1 (perspective) or anywhere (parallel).
-        let unit = if parallel {
-            camera.pixel_size(DVec3::ZERO)
-        } else {
-            camera.pixel_size(camera.eye + camera.forward())
-        };
         let mut runs = Runs::default();
         for (k, c) in self.chunks.iter().enumerate() {
-            let (mut out, mut w_min) = ([true; 6], f32::MAX);
+            let mut out = [true; 6];
+            let (mut front, mut lo, mut hi) = (true, Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
             for k in 0..8 {
                 let p = Vec3::new(
                     if k & 1 == 0 { c.lo.x } else { c.hi.x },
@@ -294,15 +288,25 @@ impl ChunkPlan {
                 for (o, d) in out.iter_mut().zip(d) {
                     *o &= d < 0.0;
                 }
-                w_min = w_min.min(q.w);
+                front &= q.w > 0.0;
+                if front {
+                    let ndc = Vec2::new(q.x, q.y) / q.w;
+                    lo = lo.min(ndc);
+                    hi = hi.max(ndc);
+                }
             }
             if out.iter().any(|&o| o) {
                 continue;
             }
-            // The nearest corner gives the largest size, so only chunks small even there go.
-            let depth = if parallel { 1.0 } else { f64::from(w_min) };
-            if depth > 0.0 && f64::from((c.hi - c.lo).length()) < SMALL_PIXELS * unit * depth {
-                continue;
+            // With every corner in front of the eye, the box's extent on the screen is known
+            // (a box near the edge of a wide view projects larger than its size over its
+            // depth); a box that reaches the eye's plane is kept.
+            if front {
+                let px =
+                    (hi - lo) * 0.5 * Vec2::new(camera.viewport.x as f32, camera.viewport.y as f32);
+                if f64::from(px.length()) < SMALL_PIXELS {
+                    continue;
+                }
             }
             let list = if k < self.solid_chunks {
                 &mut runs.solid
@@ -409,6 +413,7 @@ fn morton(p: Vec3) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::DVec3;
 
     /// `n` unit triangles in a row along x, a gap apart.
     fn row(n: usize) -> Vec<[f32; 3]> {
@@ -506,5 +511,23 @@ mod tests {
         cam.eye = DVec3::new(30.0, -60.0, 40.0);
         cam.target = DVec3::new(30.0, 0.0, 0.0);
         assert_eq!(p.visible(&cam).solid, vec![0..300]);
+    }
+
+    #[test]
+    fn a_box_long_in_depth_near_the_edge_of_a_wide_view_is_kept() {
+        // 0.9 m along the view direction, 95% of the way to the side edge, 100 m away: under
+        // a pixel by its size over its depth, about ten pixels across on the screen.
+        let mut cam = Camera::new(glam::DVec2::new(2275.0, 178.0));
+        cam.fov_y = 84f64.to_radians();
+        cam.eye = DVec3::new(0.0, -100.0, 0.0);
+        cam.target = DVec3::ZERO;
+        let x = 0.95 * cam.aspect() as f32 * (cam.fov_y as f32 / 2.0).tan() * 100.0;
+        let v = [[x, 0.0, 0.0], [x, 0.9, 0.0], [x, 0.9, 0.0001]];
+        let p = ChunkPlan::new(3, &[], 3, CHUNK_PRIMITIVES, &|i| v[i], &|_| true);
+        assert_eq!(p.visible(&cam).solid, vec![0..3]);
+        // The same box straight ahead is under a pixel across, and goes.
+        let v = [[0.0, 0.0, 0.0], [0.0, 0.9, 0.0], [0.0, 0.9, 0.0001]];
+        let p = ChunkPlan::new(3, &[], 3, CHUNK_PRIMITIVES, &|i| v[i], &|_| true);
+        assert!(p.visible(&cam).solid.is_empty());
     }
 }
