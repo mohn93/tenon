@@ -21,10 +21,19 @@ fn row() -> (Scene, EntityId) {
 
 /// `row` with `count` squares.
 fn row_of(count: u32) -> (Scene, EntityId) {
+    row_with(count, false)
+}
+
+/// `row_of`, each square split by a diagonal into two coplanar faces when `split`: the
+/// diagonal is never a profile, so the profile pass has an index list of the other edges.
+fn row_with(count: u32, split: bool) -> (Scene, EntityId) {
     let mut m = Model::new();
     let p = |x: f64, y: f64| DVec3::new(x, y, 0.0);
     m.add_polygon(&[p(0.0, 0.0), p(4.0, 0.0), p(4.0, 4.0), p(0.0, 4.0)])
         .unwrap();
+    if split {
+        m.add_edge(p(0.0, 0.0), p(4.0, 4.0)).unwrap();
+    }
     let edges: Vec<_> = m.edges().map(|(id, _)| id).collect();
     let faces: Vec<_> = m.faces().map(|(id, _)| id).collect();
     let mut s = Scene::from_root(m);
@@ -296,7 +305,8 @@ fn profile_and_endpoint_edges_out_of_view_are_not_drawn_and_the_picture_is_the_s
     let Some(screen) = Offscreen::new() else {
         return;
     };
-    let (scene, _) = row();
+    // Split squares: the diagonals are no profile candidates, so the passes draw index ranges.
+    let (scene, _) = row_with(SQUARES, true);
     let full = Viewport::full((W, H));
     let styles = [
         edge_effects(EdgeStyle {
@@ -332,6 +342,7 @@ fn profile_and_endpoint_edges_out_of_view_are_not_drawn_and_the_picture_is_the_s
         for cam in &cameras {
             if style.edges.profiles.is_some() {
                 let (drawn, all) = culled.visible_profile_edges(cam).expect("culled by chunk");
+                assert_eq!(all, 4 * SQUARES, "the diagonals are left out of the list");
                 assert!(drawn > 0 && drawn < all / 2, "drew {drawn} of {all}");
             }
             let a = screen.draw(&mut culled, cam, full, &[]);

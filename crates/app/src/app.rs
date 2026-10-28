@@ -182,9 +182,6 @@ const MAX_REPAINT_DELAY: Duration = Duration::from_secs(60);
 /// for the display, so drawing one per request would hold every request up by a frame.
 const API_FRAME: Duration = Duration::from_millis(33);
 
-/// How long after a frame with glass in a held order the frame that sorts it exactly is drawn.
-const GLASS_SETTLE: Duration = Duration::from_millis(80);
-
 /// How long navigation must pause before the frame that shows the hover it put off.
 const HOVER_SETTLE: Duration = Duration::from_millis(50);
 
@@ -3246,7 +3243,7 @@ impl State {
         // Glass drawn in a held order (the camera was moving) is sorted exactly by one more
         // frame with the camera unchanged; an idle app would not draw one.
         if self.renderer.needs_settle_frame() {
-            self.repaint_at = Some(earliest(self.repaint_at, now + GLASS_SETTLE));
+            self.repaint_at = Some(earliest(self.repaint_at, now + render::GLASS_SETTLE));
         }
         // The chip's rest and the flash's end, as of the HUD this frame showed.
         self.repaint_at = with_feedback(self.repaint_at, &self.timing, dressed_at, chip_at_rest);

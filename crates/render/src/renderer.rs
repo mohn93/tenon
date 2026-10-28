@@ -604,6 +604,10 @@ fn draw_runs(pass: &mut wgpu::RenderPass<'_>, runs: &[std::ops::Range<u32>], cop
     }
 }
 
+/// How long the camera must have been still before a held glass order is made exact. The app
+/// draws a frame this long after one that drew a held order.
+pub const GLASS_SETTLE: std::time::Duration = std::time::Duration::from_millis(80);
+
 /// What every glass triangle was last sorted for: the view, and the distance from the eye to
 /// the nearest glass triangle then (infinite for a parallel view).
 type SortedFor = ([f32; 4], f32);
@@ -646,8 +650,10 @@ struct Glass {
     sorted: Vec<u32>,
     /// The vertex ranges in view (None: all) `order` was last filled for.
     drawn_for: Option<Option<Vec<std::ops::Range<u32>>>>,
-    /// The view of the last frame, to tell a camera that has stopped.
+    /// The view of the last frame, and since when it has not changed, to tell a camera that
+    /// has stopped.
     last_view: Option<[f32; 4]>,
+    still_since: Option<web_time::Instant>,
     /// Whether `sorted` is a held order, not exact for the last frame's view.
     held: bool,
 }
@@ -701,6 +707,7 @@ impl Glass {
             sorted: Vec::new(),
             drawn_for: None,
             last_view: None,
+            still_since: None,
             held: false,
         })
     }
@@ -724,15 +731,32 @@ impl Glass {
         camera: &Camera,
         visible: Option<&[std::ops::Range<u32>]>,
     ) {
+        self.sort_at(queue, camera, visible, web_time::Instant::now());
+    }
+
+    /// `sort` at the time `now`.
+    fn sort_at(
+        &mut self,
+        queue: &wgpu::Queue,
+        camera: &Camera,
+        visible: Option<&[std::ops::Range<u32>]>,
+        now: web_time::Instant,
+    ) {
         let (origin, toward) = (camera.eye.as_vec3(), camera.forward().as_vec3());
         let view = if camera.is_parallel() {
             [toward.x, toward.y, toward.z, 0.0]
         } else {
             [origin.x, origin.y, origin.z, 1.0]
         };
-        // A held order is only for a moving eye: when the view is the last frame's, it is
-        // sorted exactly if it is not already.
-        let stopped = self.last_view == Some(view);
+        // A held order is only for a moving eye: once the view has been still for
+        // `GLASS_SETTLE`, it is sorted exactly if it is not already. (A frame or two with the
+        // camera unchanged in the middle of a stuttering orbit keeps the hold.)
+        if self.last_view != Some(view) || self.still_since.is_none() {
+            self.still_since = Some(now);
+        }
+        let stopped = self
+            .still_since
+            .is_some_and(|t| now.saturating_duration_since(t) >= GLASS_SETTLE);
         self.last_view = Some(view);
         let exact = self.sorted_for.as_ref().is_some_and(|prev| prev.0 == view);
         if !self
@@ -757,7 +781,9 @@ impl Glass {
             self.sorted_for = Some((view, nearest));
             self.drawn_for = None;
         }
-        self.held = self.sorted_for.as_ref().is_none_or(|prev| prev.0 != view);
+        // (A view that is not finite is never exact and never moves on: nothing to settle.)
+        self.held = view.iter().all(|v| v.is_finite())
+            && self.sorted_for.as_ref().is_none_or(|prev| prev.0 != view);
         let wanted = visible.map(<[_]>::to_vec);
         if self.drawn_for.as_ref() == Some(&wanted) {
             return;
@@ -1778,7 +1804,7 @@ impl Renderer {
         let plan = self.edge_chunks.as_ref()?;
         let edges = self.edges.as_ref()?;
         edges.extras.as_ref()?;
-        let runs = plan.visible(camera);
+        let runs = plan.visible_wide(camera, self.edge_effect_reach(self.pixels_per_point));
         Some(match &edges.profile_edges {
             Some(list) if !list.chunk_starts.is_empty() => {
                 let drawn = candidate_runs(plan, list, &runs.solid)
@@ -2735,6 +2761,21 @@ impl Renderer {
         (profile_copies, endpoint_copies)
     }
 
+    /// How far, in pixels, the edge effects draw beyond an edge: the widest of the profile
+    /// copies, the endpoint marks and the sketchy jitter and extension, added.
+    fn edge_effect_reach(&self, scale: f32) -> f32 {
+        let Some(edges) = self.model_style.map(|s| s.edges) else {
+            return 0.0;
+        };
+        let sketchy = edges
+            .sketchy
+            .map_or(0.0, |k| k.jitter.abs() + k.extension.abs());
+        (edges.profiles.unwrap_or(0.0)
+            + edges.endpoints.map_or(0.0, |l| l + ENDPOINT_WIDTH_PT)
+            + sketchy)
+            * scale
+    }
+
     /// What the negative axes fade toward by day: the model style's background, else the
     /// theme's.
     fn day_toward(&self, style: &ViewStyle) -> [f32; 4] {
@@ -3029,10 +3070,19 @@ impl Renderer {
                         None => pass.draw(0..edges.count, 0..wide_copies),
                     }
                 }
+                // The effects reach past the edge's own box and show even from a chunk too small
+                // to see, so they use their own, wider view of the chunks.
+                let fx_runs = (profile_copies > 0 || endpoint_copies > 0)
+                    .then(|| {
+                        self.edge_chunks
+                            .as_ref()
+                            .map(|plan| plan.visible_wide(camera, self.edge_effect_reach(ppp)))
+                    })
+                    .flatten();
                 let cull = self
                     .edge_chunks
                     .as_ref()
-                    .zip(visible.edges.as_ref())
+                    .zip(fx_runs.as_ref())
                     .map(|(plan, r)| (plan, &r.solid[..]));
                 if with_effects
                     && profile_copies > 0
@@ -3694,20 +3744,31 @@ mod tests {
             c
         };
         assert!(!glass.needs_settle());
-        glass.sort(&queue, &camera(0.0), None);
+        let t0 = web_time::Instant::now();
+        let at = |ms: u64| t0 + std::time::Duration::from_millis(ms);
+        glass.sort_at(&queue, &camera(0.0), None, at(0));
         // The second triangle is farther from an eye at x = 0.
         assert_eq!(glass.sorted, [1, 0]);
         assert!(!glass.needs_settle(), "the first order is exact");
         // Moved 9.9 cm: within the hold distance, so the old order stays while moving.
-        glass.sort(&queue, &camera(0.099), None);
+        glass.sort_at(&queue, &camera(0.099), None, at(16));
         assert_eq!(glass.sorted, [1, 0]);
         assert!(glass.needs_settle());
-        // The next frame with the camera unchanged sorts exactly: now the first is farther.
-        glass.sort(&queue, &camera(0.099), None);
+        // A frame with the camera unchanged soon after keeps the hold (a stuttering orbit).
+        glass.sort_at(&queue, &camera(0.099), None, at(32));
+        assert_eq!(glass.sorted, [1, 0]);
+        assert!(glass.needs_settle());
+        // Still for the settle time: sorted exactly, the first is now farther.
+        glass.sort_at(&queue, &camera(0.099), None, at(16) + super::GLASS_SETTLE);
         assert_eq!(glass.sorted, [0, 1]);
         assert!(!glass.needs_settle());
         // An exact order asks for nothing more.
-        glass.sort(&queue, &camera(0.099), None);
+        glass.sort_at(&queue, &camera(0.099), None, at(500));
+        assert!(!glass.needs_settle());
+        // A camera that is not finite is never waited for.
+        glass.sort_at(&queue, &camera(f64::NAN), None, at(600));
+        assert!(!glass.needs_settle());
+        glass.sort_at(&queue, &camera(f64::NAN), None, at(900));
         assert!(!glass.needs_settle());
     }
 

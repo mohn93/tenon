@@ -17,8 +17,8 @@ pub mod sun_shadow;
 pub mod texture;
 
 pub use renderer::{
-    HoverLook, PreviewVertex, Renderer, Viewport, required_limits, supports_ambient_occlusion,
-    supports_shadows,
+    GLASS_SETTLE, HoverLook, PreviewVertex, Renderer, Viewport, required_limits,
+    supports_ambient_occlusion, supports_shadows,
 };
 pub use snapshot::{Overlay, Snapshotter};
 pub use style::ViewStyle;
