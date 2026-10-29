@@ -99,14 +99,14 @@ impl Model {
     }
 
     /// Whether `f` lies in `plane`: its normal parallel to the plane's and its first vertex on
-    /// it; or, for a plane fitted to a few points and so tilted a little more, every vertex
-    /// of its outer loop on it.
+    /// it; or, for a plane fitted to a few points and so tilted more (a short edge a few
+    /// tenths of a micron off its face fits a plane tilted by more than `PLANE_ANGLE_TOL`),
+    /// every vertex of its outer loop on it, which is how a plane gathers its edges.
     fn face_in_plane(&self, f: &Face, plane: &Plane) -> bool {
-        let tilt = f.normal.cross(plane.normal).length();
-        if tilt < PLANE_ANGLE_TOL {
+        if f.normal.cross(plane.normal).length() < PLANE_ANGLE_TOL {
             return plane.contains(self.pos(f.outer[0]));
         }
-        tilt < FITTED_ANGLE_TOL && f.outer.iter().all(|v| plane.contains(self.pos(*v)))
+        f.outer.iter().all(|v| plane.contains(self.pos(*v)))
     }
 
     /// Recomputes the regions of `plane` and makes the face set match them. `plane` is in
@@ -306,10 +306,6 @@ type Paint = (
     bool,
 );
 
-/// The largest angle between a face and a plane fitted to a few points of it, within which the
-/// face still lies in the plane if all its vertices do.
-const FITTED_ANGLE_TOL: f64 = 1e-3;
-
 /// Above this many planes, `create_faces` finds each plane's edges with an index.
 const FEW_PLANES: usize = 4;
 
@@ -415,6 +411,82 @@ mod tests {
         assert_eq!(m.faces().count(), 1);
         assert_eq!(m.face_area(id), 12.0);
         (m, id, f)
+    }
+
+    /// A strip of four quads `size` wide, each tilted about the edge it shares with the last by
+    /// the next of `tilts` (radians); returns the model and the height of the strip at x.
+    fn tilted_strip(size: f64, tilts: [f64; 4]) -> (Model, impl Fn(f64) -> f64) {
+        let mut slopes = Vec::new();
+        let mut slope = 0.0;
+        for t in tilts {
+            slope += t;
+            slopes.push(slope);
+        }
+        let mut heights = vec![0.0];
+        for s in &slopes {
+            heights.push(heights.last().unwrap() + size * s);
+        }
+        let at = move |x: f64| {
+            let i = ((x / size) as usize).min(3);
+            heights[i] + slopes[i] * (x - i as f64 * size)
+        };
+        let mut m = Model::new();
+        for i in 0..4 {
+            let (x0, x1) = (i as f64 * size, (i + 1) as f64 * size);
+            let c = [(x0, 0.0), (x1, 0.0), (x1, size), (x0, size)];
+            for k in 0..4 {
+                let (a, b) = (c[k], c[(k + 1) % 4]);
+                m.add_edge(DVec3::new(a.0, a.1, at(a.0)), DVec3::new(b.0, b.1, at(b.0)))
+                    .unwrap();
+            }
+        }
+        (m, at)
+    }
+
+    #[test]
+    fn a_line_across_near_coplanar_faces_splits_each_once() {
+        // Quads 1 mm wide, tilted 2e-6 to 5e-4 rad from the last: the plane fitted to a short
+        // cut edge is tilted from the face it cuts by more than `PLANE_ANGLE_TOL`, but every
+        // vertex is within `LENGTH_TOL` of it.
+        let size = 1e-3;
+        let (mut m, at) = tilted_strip(size, [0.0, 2e-6, 1e-4, 5e-4]);
+        assert_eq!(m.faces().count(), 4);
+        let area = |m: &Model| m.faces().map(|(id, _)| m.face_area(id)).sum::<f64>();
+        let before = area(&m);
+        let (y, x1) = (size / 2.0, 4.0 * size);
+        m.add_edge(DVec3::new(0.0, y, at(0.0)), DVec3::new(x1, y, at(x1)))
+            .unwrap();
+        assert_eq!(m.faces().count(), 8);
+        assert!((area(&m) - before).abs() < 1e-12 * before.max(1.0));
+        m.validate().unwrap();
+    }
+
+    #[test]
+    fn a_neighbour_tilted_beyond_the_tolerance_is_left_alone() {
+        // The second quad is tilted 2e-3 rad and 0.5 m long, so its far vertices are well off
+        // the first quad's plane: drawing on the first leaves it as it was.
+        let mut m = Model::new();
+        for (a, b) in [
+            ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0)),
+            ((1.0, 0.0, 0.0), (1.0, 1.0, 0.0)),
+            ((1.0, 1.0, 0.0), (0.0, 1.0, 0.0)),
+            ((0.0, 1.0, 0.0), (0.0, 0.0, 0.0)),
+            ((1.0, 0.0, 0.0), (1.5, 0.0, 1e-3)),
+            ((1.5, 0.0, 1e-3), (1.5, 1.0, 1e-3)),
+            ((1.5, 1.0, 1e-3), (1.0, 1.0, 0.0)),
+        ] {
+            m.add_edge(DVec3::from(a), DVec3::from(b)).unwrap();
+        }
+        assert_eq!(m.faces().count(), 2);
+        let other = m
+            .faces()
+            .find(|(_, f)| f.normal.z.abs() < 1.0 - 1e-9)
+            .map(|(id, f)| (id, f.clone()))
+            .unwrap();
+        m.add_edge(DVec3::new(0.25, 0.5, 0.0), DVec3::new(0.75, 0.5, 0.0))
+            .unwrap();
+        assert_eq!(m.faces().count(), 2);
+        assert_eq!(m.face(other.0), Some(&other.1));
     }
 
     #[test]
