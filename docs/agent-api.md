@@ -1440,7 +1440,7 @@ solves on from the frame before it, and each pass of a loop starts again from th
 contact mid-play) is drawn as the frame before it. Agents see a pose with `render_view`'s
 `joints` instead.
 
-Scenes can store the active section planes and the section display (`sections` on `add_scene`, `update_scene` and `change_scene`; file schema 30, older files open unchanged). The `scenes` query lists `sections: true` for such a scene, and the `scene` query's `sections` is `null` or `{active: [{context, plane}], planes, cuts, fill, fill_color}` (`context` null for the root, else the definition id). `render_view` with `scene` (at `t` 1) draws with the scene's planes active and its section display, over which the call's own `section` override still applies. Erasing a plane drops it from every scene that stores it (undo brings it back). So does purging or pruning the definition it is in. `make_unique` copies get new plane ids, so going to a scene made earlier leaves the copy uncut. A file whose scene stores a missing plane is refused.
+Scenes can store the active section planes and the section display (`sections` on `add_scene`, `update_scene` and `change_scene`; file schema 30, older files open unchanged). The `scenes` query lists `sections: true` for such a scene, and the `scene` query's `sections` is `null` or `{active: [{context, plane}], planes, cuts, fill, fill_color}` (`context` null for the root, else the definition id). `render_view` with `scene` (at `t` 1) draws with the scene's planes active and its section display, over which the call's own `section` override still applies. Erasing a plane drops it from every scene that stores it (undo brings it back). So does purging or pruning the definition it is in. `make_unique` stores the copy's planes in every scene that stores the original's, in the same undo step, so going to a scene made earlier cuts the copy too. A file whose scene stores a missing plane is refused.
 
 Scenes can store joint values (`joints` on `add_scene`, `update_scene` and `change_scene`; the
 Scenes tab's Joint values checkbox stores every joint's value): going to such a scene drives
@@ -2363,23 +2363,30 @@ supported"). What is carried:
   cut to 240 characters and made unique against the model's tags and `Untagged` (`Walls 2`);
   existing tags are never changed. At most 1,024 tags are added; what is on the file's further
   layers is imported Untagged, with a warning.
-- Dimensions and text (SketchUp 2021 and newer files): each linear dimension becomes a linear
+- Dimensions and text (SketchUp 2017 and newer files; a 2017-2020 file's records are read the
+  same way): each linear dimension becomes a linear
   dimension and each text label with a pushpin leader a leader note, in the mesh of the
   definition (or the file's top level) that holds it, on the tag of its layer. An end of a
   dimension, and a leader's point, is anchored to the vertex of the mesh at that point (within
   1e-6 m) and else fixed there; a point the file ties to a vertex or guide point of the same
   definition by identity is read at that vertex or guide point. The dimension line is the file's
-  offset (`y position` along the plane's normal crossed with its x axis; the sign was fixed from
-  the file's dimensions, which sit above top edges and below floor edges). A dimension always
+  offset: `y position` along a direction its type sets (horizontal: the plane's normal crossed
+  with its x axis; vertical: the opposite of the x axis; aligned: the segment's perpendicular in
+  the plane); the signs were fixed from dimensions that sit above top edges, below floor edges
+  and outside end walls. A horizontal or vertical dimension whose segment is not parallel to
+  its axis (SketchUp shows its projection) is not imported. A dimension always
   shows its length: text of its own is not kept (counted). A note whose text is blank shows its
   point's coordinates, as `add_note` without `text` does; text over 64 lines or 1,024
   characters is cut to them, counted in a warning ("N notes' texts were shortened to the note
   limits"). At most 10,000 dimensions and notes are added;
   the report's `dimensions` and `notes` count them. Not imported, each counted in `warnings`:
-  radial dimensions and text without a pushpin leader (screen text and view-based leaders; the
-  files at hand hold neither, so their records are not decoded), hidden ones, those whose
-  numbers are not finite or lie beyond +/-1e6 m, and those tied to anything but a vertex or guide point of their own definition. Angular
-  dimensions do not exist in the file format.
+  radial dimensions (a 2017-2020 file's are not recognised at all) and text without a pushpin
+  leader (screen text and view-based leaders; the files at hand hold neither, so their records
+  are not decoded), hidden ones, those whose numbers are not finite or lie beyond +/-1e6 m, those
+  tied to anything but a vertex or guide point of their own definition (an edge, a face, a point
+  reached through a group or component path), and, in a 2017-2020 file, a label whose record
+  does not have the layout of the files at hand. Angular dimensions do not exist in the file
+  format.
 - Scenes (from SketchUp 2017 and newer files; a 2017-2020 file's scenes are found in the end of
   its stream and read the same way): each of the file's scenes becomes a scene, after
   the model's, in the file's order, with its name (trimmed, cut to 240 characters, a blank one
@@ -2502,9 +2509,8 @@ may make several), `vertices` the vertices made, `skipped` faces that made none 
 that cannot be read, fewer than three distinct corners, no area, or a duplicate), and
 `materials` the materials added. It also has `tags` (tags added), `scenes` (scenes added),
 `definitions` and `instances` (made from the file's, without the wrapper), `guides` (guides
-made), `dimensions` and `notes` (from a 2021 or newer file), `textures` (materials added with a texture) and `warnings`
-(sentences, such as "4 dimensions and text labels were not imported" (2017-2020 files),
-"1 radial dimension was not imported", "2 text labels without a pushpin leader (screen text)
+made), `dimensions` and `notes` (from a 2017 or newer file), `textures` (materials added with a texture) and `warnings`
+(sentences, such as "1 radial dimension was not imported", "2 text labels without a pushpin leader (screen text)
 were not imported",
 "1 image was skipped", "5 face holes could not be read and were dropped", "1 guide could not be
 read and was skipped"); each is absent when 0 or empty, and always absent for

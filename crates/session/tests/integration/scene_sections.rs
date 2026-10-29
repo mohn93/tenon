@@ -440,3 +440,111 @@ fn a_file_whose_scene_stores_a_missing_plane_is_refused() {
     );
     assert!(err.is_err(), "{err:?}");
 }
+
+/// Each component instance in the root with its inner group's id, and the plane active in
+/// that group (where the rig's plane lives).
+fn instances_and_their_planes(d: &mut Document) -> Vec<(String, Option<String>)> {
+    let pairs: Vec<(String, String)> = ask(d, json!({"type": "outliner"}))["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| {
+            (
+                i["id"].as_str().unwrap().to_string(),
+                i["children"][0]["id"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    pairs
+        .into_iter()
+        .map(|(id, inner)| {
+            ok(d, json!({"type": "open_instance", "id": id}));
+            ok(d, json!({"type": "open_instance", "id": inner}));
+            let active = active_in_context(d);
+            ok(d, json!({"type": "close_instance"}));
+            ok(d, json!({"type": "close_instance"}));
+            (id, active)
+        })
+        .collect()
+}
+
+fn deactivate_inner(d: &mut Document) {
+    let pairs: Vec<(String, String)> = ask(d, json!({"type": "outliner"}))["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| {
+            (
+                i["id"].as_str().unwrap().to_string(),
+                i["children"][0]["id"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    for (id, inner) in pairs {
+        ok(d, json!({"type": "open_instance", "id": id}));
+        ok(d, json!({"type": "open_instance", "id": inner}));
+        ok(d, json!({"type": "deactivate_section"}));
+        ok(d, json!({"type": "close_instance"}));
+        ok(d, json!({"type": "close_instance"}));
+    }
+}
+
+#[test]
+fn make_unique_gives_the_copy_the_scenes_stored_plane_too() {
+    let mut d = doc();
+    let r = rig(&mut d);
+    let made = ok(
+        &mut d,
+        json!({"type": "make_component", "ids": [r.group], "name": "C"}),
+    );
+    let def = made["definitions"][0].as_str().unwrap().to_string();
+    ok(
+        &mut d,
+        json!({"type": "place_instance", "definition": def, "transform": {"origin": [3, 0, 0]}}),
+    );
+    let s = scene_id(&ok(&mut d, json!({"type": "add_scene", "sections": true})));
+    assert_eq!(inner_planes_stored(&d, &s), 1);
+    let planes = instances_and_their_planes(&mut d);
+    assert!(planes.iter().all(|p| p.1.is_some()), "{planes:?}");
+    let second = planes[1].0.clone();
+
+    ok(&mut d, json!({"type": "make_unique", "ids": [second]}));
+    assert_eq!(inner_planes_stored(&d, &s), 2, "the copy's plane is stored");
+    // One undo takes the make_unique and the stored plane back together.
+    ok(&mut d, json!({"type": "undo"}));
+    assert_eq!(inner_planes_stored(&d, &s), 1);
+    assert_eq!(instances_and_their_planes(&mut d).len(), 2);
+    ok(&mut d, json!({"type": "redo"}));
+    assert_eq!(inner_planes_stored(&d, &s), 2);
+    // Deactivate every inner plane, then go to the scene: both instances are cut again.
+    deactivate_inner(&mut d);
+    assert!(
+        instances_and_their_planes(&mut d)
+            .iter()
+            .all(|p| p.1.is_none())
+    );
+    ok(&mut d, json!({"type": "go_to_scene", "scene": s}));
+    let planes = instances_and_their_planes(&mut d);
+    assert!(planes.iter().all(|p| p.1.is_some()), "{planes:?}");
+    assert_ne!(planes[0].1, planes[1].1, "each has its own plane");
+
+    // The file keeps it.
+    let path = scratch("unique-planes.tnn");
+    ok(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    );
+    let mut e = doc();
+    ok(
+        &mut e,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    );
+    assert_eq!(inner_planes_stored(&e, &s), 2);
+    deactivate_inner(&mut e);
+    ok(&mut e, json!({"type": "go_to_scene", "scene": s}));
+    assert!(
+        instances_and_their_planes(&mut e)
+            .iter()
+            .all(|p| p.1.is_some())
+    );
+}
