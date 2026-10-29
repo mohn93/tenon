@@ -87,7 +87,8 @@ pub(crate) struct SkpNotes {
     pub lost_entities: usize,
     /// Faces of a 2017-2020 file read short of their holes.
     pub faces_short: usize,
-    /// Radial dimensions of a 2021+ file (a 2017-2020 file's are not recognised): not imported (their layout is not established).
+    /// Radial dimensions of a 2021+ file (a 2017-2020 file's are not recognised): not
+    /// imported (their layout is not established).
     pub radial_dimensions: usize,
     /// Text of a 2021+ file with no pushpin leader (screen text, view-based leaders): not
     /// imported.

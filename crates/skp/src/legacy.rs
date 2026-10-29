@@ -2050,24 +2050,36 @@ impl<'a> Archive<'a> {
                 let b_ref = self.entity_ref()?;
                 let b_paths = self.connection_paths()?;
                 let tail = self.c.fixed::<72>()?;
-                let end_point = |b: &[u8], r: Option<u32>| match r {
-                    Some(r) => AnnotPoint::Entity(r),
-                    None => AnnotPoint::Free([f64_at(b, 0), f64_at(b, 8), f64_at(b, 16)]),
+                // A kind of 2 or more says the end is attached; with no ref it is not a free
+                // point at zero but unread.
+                let end_point = |kind: &[u8], b: &[u8], r: Option<u32>| match r {
+                    Some(r) => Some(AnnotPoint::Entity(r)),
+                    None if u32::from_le_bytes([kind[0], kind[1], kind[2], kind[3]]) >= 2 => None,
+                    None => Some(AnnotPoint::Free([
+                        f64_at(b, 0),
+                        f64_at(b, 8),
+                        f64_at(b, 16),
+                    ])),
                 };
-                let body = if a_paths != 0 || b_paths != 0 {
-                    // Through an instance path: not read, as for 2021+ files.
-                    PendingBody::Unread
-                } else {
-                    PendingBody::Linear {
-                        start: end_point(&head[13..], a_ref),
-                        end: end_point(&mid[8..], b_ref),
-                        normal: [f64_at(&tail, 0), f64_at(&tail, 8), f64_at(&tail, 16)],
-                        x_axis: [f64_at(&tail, 24), f64_at(&tail, 32), f64_at(&tail, 40)],
-                        dim_type: u32::from_le_bytes([tail[48], tail[49], tail[50], tail[51]]),
-                        y_pos: f64_at(&tail, 52),
-                        custom_text: !text.is_empty(),
-                    }
-                };
+                let ends = (
+                    end_point(&head[5..], &head[13..], a_ref),
+                    end_point(&mid[0..], &mid[8..], b_ref),
+                );
+                let body =
+                    if let (Some(start), Some(end), 0, 0) = (ends.0, ends.1, a_paths, b_paths) {
+                        PendingBody::Linear {
+                            start,
+                            end,
+                            normal: [f64_at(&tail, 0), f64_at(&tail, 8), f64_at(&tail, 16)],
+                            x_axis: [f64_at(&tail, 24), f64_at(&tail, 32), f64_at(&tail, 40)],
+                            dim_type: u32::from_le_bytes([tail[48], tail[49], tail[50], tail[51]]),
+                            y_pos: f64_at(&tail, 52),
+                            custom_text: !text.is_empty(),
+                        }
+                    } else {
+                        // Through an instance path, or attached to nothing: not read.
+                        PendingBody::Unread
+                    };
                 self.pending_annots.push(PendingAnnot {
                     hidden,
                     layer_slot: layer,
@@ -2581,6 +2593,7 @@ impl<'a> Archive<'a> {
             if marker < start + 24 + 24 + 12 + TAIL {
                 return Ok(None);
             }
+            let attached = self.c.u32_at(start + 16)? >= 2;
             self.c.seek(start + 24)?;
             let a = self.c.f64s::<3>()?;
             let r1 = self.entity_ref()?;
@@ -2594,6 +2607,8 @@ impl<'a> Archive<'a> {
             let kind = self.c.u32()?;
             let anchor = match r1 {
                 Some(r) => AnnotPoint::Entity(r),
+                // Attached by its kind but with no ref: unread, not free at zero.
+                None if attached => return Ok(None),
                 None => AnnotPoint::Free(a),
             };
             Ok(Some((anchor, vector, kind)))
@@ -3002,6 +3017,7 @@ impl<'a> Archive<'a> {
                     // later definition has to read as unknown rather than as
                     // somebody else's mapping.
                     || k == K_OBJ + Cls::Ftc as u8
+                    || k == K_OBJ + Cls::ConstructionPoint as u8
                     || k == K_OBJ + Cls::AttrContainer as u8
                 {
                     self.slots[i] = Slot {

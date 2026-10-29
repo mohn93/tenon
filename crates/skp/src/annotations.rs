@@ -177,7 +177,17 @@ pub(crate) fn linear_offset(
     let norm = |v: [f64; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
     let d = [end[0] - start[0], end[1] - start[1], end[2] - start[2]];
     let y_axis = cross(normal, x_axis);
-    let parallel = |axis: [f64; 3]| norm(cross(d, axis)) <= 1e-4 * norm(d) * norm(axis);
+    // The segment lies along `axis` when its length and its length along the axis differ by
+    // no more than 1e-6 (file units).
+    let unit = |v: [f64; 3]| {
+        let l = norm(v);
+        (l > 0.0 && l.is_finite()).then(|| [v[0] / l, v[1] / l, v[2] / l])
+    };
+    let along = |axis: [f64; 3]| {
+        let a = unit(axis)?;
+        let dot = d[0] * a[0] + d[1] * a[1] + d[2] * a[2];
+        (norm(d) - dot.abs() <= 1e-6).then_some(a)
+    };
     let dir = match kind {
         0 => {
             let p = cross(normal, d);
@@ -187,8 +197,8 @@ pub(crate) fn linear_offset(
             }
             [p[0] / pl, p[1] / pl, p[2] / pl]
         }
-        1 if parallel(x_axis) => y_axis,
-        2 if parallel(y_axis) => cross(normal, y_axis),
+        1 if along(x_axis).is_some() => unit(y_axis)?,
+        2 if along(y_axis).is_some() => unit(cross(normal, unit(y_axis)?))?,
         _ => return None,
     };
     let offset = [dir[0] * y_pos, dir[1] * y_pos, dir[2] * y_pos];
@@ -482,6 +492,9 @@ mod tests {
         // A horizontal or vertical segment off its axis, a zero aligned one, an unknown type.
         assert_eq!(off(1, 2.0, [0.0; 3], [-5.0, 0.0, 1.0]), None);
         assert_eq!(off(2, 2.0, [0.0; 3], [1.0, 0.0, -5.0]), None);
+        // A tiny nudge off the axis still counts as along it; the direction is a unit one.
+        let o = off(1, 2.0, [0.0; 3], [-500.0, 0.0, 1e-9]).unwrap();
+        assert!((o[2] - 2.0).abs() < 1e-12);
         assert_eq!(off(0, 2.0, [1.0; 3], [1.0; 3]), None);
         assert_eq!(off(3, 2.0, [0.0; 3], [-5.0, 0.0, 0.0]), None);
         assert_eq!(off(1, f64::NAN, [0.0; 3], [-5.0, 0.0, 0.0]), None);
