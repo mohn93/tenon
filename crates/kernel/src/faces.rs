@@ -98,9 +98,15 @@ impl Model {
         planes
     }
 
+    /// Whether `f` lies in `plane`: its normal parallel to the plane's and its first vertex on
+    /// it; or, for a plane fitted to a few points and so tilted a little more, every vertex
+    /// of its outer loop on it.
     fn face_in_plane(&self, f: &Face, plane: &Plane) -> bool {
-        f.normal.cross(plane.normal).length() < PLANE_ANGLE_TOL
-            && plane.contains(self.pos(f.outer[0]))
+        let tilt = f.normal.cross(plane.normal).length();
+        if tilt < PLANE_ANGLE_TOL {
+            return plane.contains(self.pos(f.outer[0]));
+        }
+        tilt < FITTED_ANGLE_TOL && f.outer.iter().all(|v| plane.contains(self.pos(*v)))
     }
 
     /// Recomputes the regions of `plane` and makes the face set match them. `plane` is in
@@ -299,6 +305,10 @@ type Paint = (
     Option<TagId>,
     bool,
 );
+
+/// The largest angle between a face and a plane fitted to a few points of it, within which the
+/// face still lies in the plane if all its vertices do.
+const FITTED_ANGLE_TOL: f64 = 1e-3;
 
 /// Above this many planes, `create_faces` finds each plane's edges with an index.
 const FEW_PLANES: usize = 4;
