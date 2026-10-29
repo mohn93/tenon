@@ -2739,19 +2739,11 @@ mod tests {
     }
 
     /// (segments, first radius smaller, corner) of the rounds that stay refused.
-    const KNOWN_OPEN: [(u32, bool, usize); 8] = [
-        (25, true, 6),
-        (25, true, 7),
-        (25, false, 4),
-        (25, false, 5),
-        (31, true, 6),
-        (31, true, 7),
-        (31, false, 4),
-        (31, false, 5),
-    ];
+    const KNOWN_OPEN: [(u32, bool, usize); 4] =
+        [(31, true, 6), (31, true, 7), (31, false, 4), (31, false, 5)];
 
     #[test]
-    #[ignore = "refused: a cutter facet with cut points 4e-7 off its edge is split into a whole copy plus a reversed piece (found in the rebuild in faces.rs; not fixed)"]
+    #[ignore = "refused: the crossing of two facets ends 7e-7 off the facet it cuts, leaving that facet unsplit (not fixed)"]
     fn radii_of_two_to_four_percent_at_the_known_open_corners() {
         for (segments, ascending, k) in KNOWN_OPEN {
             let radii = if ascending {
