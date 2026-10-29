@@ -148,7 +148,7 @@ Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_polygon`, `add_arc`, `
 `add_edge_dimension`, `add_radial_dimension`, `add_note`, `add_label`, `add_screen_note`, `change_note`,
 `add_3d_text`, `import_image`, `set_units`, `add_section_plane`, `flip_section_plane`, `activate_section_plane`,
 `deactivate_section`, `set_section_display`, `set_section_cut`, `add_material`,
-`change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `add_scene`, `update_scene`, `change_scene`, `move_scene`, `delete_scene`, `go_to_scene`, `add_style`, `change_style`, `delete_style`, `add_joint`, `change_joint`, `delete_joint`, `drive`, `add_coupling`, `delete_coupling`, `add_cam_follower`, `delete_cam_follower`, `position_texture`, `soften_edges`, `soften_by_angle`, `hide`, `unhide`, `unhide_last`, `unhide_all`, `reverse_faces`, `orient_faces`, `intersect_faces`, `solid_union`, `solid_subtract`, `solid_intersect`, `solid_trim`, `solid_split`, `outer_shell`, `make_solid`, `chamfer_edges`, `fillet_edges`, `paste`, `save_to_library`, `insert_library_item`, `select`, `undo`,
+`change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `add_scene`, `update_scene`, `change_scene`, `move_scene`, `delete_scene`, `go_to_scene`, `add_style`, `change_style`, `delete_style`, `add_joint`, `change_joint`, `delete_joint`, `drive`, `add_coupling`, `delete_coupling`, `add_cam_follower`, `delete_cam_follower`, `position_texture`, `soften_edges`, `soften_by_angle`, `hide`, `unhide`, `unhide_last`, `unhide_all`, `reverse_faces`, `orient_faces`, `intersect_faces`, `solid_union`, `solid_subtract`, `solid_intersect`, `solid_trim`, `solid_split`, `outer_shell`, `make_solid`, `chamfer_edges`, `fillet_edges`, `bevel_edges`, `paste`, `save_to_library`, `insert_library_item`, `select`, `undo`,
 `redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`, `look_around`, `position_camera`,
 `set_lighting`, `set_color_by_tag`, `set_x_ray`, `set_hidden_geometry`, `set_shadows`, `set_style`, `set_location`, `set_scene_transition`, `new`, `open`, `save`, `export`, `import`.
 Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
@@ -803,15 +803,17 @@ edges across a face are soft only where the crease is under about 10 degrees. Th
 no further than a quarter of the largest radius outside the faces, so solids beside the corner
 are untouched. Not every corner is patched: on boxes, 4-, 5-, 6- and 8-sided prisms, 3-sided
 prisms and sheared boxes with every corner meeting three different radii (0.1, 0.15 and 0.2;
-0.05, 0.25 and 0.3; 0.1, 0.12 and 0.14) at 2, 3, 8 and 24 segments, 807 of 878 corners were
-patched. The rest kept the crossed rounds (closed, with a pinch where the cylinders cross):
+0.05, 0.25 and 0.3; 0.1, 0.12 and 0.14) at 2, 3, 8 and 24 segments, 955 of 1000 corners were
+patched (807 of 878 when first measured, before small mixed radii were fixed and the apex of
+the patch was lowered to leave room for chamfer strips, which also helps pure rounds; one call,
+a half-sheared box at 0.1, 0.12 and 0.14 with 24 segments, is still refused as a whole with "the
+result would not be a solid", by the boolean on the rounds themselves, as it was before). The rest kept the crossed rounds (closed, with a pinch where the cylinders cross):
 mostly at 2 or 3 segments (coarse facets leave no room inside them), at the extreme ratio
 0.05:0.25:0.3, and on prisms with obtuse corners (6- and 8-sided). A few calls with very close
 radii (0.05, 0.06, 0.07 on a unit cube at 24 segments) are refused as a whole with "the result
 would not be a solid", by the boolean on the rounds themselves, before any corner. A corner whose radii are all equal still gets its sphere, and concave
-corners of different radii keep the crossed cuts. A mix of chamfers and rounds at a corner comes from
-separate calls, which stay closed solids (the second call's edges run into the first's rounds
-without a patch), and a second call whose edge ends at faces that are not flat and coplanar
+corners of different radii keep the crossed cuts. Rounds and chamfers in one call are `bevel_edges`
+(below). A second call whose edge ends at faces that are not flat and coplanar
 (beside an earlier round) is refused ("ends at v12, where the other faces do not lie in one
 plane"). The flat faces
 beside a round can still be bevelled later: round a box's four upright edges, then the loop
@@ -819,6 +821,10 @@ around its top (the straight sides and the rounds' top edges) in a second comman
 radius if wanted, or chamfer an edge next to a round. Edges facing each other across a face whose
 rounds would overlap are "radius too large for edges e12 and e15". `segments` outside 1 to 90 is
 `invalid_input`. A batch can refer to `instance` and `edges` as for `chamfer_edges`.
+
+| Command | Effect |
+|---|---|
+| `{"type": "bevel_edges", "edges": ["e12", "e15"], "sizes": [0.005, 0.004], "kinds": ["round", "chamfer"], "segments": 4}` | Rounds some edges and chamfers others in one call, as one undo step labelled `bevel_edges`. `edges`, `sizes` (each more than 0.000001 m) and `kinds` (`round`, whose size is a radius, or `chamfer`, whose size is a distance) have one entry each, in the same order; a list of another length or a size out of range is `invalid_input`, and a kind other than `round` or `chamfer` does not parse (the request is refused as malformed, `-32602`). `instance` (as for `chamfer_edges`) and `segments` (rounds only, as for `fillet_edges`; checked only when some edge is a round) are optional. Ends, validation, snapping of near-equal sizes (within each kind) and batch references are as for the two commands. A convex corner where exactly three chosen edges meet at a vertex of three faces and at least one is a round and one a chamfer gets the ringed patch of three different radii (above), a chamfer standing in as the round with the same setback (its strip is that round's chord, so the patch lies below the strip's plane and the strip's end keeps its crease; the round ends stay soft). Over boxes, 3- to 8-sided prisms and sheared boxes with every corner meeting a chamfer and rounds (chamfer 0.1, 0.12 or 0.14 of the shape's scale, one or two kinds chamfered, 3 and 8 segments), 290 of 336 corners were patched; the rest kept the crossed cuts (closed, a pinch where the strips cross), mostly on 8-sided prisms with one chamfered kind (obtuse corners) and at 3 segments. A corner where inside (concave) and outside (convex) edges meet, whatever their kinds, keeps the crossed cuts: a closed solid, no patch. The surface there would have to turn from the ball that rolls on the outside of the material (convex rounds) to the ball that rolls in the empty corner (concave round), a saddle with no single sphere or ring of rounds to bound it, so no robust construction is attempted; the volume is that of the concave filler less the convex cuts, to within a corner's worth. |
 
 ### Guides
 

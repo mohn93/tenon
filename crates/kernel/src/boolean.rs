@@ -268,7 +268,7 @@ fn outer_shells(m: &Model) -> Result<Model, BooleanError> {
             if i == j {
                 continue;
             }
-            match classify(p.0, p.1, other).ok_or(BooleanError::NotClosed)? {
+            match classify(p.0, p.1, other, true).ok_or(BooleanError::NotClosed)? {
                 Class::Inside => enclosed = true,
                 Class::Outside => {}
                 // Shells never share a face.
@@ -289,8 +289,29 @@ fn outer_shells(m: &Model) -> Result<Model, BooleanError> {
     Ok(subset(m, &faces))
 }
 
+/// Pairs of `shells` of `m` where one lies inside the other (a void in its solid, a part
+/// floating in a void), either way round.
+pub(crate) fn nested_shells(m: &Model, shells: &[Vec<FaceId>]) -> Vec<[usize; 2]> {
+    let parts: Vec<Model> = shells.iter().map(|faces| subset(m, faces)).collect();
+    let mut pairs = Vec::new();
+    for (i, faces) in shells.iter().enumerate() {
+        let Some(p) = faces
+            .iter()
+            .find_map(|f| interior_point(m, *f).map(|p| (p, m.face(*f).expect("face").normal)))
+        else {
+            continue;
+        };
+        for (j, other) in parts.iter().enumerate() {
+            if i != j && classify(p.0, p.1, other, true) == Some(Class::Inside) {
+                pairs.push([i, j]);
+            }
+        }
+    }
+    pairs
+}
+
 /// The faces of `m` grouped into shells: faces joined across the edges of their loops.
-fn shells_of(m: &Model) -> Vec<Vec<FaceId>> {
+pub(crate) fn shells_of(m: &Model) -> Vec<Vec<FaceId>> {
     let ids: Vec<FaceId> = m.faces().map(|(id, _)| id).collect();
     let at: HashMap<FaceId, usize> = ids.iter().enumerate().map(|(i, f)| (*f, i)).collect();
     let mut parent: Vec<usize> = (0..ids.len()).collect();
@@ -723,7 +744,7 @@ fn classes(m: &Model, own: &Model, other: &Model) -> Result<Vec<(FaceId, Class)>
             if surface_normal(p, own).is_none() {
                 continue;
             }
-            classify(p, f.normal, other).ok_or(BooleanError::NotClosed)?
+            classify(p, f.normal, other, true).ok_or(BooleanError::NotClosed)?
         };
         out.push((id, class));
     }
@@ -759,15 +780,22 @@ const DIRECTIONS: [[f64; 3]; 9] = [
     [0.1123, 0.2381, -0.9647],
 ];
 
+/// The cosine above which two unit normals count as parallel for `classify`.
+const COPLANAR_DOT: f64 = 0.999;
+
 /// Hits nearer than this to a face's boundary make a ray ambiguous.
 const GRAZE: f64 = 4.0 * LENGTH_TOL;
 
 /// Where `p` (on a face of normal `n`) lies against the closed mesh `s`: on its surface when a
 /// face of it holds `p`, else inside or outside by the parity of the faces rays from `p`
 /// cross, the majority of the first agreeing rays that graze no edge. None when no ray is
-/// clear.
-fn classify(p: DVec3, n: DVec3, s: &Model) -> Option<Class> {
-    if let Some(normal) = surface_normal(p, s) {
+/// clear. With `coplanar` set, `p` counts as on the surface only where the face holding it is
+/// parallel to `n` (a sliver touching the surface along a crease is inside or outside, and
+/// its sign of `n . normal` is noise); else any face holding `p` decides.
+fn classify(p: DVec3, n: DVec3, s: &Model, coplanar: bool) -> Option<Class> {
+    if let Some(normal) = surface_normal(p, s)
+        && (!coplanar || n.dot(normal).abs() > COPLANAR_DOT)
+    {
         return Some(if n.dot(normal) > 0.0 {
             Class::Same
         } else {
@@ -795,7 +823,7 @@ fn classify(p: DVec3, n: DVec3, s: &Model) -> Option<Class> {
 /// Whether `p` lies inside the closed mesh `s` (by the parity of rays, as `classify`); None
 /// when it lies on its surface or no ray is clear.
 pub(crate) fn point_inside(p: DVec3, s: &Model) -> Option<bool> {
-    match classify(p, DVec3::Z, s)? {
+    match classify(p, DVec3::Z, s, false)? {
         Class::Inside => Some(true),
         Class::Outside => Some(false),
         Class::Same | Class::Opposite => None,

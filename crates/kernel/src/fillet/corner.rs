@@ -8,6 +8,12 @@
 //! per corner does it: the hexahedron between the three arc planes and three caps just outside
 //! the faces, less the patch, subtracted from the filleted solid. A corner whose cutter fails
 //! keeps the crossed rounds.
+//!
+//! A corner of rounds and chamfers uses the star-shaped patch of rounds of different radii, a
+//! chamfer standing in as the round with the same setback: its strip is that round's chord, so
+//! the patch is held below the strip's plane. A corner of inside and outside edges is never
+//! patched: its surface would be a saddle between the ball outside the material and the ball in
+//! the empty corner, which no sphere or ring of rounds bounds.
 
 use std::collections::HashSet;
 
@@ -42,10 +48,12 @@ pub(super) struct Patch {
     /// And the sides of its boundary that lie on the rounds' end arcs (the others lie across
     /// the faces).
     pub arc_sides: Vec<[DVec3; 2]>,
+    /// And the sides that end a chamfer's strip: they keep their crease, however slight.
+    pub chord_sides: Vec<[DVec3; 2]>,
 }
 
 /// The patches for the fillets `cuts` (already closed at their ends) of `m`.
-pub(super) fn patches(m: &Model, cuts: &[(EdgeId, EdgeCut)], profile: Profile) -> Vec<Patch> {
+pub(super) fn patches(m: &Model, cuts: &[(EdgeId, EdgeCut)]) -> Vec<Patch> {
     // Convex edges running on past the vertex; concave edges (which stop in the third face).
     let mut at: BTreeMap<(VertexId, bool), Vec<usize>> = BTreeMap::new();
     for (i, (_, cut)) in cuts.iter().enumerate() {
@@ -60,11 +68,19 @@ pub(super) fn patches(m: &Model, cuts: &[(EdgeId, EdgeCut)], profile: Profile) -
         .filter(|(_, list)| list.len() == 3)
         .filter_map(|((v, concave), list)| {
             let three = [list[0], list[1], list[2]].map(|i| &cuts[i]);
-            match profile {
-                Profile::Fillet { .. } => patch(m, v, three, concave),
+            let rounds = three
+                .iter()
+                .filter(|(_, c)| matches!(c.profile, Profile::Fillet { .. }))
+                .count();
+            match rounds {
+                3 => patch(m, v, three, concave),
                 // Three concave chamfers meet in a point of their own: a cone of empty space.
-                Profile::Chamfer { .. } if !concave => flat(m, v, three),
-                Profile::Chamfer { .. } => None,
+                0 if !concave => flat(m, v, three),
+                0 => None,
+                // Rounds and chamfers: the ringed patch, a chamfer standing in as the round
+                // with its setback. Concave corners of mixed kinds keep the crossed cuts.
+                _ if !concave => patch_mixed(m, v, three),
+                _ => None,
             }
         })
         .collect();
@@ -179,6 +195,7 @@ fn patch(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3], concave: bool) -
         concave,
         marks: Vec::new(),
         arc_sides: Vec::new(),
+        chord_sides: Vec::new(),
     })
 }
 
@@ -228,6 +245,8 @@ fn patch_mixed(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<
         }
         meet[j] = vertex + away[a] * s + away[b] * t;
     }
+    // A chamfer stands in as the round with the same setback: its strip is that round's chord.
+    let radii: Vec<f64> = edge.iter().map(|(_, c)| c.profile.round_size(c)).collect();
     // Each arc ends at the furthest of the two crossings along its edge.
     let mut arcs: Vec<Vec<DVec3>> = Vec::new();
     let mut centres = [DVec3::ZERO; 3];
@@ -249,17 +268,11 @@ fn patch_mixed(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<
         if cut.f1 != faces[k1] {
             points.reverse();
         }
-        centres[k] = points[0] - n[k1] * cut.profile.size();
+        centres[k] = points[0] - n[k1] * radii[k];
         arcs.push(points);
     }
-    let rmin = edge
-        .iter()
-        .map(|(_, c)| c.profile.size())
-        .fold(f64::INFINITY, f64::min);
-    let rmax = edge
-        .iter()
-        .map(|(_, c)| c.profile.size())
-        .fold(0.0, f64::max);
+    let rmin = radii.iter().copied().fold(f64::INFINITY, f64::min);
+    let rmax = radii.iter().copied().fold(0.0, f64::max);
     // The loop: arcs 2, 0, 1 (they run face 0 to 1, 1 to 2, 2 to 0), a segment across the face
     // between one arc's end and the next one's start. Each point remembers its arc.
     let same = |p: DVec3, q: DVec3| p.distance(q) < 1e-9 * rmax.max(1.0);
@@ -292,10 +305,14 @@ fn patch_mixed(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<
         .iter()
         .map(|(p, _, _)| (*p - c).try_normalize())
         .collect::<Option<_>>()?;
-    let rho =
-        (edge[0].1.profile.size() + edge[1].1.profile.size() + edge[2].1.profile.size()) / 3.0;
-    // A point of the star: fraction t of the way from the middle point to ring point i.
-    let spot = |dir: DVec3, d: f64, t: f64| c + slerp(middle, dir, t) * (rho + (d - rho) * t);
+    let rho = (radii[0] + radii[1] + radii[2]) / 3.0;
+    // Ring sides along a chamfer's strip.
+    let chord: Vec<bool> = ring
+        .iter()
+        .map(|(_, _, side)| {
+            side.is_some_and(|k| matches!(edge[k].1.profile, Profile::Chamfer { .. }))
+        })
+        .collect();
     // Inside the faceted rounds, and below the faces.
     let inside = |p: DVec3| -> bool {
         let margin = 1e-3 * rmin;
@@ -316,6 +333,20 @@ fn patch_mixed(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<
             })
         })
     };
+    // The apex, lowered while it pokes out of a chamfer's plane or a round.
+    let mut depth_mid = 1.0;
+    // The first steps toward the ring must be inside too, or no layer has room to start.
+    let lowered = |top: f64| {
+        inside(c + middle * top)
+            && (0..count)
+                .all(|i| inside(c + slerp(middle, to[i], 0.15) * (top + (dist[i] - top) * 0.15)))
+    };
+    while depth_mid > 0.5 && !lowered(rho * depth_mid) {
+        depth_mid -= 0.02;
+    }
+    let top = rho * depth_mid;
+    // A point of the star: fraction t of the way from the apex to ring point i.
+    let spot = |dir: DVec3, d: f64, t: f64| c + slerp(middle, dir, t) * (top + (d - top) * t);
     let step = arcs
         .iter()
         .map(|a| (a[0] - c).angle_between(a[a.len() - 1] - c) / (a.len() - 1) as f64)
@@ -355,8 +386,16 @@ fn patch_mixed(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<
                             let s = k as f64 * count as f64 / points as f64;
                             let (i0, f) = (s.floor() as usize % count, s.fract());
                             let i1 = (i0 + 1) % count;
-                            let dir = slerp(to[i0], to[i1], f);
-                            let d = dist[i0] + (dist[i1] - dist[i0]) * f;
+                            let (dir, d) = if chord[i0] {
+                                // Along a chamfer's straight strip: on the chord itself.
+                                let w = ring[i0].0.lerp(ring[i1].0, f) - c;
+                                (w.try_normalize().unwrap_or(to[i0]), w.length())
+                            } else {
+                                (
+                                    slerp(to[i0], to[i1], f),
+                                    dist[i0] + (dist[i1] - dist[i0]) * f,
+                                )
+                            };
                             let t = (first[i0] + (first[i1] - first[i0]) * f) * along;
                             spot(dir, d, t)
                         })
@@ -386,11 +425,7 @@ fn patch_mixed(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<
     if !found {
         return None;
     }
-    let mut depth_mid = 1.0;
-    while depth_mid > 0.5 && !inside(c + middle * rho * depth_mid) {
-        depth_mid -= 0.02;
-    }
-    let apex = c + middle * rho * depth_mid;
+    let apex = c + middle * top;
     if !inside(apex) {
         return None;
     }
@@ -568,8 +603,17 @@ fn patch_mixed(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<
         flat: None,
         concave: false,
         marks,
+        // A chamfer's strip keeps its crease, so its end is not softened.
         arc_sides: (0..count)
-            .filter(|i| ring[*i].2.is_some())
+            .filter(|i| {
+                ring[*i]
+                    .2
+                    .is_some_and(|k| matches!(edge[k].1.profile, Profile::Fillet { .. }))
+            })
+            .map(|i| [ring[i].0, ring[(i + 1) % count].0])
+            .collect(),
+        chord_sides: (0..count)
+            .filter(|i| chord[*i])
             .map(|i| [ring[i].0, ring[(i + 1) % count].0])
             .collect(),
     })
@@ -756,10 +800,11 @@ fn flat(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<Patch> 
         concave: false,
         marks: Vec::new(),
         arc_sides: Vec::new(),
+        chord_sides: Vec::new(),
     })
 }
 
-/// The cutter and the number of vertices of its sphere patch. `n` are the faces' outward
+///The cutter and the number of vertices of its sphere patch. `n` are the faces' outward
 /// normals, `away[k]` the direction of edge `k` from the vertex, `arcs[k]` its arc from face
 /// `k + 1` to face `k + 2`.
 fn cutter(
@@ -1233,11 +1278,17 @@ pub(super) fn soften(m: &mut Model, patches: &[Patch], done: &[usize], step: f64
                 // A patch of unequal rounds softens along its arcs whatever the angle, and
                 // across a face only where the crease is slight.
                 let (pa, pb) = (m.pos(a), m.pos(b));
-                let on_arc = p.arc_sides.iter().any(|[u, w]| {
-                    let tol = 1e-7 * p.radius.max(1e-3);
-                    (u.distance(pa) < tol && w.distance(pb) < tol)
-                        || (u.distance(pb) < tol && w.distance(pa) < tol)
-                });
+                let tol = 1e-7 * p.radius.max(1e-3);
+                let on = |sides: &[[DVec3; 2]]| {
+                    sides.iter().any(|[u, w]| {
+                        (u.distance(pa) < tol && w.distance(pb) < tol)
+                            || (u.distance(pb) < tol && w.distance(pa) < tol)
+                    })
+                };
+                if on(&p.chord_sides) {
+                    continue;
+                }
+                let on_arc = on(&p.arc_sides);
                 let slight = if p.marks.is_empty() {
                     nf.angle_between(no) <= 2.0 * step + 1e-6
                 } else {
