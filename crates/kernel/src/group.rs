@@ -9,9 +9,9 @@ use glam::{DAffine3, DVec3};
 use crate::annotation::Note;
 use crate::edit::KernelError;
 use crate::geom::LENGTH_TOL;
-use crate::ids::{DefinitionId, EdgeId, FaceId, InstanceId, NoteId, VertexId};
+use crate::ids::{DefinitionId, EdgeId, FaceId, InstanceId, NoteId, SectionId, VertexId};
 use crate::model::{Guide, Instance, Model, Op};
-use crate::scene::{DefinitionKind, MeshId, Parts, Scene, SceneChange};
+use crate::scene::{DefinitionKind, MeshId, Parts, Scene, SceneChange, Step};
 use crate::transform::Stencil;
 
 impl Scene {
@@ -299,8 +299,8 @@ impl Scene {
     /// definition share one new copy, named by `unique_name`. A definition whose every placed
     /// instance is listed, groups, and sole instances stay as they are. Only meshes the root
     /// reaches count. Returns the new definitions, in the order of the old ones' ids. The copy's section
-    /// planes have new ids, so a scene that stored the original's active plane does not
-    /// activate one in the copy (going to it leaves the copy uncut).
+    /// planes have new ids; every scene that stores a plane of the original also stores the
+    /// matching plane of the copy, in the same change.
     pub fn make_unique(
         &mut self,
         parent: MeshId,
@@ -321,9 +321,10 @@ impl Scene {
         shared.retain(|old, listed| placed.get(old).copied().unwrap_or(0) > listed.len());
         let mut made = Vec::new();
         let mut changes = Vec::new();
+        let mut planes = Vec::new();
         for (old, ids) in shared {
             let name = self.unique_name(&self.definition(old).expect("counted").name);
-            let (new, change) = self.duplicate(old, Some(&name));
+            let (new, change) = self.duplicate_mapped(old, Some(&name), &mut planes);
             made.push(new);
             changes.push(change);
             let moved = self.edit(parent, |m| {
@@ -336,12 +337,53 @@ impl Scene {
             })?;
             changes.push(moved);
         }
+        changes.push(self.copy_stored_sections(&planes));
         Ok((made, SceneChange::join(changes)))
+    }
+
+    /// Makes every page that stores the plane `from` of a mesh also store `to`, its copy in
+    /// another mesh, for each of `planes` (from, to).
+    fn copy_stored_sections(
+        &mut self,
+        planes: &[((MeshId, SectionId), (MeshId, SectionId))],
+    ) -> SceneChange {
+        let wanted: Vec<_> = self
+            .pages()
+            .filter_map(|(id, p)| {
+                let s = p.sections.as_ref()?;
+                let mut to = p.clone();
+                let stored = to.sections.as_mut()?;
+                for (from, copy) in planes {
+                    if s.active.get(&from.0) == Some(&from.1) {
+                        stored.active.insert(copy.0, copy.1);
+                    }
+                }
+                (to != *p).then(|| (id, p.clone(), to))
+            })
+            .collect();
+        let mut steps = Vec::new();
+        for (id, from, to) in wanted {
+            let step = Step::ChangePage(id, from, to);
+            self.apply_step(&step);
+            steps.push(step);
+        }
+        SceneChange { steps }
     }
 
     /// A new group definition holding a copy of `id`'s geometry, guides, section planes (the
     /// active one stays active) and annotations, with new ids; groups inside it are copied too, components inside are placed again.
     fn duplicate(&mut self, id: DefinitionId, name: Option<&str>) -> (DefinitionId, SceneChange) {
+        self.duplicate_mapped(id, name, &mut Vec::new())
+    }
+
+    /// `duplicate`, noting in `planes` which plane of the copy (of it or of a group inside it)
+    /// stands for which of the original's.
+    fn duplicate_mapped(
+        &mut self,
+        id: DefinitionId,
+        name: Option<&str>,
+        planes_made: &mut Vec<((MeshId, SectionId), (MeshId, SectionId))>,
+    ) -> (DefinitionId, SceneChange) {
         let original = self.definition(id).expect("copy of a missing definition");
         let (name, kind) = (
             name.map_or_else(|| original.name.clone(), str::to_string),
@@ -360,6 +402,7 @@ impl Scene {
         let planes = original
             .mesh
             .lift_sections(&original.mesh.all_sections(), DAffine3::IDENTITY);
+        let lifted: Vec<SectionId> = planes.iter().map(|(id, _)| *id).collect();
         let active = original
             .mesh
             .active_section()
@@ -376,7 +419,7 @@ impl Scene {
         for child in children {
             let definition = match self.definition(child.definition).map(|d| d.kind) {
                 Some(DefinitionKind::Group) => {
-                    let (d, made) = self.duplicate(child.definition, None);
+                    let (d, made) = self.duplicate_mapped(child.definition, None, planes_made);
                     change = SceneChange::join([change, made]);
                     d
                 }
@@ -402,6 +445,7 @@ impl Scene {
             (None, None) => Some(whole(&self.definition(id).expect("copied").mesh)),
         };
         let mut recorded = None;
+        let mut landed_ids = Vec::new();
         let filled = self
             .edit(MeshId::Definition(copy), |m| {
                 if let Some(d) = &drawn {
@@ -426,11 +470,17 @@ impl Scene {
                     m.insert_guide(g);
                 }
                 let landed = m.land_sections(planes, false);
+                landed_ids = lifted.iter().copied().zip(landed.iter().copied()).collect();
                 m.set_active(active.map(|i| landed[i]));
                 m.land(annotations, false);
                 Ok(m.take_changes())
             })
             .expect("drawing a copy cannot fail");
+        planes_made.extend(
+            landed_ids
+                .into_iter()
+                .map(|(a, b)| ((MeshId::Definition(id), a), (MeshId::Definition(copy), b))),
+        );
         if let Some(d) = recorded {
             // Drop what no copy can use again: drawings of definitions removed or changed since.
             let stale: Vec<DefinitionId> = (self.drawn_copies.0.iter())
