@@ -178,6 +178,22 @@ class Instance:
         self.model.client.execute(cmd)
         return self
 
+    def bevel(self, edges, sizes, kinds, segments=None):
+        """Round some ``edges`` and chamfer others in one call. ``sizes`` (meters) and ``kinds``
+        (``"round"`` or ``"chamfer"``) give one value per edge; ``segments`` is the faces per
+        quarter turn of the rounds."""
+        cmd = {
+            "type": "bevel_edges",
+            "instance": self.id,
+            "edges": list(edges),
+            "sizes": list(sizes),
+            "kinds": list(kinds),
+        }
+        if segments is not None:
+            cmd["segments"] = segments
+        self.model.client.execute(cmd)
+        return self
+
     def section(self, point, normal):
         """Add an active section plane inside this group or component that cuts only it. ``point``
         and ``normal`` are in model coordinates (converted to the instance's own); the side the

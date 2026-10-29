@@ -403,3 +403,55 @@ fn per_edge_distances_chamfer_each_edge_by_its_own_distance() {
     assert!(volume(&d, &b) < 24.0 - 0.3 * 0.3 / 2.0);
     d.scene().validate().unwrap();
 }
+
+#[test]
+fn bevel_edges_rounds_and_chamfers_in_one_call() {
+    let mut d = doc();
+    let b = add_box(&mut d, [2.0, 3.0, 4.0], "group");
+    let m = mesh(&d, &b).clone();
+    let edges = [
+        edge(&m, [0.0, 0.0, 4.0], [2.0, 0.0, 4.0]),
+        edge(&m, [0.0, 0.0, 4.0], [0.0, 3.0, 4.0]),
+        edge(&m, [0.0, 0.0, 0.0], [0.0, 0.0, 4.0]),
+    ];
+    run(
+        &mut d,
+        json!({"type": "bevel_edges", "instance": b, "edges": edges,
+               "sizes": [0.3, 0.3, 0.3], "kinds": ["round", "chamfer", "chamfer"]}),
+    );
+    // A round and two chamfers at the corner get a ringed patch of many facets (the crossed
+    // cuts would leave a handful), and the solid is closed.
+    let m = mesh(&d, &b);
+    let v = volume(&d, &b);
+    assert!(v < 24.0 && v > 24.0 - 3.0 * 0.3 * 0.3 * 4.0 / 2.0, "{v}");
+    d.scene().validate().unwrap();
+    assert!(m.faces().count() > 40, "{}", m.faces().count());
+    // One undo step.
+    run(&mut d, json!({"type": "undo"}));
+    assert!((volume(&d, &b) - 24.0).abs() < 1e-9);
+}
+
+#[test]
+fn bevel_edges_checks_its_lists() {
+    let mut d = doc();
+    let b = add_box(&mut d, [2.0, 3.0, 4.0], "group");
+    let e = edge(mesh(&d, &b), [0.0, 0.0, 0.0], [2.0, 0.0, 0.0]);
+    let f = edge(mesh(&d, &b), [0.0, 0.0, 0.0], [0.0, 3.0, 0.0]);
+    for (sizes, kinds) in [
+        (json!([0.2]), json!(["round", "chamfer"])),
+        (json!([0.2, 0.2]), json!(["round"])),
+        (json!([0.2, 0.0]), json!(["round", "chamfer"])),
+    ] {
+        let err = try_run(
+            &mut d,
+            json!({"type": "bevel_edges", "instance": b, "edges": [e, f],
+                   "sizes": sizes, "kinds": kinds}),
+        )
+        .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::InvalidInput, "{err:?}");
+        assert_eq!(volume(&d, &b), 24.0);
+    }
+    // An unknown kind does not parse.
+    let bad = json!({"type": "bevel_edges", "edges": [e], "sizes": [0.2], "kinds": ["bevel"]});
+    assert!(serde_json::from_value::<Command>(bad).is_err());
+}

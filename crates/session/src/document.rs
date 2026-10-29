@@ -900,6 +900,7 @@ impl Document {
             | Command::MakeSolid { .. }
             | Command::ChamferEdges { .. }
             | Command::FilletEdges { .. }
+            | Command::BevelEdges { .. }
             | Command::PositionTexture { .. }
             | Command::Import { .. }
             | Command::Paste { .. }
@@ -1449,6 +1450,13 @@ impl Document {
                 segments,
                 radii,
             } => self.fillet_edges_changes(*instance, edges, *radius, *segments, radii.as_deref()),
+            Command::BevelEdges {
+                instance,
+                edges,
+                sizes,
+                kinds,
+                segments,
+            } => self.bevel_edges_changes(*instance, edges, sizes, kinds, *segments),
             Command::SolidIntersect { ids } => {
                 self.solid_all_changes(kernel::boolean::BooleanOp::Intersect, ids)
             }

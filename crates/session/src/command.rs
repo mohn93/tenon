@@ -59,6 +59,16 @@ pub enum SceneJoints {
     Ids(Vec<JointId>),
 }
 
+/// How `bevel_edges` shapes one edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BevelKind {
+    /// A fillet of the size as its radius.
+    Round,
+    /// A flat bevel of the size as its distance.
+    Chamfer,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
@@ -1261,6 +1271,23 @@ pub enum Command {
         segments: Option<u32>,
         #[serde(default)]
         radii: Option<Vec<f64>>,
+    },
+    /// Round some edges and chamfer others of a solid in one call, as one undo step. `edges`,
+    /// `sizes` (meters, each more than 0.000001) and `kinds` (`round` or `chamfer`) have one
+    /// entry per edge, in the same order; a round of `sizes[i]` has `segments` faces per
+    /// quarter turn (default 8, 1 to 90). Everything else is as `fillet_edges` and
+    /// `chamfer_edges`, sizes snapping together within each kind. A convex corner of three
+    /// faces where rounds and chamfers meet gets a ringed patch between the strips' ends, a
+    /// chamfer standing in as the round with the same setback; a corner with inside and
+    /// outside rounds keeps the crossed cuts.
+    BevelEdges {
+        #[serde(default)]
+        instance: Option<EntityId>,
+        edges: Vec<EntityId>,
+        sizes: Vec<f64>,
+        kinds: Vec<BevelKind>,
+        #[serde(default)]
+        segments: Option<u32>,
     },
     /// Move, turn and scale the texture on faces of the open context, as one undo step: on
     /// top of the projection, `offset` [u, v] in meters, `rotation_deg` counter-clockwise
