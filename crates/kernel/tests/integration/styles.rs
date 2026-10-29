@@ -219,6 +219,7 @@ fn deleting_a_style_drops_it_from_the_scenes_that_chose_it_in_one_undoable_chang
         tags: None,
         positions: None,
         joints: None,
+        sections: None,
     };
     let (p1, _) = s.add_page(on("one", Some(a))).unwrap();
     let (p2, _) = s.add_page(on("two", Some(b))).unwrap();
@@ -250,6 +251,7 @@ fn a_page_cannot_choose_a_missing_style() {
         tags: None,
         positions: None,
         joints: None,
+        sections: None,
     };
     assert_eq!(s.add_page(page), Err(KernelError::StyleNotFound));
 }
@@ -277,6 +279,7 @@ fn styles_round_trip_through_data_and_a_dangling_choice_is_refused() {
         tags: None,
         positions: None,
         joints: None,
+        sections: None,
     })
     .unwrap();
     let data = s.to_data();

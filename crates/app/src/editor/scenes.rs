@@ -220,6 +220,7 @@ impl Editor {
             tags: true,
             positions: None,
             joints: None,
+            sections: None,
         });
         true
     }
@@ -238,7 +239,7 @@ impl Editor {
             .doc
             .scene()
             .page(scene)
-            .is_some_and(|p| p.view.is_none() && p.tags.is_none());
+            .is_some_and(|p| p.view.is_none() && p.tags.is_none() && p.sections.is_none());
         if stores_nothing && camera.is_none() && tags.is_none() {
             self.message = Some(Message::info(
                 "This scene stores neither the camera nor tag visibility: tick Camera or Tag \
@@ -252,6 +253,7 @@ impl Editor {
             tags,
             positions: None,
             joints: None,
+            sections: None,
         });
         true
     }
@@ -266,6 +268,7 @@ impl Editor {
             tags: None,
             positions: None,
             joints: None,
+            sections: None,
         });
         true
     }
@@ -286,6 +289,7 @@ impl Editor {
             tags,
             positions: None,
             joints: None,
+            sections: None,
         });
         true
     }
@@ -317,6 +321,7 @@ impl Editor {
             tags: None,
             positions: Some(positions),
             joints: None,
+            sections: None,
         });
         true
     }
@@ -332,6 +337,23 @@ impl Editor {
             tags: None,
             positions: None,
             joints: Some(SceneJoints::Flag(on)),
+            sections: None,
+        });
+        true
+    }
+
+    /// Starts (true) or stops storing the active section planes and the section display in a
+    /// scene. Started, it stores them as they are now.
+    pub fn set_scene_sections(&mut self, scene: PageId, on: bool) -> bool {
+        self.message = None;
+        self.run(Command::ChangeScene {
+            scene,
+            name: None,
+            camera: None,
+            tags: None,
+            positions: None,
+            joints: None,
+            sections: Some(on),
         });
         true
     }

@@ -185,7 +185,7 @@ fn input_schema(tool: &str) -> Value {
                         "type": "boolean",
                         "description": "Default true. false hides the ground grid, the axes and the ground shadows for this image, so a model can sit at z = 0."
                     },
-                    "scene": {"description": "Render a frame of going to this scene (its camera and stored instance positions) instead of the document camera; not with camera.", "allOf": [scene.clone()]},
+                    "scene": {"description": "Render a frame of going to this scene (its camera, stored instance positions and, at t 1, the section planes and section display it stores) instead of the document camera; not with camera.", "allOf": [scene.clone()]},
                     "t": {"type": "number", "minimum": 0, "maximum": 1, "description": "With scene: how far along, 0 (the current view, or from) to 1 (the scene; default), linear."},
                     "from": {"description": "With scene: the scene to start from (default the current view and positions).", "allOf": [scene]},
                     "joints": {

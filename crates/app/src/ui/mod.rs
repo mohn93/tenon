@@ -254,6 +254,9 @@ pub enum UiAction {
     /// The Scenes tab's Joint values checkbox: start (from the current values of every joint
     /// that has one) or stop storing joint values in a scene.
     StoreSceneJoints(PageId, bool),
+    /// The Scenes tab's Section planes checkbox: start (from the active planes and display now)
+    /// or stop storing them in a scene.
+    StoreSceneSections(PageId, bool),
     RenameScene(PageId, String),
     /// Move a scene to this place in the order (0: first).
     MoveScene(PageId, usize),
@@ -552,6 +555,8 @@ pub struct SceneRow {
     pub positions: bool,
     /// Whether it stores joint values.
     pub joints: bool,
+    /// Whether it stores the active section planes and the section display.
+    pub sections: bool,
     /// Whether it is the scene last added or gone to.
     pub selected: bool,
 }
