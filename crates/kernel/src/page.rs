@@ -8,8 +8,8 @@ use glam::DAffine3;
 use serde::{Deserialize, Serialize};
 
 use crate::edit::KernelError;
-use crate::ids::{InstanceId, JointId, PageId, StyleId, TagId};
-use crate::scene::{Scene, SceneChange, Step};
+use crate::ids::{InstanceId, JointId, PageId, SectionId, StyleId, TagId};
+use crate::scene::{MeshId, Scene, SceneChange, Step};
 
 /// The longest page name, in characters.
 pub const MAX_PAGE_NAME: usize = 256;
@@ -141,6 +141,8 @@ impl Shadows {
 /// holds the transform of each stored instance of the root. `joints: None` leaves joint values
 /// alone; otherwise it holds the (value, slide) of each stored joint (radians or meters; the
 /// slide of a cylindrical joint, 0 for every other kind), driven to when the page is gone to.
+/// `sections: None` leaves the active section planes and how they are shown alone; otherwise
+/// see [`PageSections`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Page {
     pub name: String,
@@ -148,6 +150,38 @@ pub struct Page {
     pub tags: Option<BTreeSet<TagId>>,
     pub positions: Option<BTreeMap<InstanceId, DAffine3>>,
     pub joints: Option<BTreeMap<JointId, (f64, f64)>>,
+    pub sections: Option<PageSections>,
+}
+
+/// What a page stores of section planes (SketchUp's "Active Section Planes"): the plane active
+/// in each context (the root or a definition) and how planes are shown. Going to the page
+/// makes exactly these planes the active ones (a context not listed has none active) and sets
+/// the display.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PageSections {
+    /// The active plane of each mesh that had one.
+    pub active: BTreeMap<MeshId, SectionId>,
+    /// The plane entities are drawn.
+    pub planes: bool,
+    /// The active planes' cuts are applied.
+    pub cuts: bool,
+    /// Closed cuts are filled.
+    pub fill: bool,
+    /// The fill takes the material's color rather than the dark gray.
+    pub material_fill: bool,
+}
+
+impl PageSections {
+    /// Nothing active and the default display.
+    pub fn none() -> PageSections {
+        PageSections {
+            active: BTreeMap::new(),
+            planes: true,
+            cuts: true,
+            fill: true,
+            material_fill: false,
+        }
+    }
 }
 
 /// Fails, saying why, when a page name is blank or longer than [`MAX_PAGE_NAME`] characters.
@@ -330,6 +364,14 @@ impl Scene {
                 return Err(KernelError::NotFinite);
             }
         }
+        for (m, id) in page.sections.iter().flat_map(|s| &s.active) {
+            if self.mesh(*m).and_then(|m| m.section(*id)).is_none() {
+                return Err(KernelError::Page(format!(
+                    "{} is not a section plane of that context: a scene stores only those",
+                    crate::EntityId::Section(*id)
+                )));
+            }
+        }
         for (id, (value, slide)) in page.joints.iter().flatten() {
             self.page_joint_problem(*id, *value, *slide)
                 .map_err(KernelError::Page)?;
@@ -363,6 +405,49 @@ impl Scene {
             return Err("a scene's joint value must be a finite number".into());
         }
         Ok(())
+    }
+
+    /// The steps that drop from every page the stored active planes that are gone (the plane
+    /// no longer exists in that context), applied. A page keeps its display and its other
+    /// contexts.
+    pub(crate) fn drop_stale_sections(&mut self) -> SceneChange {
+        let gone = |scene: &Scene, p: &Page| {
+            p.sections.as_ref().is_some_and(|s| {
+                s.active
+                    .iter()
+                    .any(|(m, id)| scene.mesh(*m).is_none_or(|m| m.section(*id).is_none()))
+            })
+        };
+        let stale: Vec<(PageId, Page)> = self
+            .pages()
+            .filter(|(_, p)| gone(self, p))
+            .map(|(id, p)| (id, p.clone()))
+            .collect();
+        let mut steps = Vec::new();
+        for (id, from) in stale {
+            let mut to = from.clone();
+            if let Some(s) = &mut to.sections {
+                s.active
+                    .retain(|m, id| self.mesh(*m).is_some_and(|m| m.section(*id).is_some()));
+            }
+            let step = Step::ChangePage(id, from, to);
+            self.apply_step(&step);
+            steps.push(step);
+        }
+        SceneChange { steps }
+    }
+
+    /// Makes `id` the active plane of `mesh` (None: no plane cuts there), as a scene change;
+    /// nothing changes when it already is. Fails when the mesh or plane does not exist.
+    pub fn set_active_section(
+        &mut self,
+        mesh: MeshId,
+        id: Option<SectionId>,
+    ) -> Result<SceneChange, KernelError> {
+        if self.mesh(mesh).is_none() {
+            return Err(KernelError::Section("no such context".into()));
+        }
+        self.edit(mesh, |m| m.set_active_section(id))
     }
 
     /// The steps that drop from every page the stored values of joints that no longer exist,

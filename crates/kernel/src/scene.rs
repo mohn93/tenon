@@ -622,11 +622,15 @@ impl Scene {
         let next = m.next_id();
         self.next_id = self.next_id.max(next);
         let changes = result?;
-        Ok(if changes.is_empty() {
-            SceneChange::default()
-        } else {
-            Step::Edit(mesh, changes).into()
-        })
+        if changes.is_empty() {
+            return Ok(SceneChange::default());
+        }
+        let mut change: SceneChange = Step::Edit(mesh, changes).into();
+        // A scene storing an active plane forgets it once the plane is gone.
+        if self.pages.iter().any(|(_, p)| p.sections.is_some()) {
+            change.steps.extend(self.drop_stale_sections().steps);
+        }
+        Ok(change)
     }
 
     /// Adds an empty definition and returns its id and the step that added it.

@@ -15,6 +15,7 @@ fn page(joints: Option<BTreeMap<JointId, (f64, f64)>>) -> Page {
         tags: None,
         positions: None,
         joints,
+        sections: None,
     }
 }
 

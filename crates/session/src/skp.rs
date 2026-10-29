@@ -1191,6 +1191,7 @@ fn add_pages(
             tags,
             positions: None,
             joints: None,
+            sections: None,
         };
         match document.scene_mut().add_page(page) {
             Ok((_, change)) => out.added.push(change),

@@ -966,8 +966,30 @@ pub struct SceneInfo {
     /// The joints whose values it stores (empty: none).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub joints: Vec<JointId>,
+    /// Whether it stores the active section planes and the section display.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sections: bool,
     /// Whether it is the selected scene (the one last added or gone to).
     pub selected: bool,
+}
+
+/// The active section plane of one context a scene stores.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SceneSectionPlane {
+    /// The definition the plane is in; null: the root.
+    pub context: Option<DefinitionId>,
+    pub plane: EntityId,
+}
+
+/// The section planes a scene stores: the plane active in each context (a context not listed
+/// has none) and the section display settings.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SceneSections {
+    pub active: Vec<SceneSectionPlane>,
+    pub planes: bool,
+    pub cuts: bool,
+    pub fill: bool,
+    pub fill_color: crate::document::SectionFillColor,
 }
 
 /// A joint value a scene stores: degrees for an angle, meters for a distance (and `slide`, for
@@ -1248,6 +1270,8 @@ pub enum QueryResult {
         positions: Option<Vec<EntityId>>,
         /// The joint values it stores, null when it stores none.
         joints: Option<Vec<SceneJointValue>>,
+        /// The active section planes and section display it stores, null when it stores none.
+        sections: Option<SceneSections>,
         revision: u64,
     },
     /// `path` lists the open instances from the root; empty when the root is open.

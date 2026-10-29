@@ -615,6 +615,20 @@ fn render_view(host: &mut dyn Host, params: Value) -> Result<Value, RpcError> {
         (None, None) => (doc.camera.clone(), None),
     };
     let invalid = |why: String| command_failed(CommandError::new(ErrorKind::InvalidInput, why));
+    // A scene's section planes and display apply once the frame has arrived at the scene.
+    let mut scene_section = None;
+    let frame = match (p.scene, frame) {
+        (Some(scene), Some(base)) if t >= 1.0 => {
+            match doc.frame_with_scene_sections(base.clone(), scene) {
+                Some((framed, display)) => {
+                    scene_section = Some(display);
+                    Some(framed)
+                }
+                None => Some(base),
+            }
+        }
+        (_, frame) => frame,
+    };
     let frame = match p.joints.as_ref().filter(|j| !j.is_empty()) {
         Some(joints) => {
             let mut values = Vec::with_capacity(joints.len());
@@ -648,6 +662,9 @@ fn render_view(host: &mut dyn Host, params: Value) -> Result<Value, RpcError> {
             .style(id)
             .ok_or_else(|| invalid(format!("no style {id}")))?;
         options.style = Some(style.settings);
+    }
+    if let Some(display) = scene_section {
+        options.section = display;
     }
     if let Some(o) = p.section {
         let s = &mut options.section;

@@ -15,6 +15,7 @@ pub(super) fn three_scenes() -> Vec<SceneRow> {
         tags,
         positions: false,
         joints: false,
+        sections: false,
         selected,
     };
     vec![
@@ -325,6 +326,11 @@ fn the_checkboxes_say_and_change_what_the_selected_scene_stores() {
     assert_eq!(
         click_checkbox(&mut h, "Joint values"),
         [UiAction::StoreSceneJoints(TOP, true)]
+    );
+    assert!(!checked(&h, "Section planes"));
+    assert_eq!(
+        click_checkbox(&mut h, "Section planes"),
+        [UiAction::StoreSceneSections(TOP, true)]
     );
     // With none selected they are off and do nothing.
     let mut f = scenes_tab();
