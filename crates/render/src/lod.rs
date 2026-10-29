@@ -22,6 +22,11 @@
 //! corner. Every edge shared by two chunks, or by a kept and a simplified triangle, has
 //! pinned ends, so it is the same segment in a chunk at any level and in a full one.
 //!
+//! T-junctions: a vertex of one chunk can lie in the middle of an edge of another (a long wall
+//! edge beside a subdivided neighbour), so the position is not shared. Each chunk's open edges
+//! (those one of its triangles uses alone) are found, and a vertex of one chunk's open edge
+//! that lies on an open edge of another gets pinned, with that edge's ends.
+//!
 //! The simplified levels have their own small vertex (`LodVertex`): nothing in them is
 //! textured, glowing or see-through, and a chunk with something selected or hovered is drawn
 //! whole, so they carry no flags.
@@ -394,45 +399,178 @@ impl Borders {
         threads: usize,
         cancel: &AtomicBool,
     ) -> Borders {
-        let found = |k: usize| -> Vec<[u32; 3]> {
+        let found = |k: usize| -> (Vec<[u32; 3]>, Vec<Seg>) {
             if cancel.load(Ordering::Relaxed) {
-                return Vec::new();
+                return (Vec::new(), Vec::new());
             }
             let c = &plan.chunks[k];
             let mut at: Vec<[f32; 3]> = Vec::new();
             for run in plan.sources(c.vertices.start as usize..c.vertices.end as usize) {
                 at.extend(faces[run].iter().map(|v| v.pos));
             }
-            places(at.into_iter())
+            let edges = open_edges(&at);
+            (places(at.into_iter()), edges)
         };
         let count = plan.chunks.len();
-        if threads < 2 || count < 16 {
-            return Borders::new((0..count).map(found));
-        }
-        let per = count.div_ceil(threads);
-        let parts: Vec<Vec<[u32; 3]>> = std::thread::scope(|s| {
-            let jobs: Vec<_> = (0..count)
-                .step_by(per)
-                .map(|from| {
-                    let found = &found;
-                    s.spawn(move || {
-                        (from..(from + per).min(count))
-                            .flat_map(found)
-                            .collect::<Vec<_>>()
+        let found_all: Vec<(Vec<[u32; 3]>, Vec<Seg>)> = if threads < 2 || count < 16 {
+            (0..count).map(found).collect()
+        } else {
+            let per = count.div_ceil(threads);
+            std::thread::scope(|s| {
+                let jobs: Vec<_> = (0..count)
+                    .step_by(per)
+                    .map(|from| {
+                        let found = &found;
+                        s.spawn(move || {
+                            (from..(from + per).min(count))
+                                .map(found)
+                                .collect::<Vec<_>>()
+                        })
                     })
-                })
-                .collect();
-            jobs.into_iter()
-                .map(|j| j.join().expect("a border finding thread panicked"))
-                .collect()
-        });
-        Borders::new(parts)
+                    .collect();
+                jobs.into_iter()
+                    .flat_map(|j| j.join().expect("a border finding thread panicked"))
+                    .collect()
+            })
+        };
+        let (shared, edges): (Vec<_>, Vec<_>) = found_all.into_iter().unzip();
+        let mut borders = Borders::new(shared);
+        if !cancel.load(Ordering::Relaxed) {
+            borders.pin_t_junctions(&edges);
+        }
+        borders
+    }
+
+    /// Pins the ends of open edges that lie on an open edge of another chunk, and that edge's
+    /// ends. `chunks` holds each chunk's open edges.
+    pub fn pin_t_junctions(&mut self, chunks: &[Vec<Seg>]) {
+        for p in t_junctions(chunks) {
+            self.places.insert(p, ());
+        }
     }
 
     /// True when vertices of more than one chunk lie at `p`.
     fn contains(&self, p: [f32; 3]) -> bool {
         !self.places.is_empty() && self.places.contains_key(&bits(p))
     }
+}
+
+/// A straight edge, its two ends.
+pub type Seg = [[f32; 3]; 2];
+
+/// How far from an edge a vertex may be and still count as on it, in meters.
+const ON_EDGE: f64 = 5e-4;
+
+/// The edges of the triangles whose corners are `corners` that only one triangle uses (by
+/// position): where a chunk's surface ends, or the other side is in another chunk.
+pub fn open_edges(corners: &[[f32; 3]]) -> Vec<Seg> {
+    let mut all: Vec<([u32; 3], [u32; 3])> = Vec::with_capacity(corners.len());
+    for t in corners.as_chunks::<3>().0 {
+        for i in 0..3 {
+            let (a, b) = (bits(t[i]), bits(t[(i + 1) % 3]));
+            if a != b {
+                all.push(if a < b { (a, b) } else { (b, a) });
+            }
+        }
+    }
+    all.sort_unstable();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < all.len() {
+        let mut j = i + 1;
+        while j < all.len() && all[j] == all[i] {
+            j += 1;
+        }
+        if j == i + 1 {
+            let unbits = |b: [u32; 3]| b.map(f32::from_bits);
+            out.push([unbits(all[i].0), unbits(all[i].1)]);
+        }
+        i = j;
+    }
+    out
+}
+
+/// The places to pin so that open edges of different chunks stay together: an end of an open
+/// edge of one chunk lying on an open edge of another, and the ends of that edge.
+fn t_junctions(chunks: &[Vec<Seg>]) -> Vec<[u32; 3]> {
+    const BASE: f32 = 1.0;
+    let edges: Vec<(u32, Seg)> = chunks
+        .iter()
+        .enumerate()
+        .flat_map(|(k, c)| c.iter().map(move |&e| (k as u32, e)))
+        .collect();
+    if edges.len() < 2 {
+        return Vec::new();
+    }
+    // Grids of growing cells; an edge goes into the finest whose cell is at least its size,
+    // in every cell its box (widened a little) touches.
+    let reach = ON_EDGE as f32;
+    let level_of = |e: &Seg| -> usize {
+        let long = (0..3)
+            .map(|i| (e[0][i] - e[1][i]).abs())
+            .fold(0.0f32, f32::max);
+        let mut level = 0;
+        let mut cell = BASE;
+        while cell < long + 2.0 * reach && level < 14 {
+            cell *= 4.0;
+            level += 1;
+        }
+        level
+    };
+    let cell_size = |level: usize| BASE * 4f32.powi(level as i32);
+    let cell_at = |p: f32, size: f32| (p / size).floor() as i32;
+    let mut grids: Vec<Map<[i32; 3], Vec<u32>>> = Vec::new();
+    for (n, (_, e)) in edges.iter().enumerate() {
+        let level = level_of(e);
+        while grids.len() <= level {
+            grids.push(Map::default());
+        }
+        let size = cell_size(level);
+        let lo: [i32; 3] = std::array::from_fn(|i| cell_at(e[0][i].min(e[1][i]) - reach, size));
+        let hi: [i32; 3] = std::array::from_fn(|i| cell_at(e[0][i].max(e[1][i]) + reach, size));
+        for x in lo[0]..=hi[0] {
+            for y in lo[1]..=hi[1] {
+                for z in lo[2]..=hi[2] {
+                    grids[level].entry([x, y, z]).or_default().push(n as u32);
+                }
+            }
+        }
+    }
+    let mut pins = Vec::new();
+    let mut seen: Map<[u32; 3], ()> = Map::default();
+    for (chunk, e) in &edges {
+        for p in e {
+            if seen.insert(bits(*p), ()).is_some() {
+                continue;
+            }
+            for (level, grid) in grids.iter().enumerate() {
+                let size = cell_size(level);
+                let key: [i32; 3] = std::array::from_fn(|i| cell_at(p[i], size));
+                let Some(list) = grid.get(&key) else { continue };
+                for &n in list {
+                    let (other, f) = &edges[n as usize];
+                    if other != chunk && distance_to_segment(*p, *f) <= ON_EDGE {
+                        pins.extend([bits(*p), bits(f[0]), bits(f[1])]);
+                    }
+                }
+            }
+        }
+    }
+    pins
+}
+
+/// How far `p` is from the segment `e`.
+fn distance_to_segment(p: [f32; 3], e: Seg) -> f64 {
+    let d = |v: [f32; 3]| glam::DVec3::new(f64::from(v[0]), f64::from(v[1]), f64::from(v[2]));
+    let (a, b, p) = (d(e[0]), d(e[1]), d(p));
+    let ab = b - a;
+    let len2 = ab.length_squared();
+    let t = if len2 > 0.0 {
+        ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (p - (a + ab * t)).length()
 }
 
 /// The places `positions` are at, each once, sorted.
@@ -920,6 +1058,62 @@ mod tests {
         let l = cluster(&left, 2.0);
         let r = cluster(&right, 8.0);
         assert_ne!(edges_on(&l, 20.0), edges_on(&r, 20.0));
+    }
+
+    /// A sheet of `nx` x `ny` squares of `step` m from `x0`, flat (z = 0) along x = 20.
+    fn flat_edged_sheet(x0: f32, nx: usize, ny: usize, step: f32) -> Vec<BaseFaceVertex> {
+        let z = |x: f32, y: f32| 0.9 * (1.3 * (x - 20.0)).sin() * (y * 0.7).cos();
+        let mut out = Vec::new();
+        for i in 0..nx {
+            for j in 0..ny {
+                let (x, y) = (x0 + i as f32 * step, j as f32 * step);
+                let c = |x: f32, y: f32| corner([x, y, z(x, y)], [0.8, 0.8, 0.8]);
+                let (a, b, d, e) = (
+                    c(x, y),
+                    c(x + step, y),
+                    c(x + step, y + step),
+                    c(x, y + step),
+                );
+                out.extend([a, b, d, a, d, e]);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_vertex_in_the_middle_of_a_neighbours_edge_stays_on_it_at_every_level() {
+        // The left sheet's border along x = 20 has a vertex every half meter, the right
+        // sheet's a vertex every meter: half of the left's lie inside the right's edges.
+        let (left, right) = (
+            flat_edged_sheet(0.0, 40, 40, 0.5),
+            flat_edged_sheet(20.0, 20, 20, 1.0),
+        );
+        let (shared_left, shared_right) = (edges_on(&left, 20.0), edges_on(&right, 20.0));
+        assert_eq!((shared_left.len(), shared_right.len()), (40, 20));
+        let at = |t: &[BaseFaceVertex]| places(t.iter().map(|v| v.pos));
+        let corners = |t: &[BaseFaceVertex]| t.iter().map(|v| v.pos).collect::<Vec<_>>();
+        let mut borders = Borders::new([at(&left), at(&right)]);
+        // With only the exactly shared places pinned, the half-meter vertices drift off.
+        {
+            let pinned = |v: &BaseFaceVertex| borders.contains(v.pos);
+            let l = cluster_pinned(&left, 8.0, &pinned);
+            assert_ne!(edges_on(&l, 20.0), shared_left);
+        }
+        borders.pin_t_junctions(&[open_edges(&corners(&left)), open_edges(&corners(&right))]);
+        let pinned = |v: &BaseFaceVertex| borders.contains(v.pos);
+        for (a, b) in [(2.0, 8.0), (8.0, 2.0), (4.0, 4.0)] {
+            let l = cluster_pinned(&left, a, &pinned);
+            let r = cluster_pinned(&right, b, &pinned);
+            assert!(l.len() * 2 < left.len() && r.len() < right.len());
+            // Every piece of both borders is still there, so the left's pieces end where they
+            // did, on the right's edges.
+            assert_eq!(edges_on(&l, 20.0), shared_left, "left at {a}, right at {b}");
+            assert_eq!(
+                edges_on(&r, 20.0),
+                shared_right,
+                "left at {a}, right at {b}"
+            );
+        }
     }
 
     #[test]
