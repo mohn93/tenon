@@ -9,10 +9,46 @@ use kernel::solid::instance_volume;
 use kernel::{EdgeId, EntityId, MeshId, SceneChange};
 
 use super::Document;
-use crate::command::{CommandError, ErrorKind};
+use crate::command::{BevelKind, CommandError, ErrorKind};
 
 fn invalid(message: impl Into<String>) -> CommandError {
     CommandError::new(ErrorKind::InvalidInput, message)
+}
+
+/// One profile for each of `count` edges: `profile` with the size of `sizes` when given.
+fn per_edge(
+    profile: Profile,
+    count: usize,
+    sizes: Option<&[f64]>,
+) -> Result<Vec<Profile>, CommandError> {
+    let Some(sizes) = sizes else {
+        return Ok(vec![profile; count]);
+    };
+    let (noun, plural) = match profile {
+        Profile::Chamfer { .. } => ("distance", "distances"),
+        Profile::Fillet { .. } => ("radius", "radii"),
+    };
+    if sizes.len() != count {
+        return Err(invalid(format!(
+            "{plural} must have one value for each of the {count} edges, not {}",
+            sizes.len()
+        )));
+    }
+    if let Some(bad) = sizes.iter().find(|s| !(s.is_finite() && **s > MIN_SIZE)) {
+        return Err(invalid(format!(
+            "{noun} must be more than {MIN_SIZE} m, not {bad}"
+        )));
+    }
+    Ok(sizes
+        .iter()
+        .map(|size| match profile {
+            Profile::Chamfer { .. } => Profile::Chamfer { distance: *size },
+            Profile::Fillet { segments, .. } => Profile::Fillet {
+                radius: *size,
+                segments,
+            },
+        })
+        .collect())
 }
 
 impl Document {
@@ -27,7 +63,9 @@ impl Document {
         if !(distance.is_finite() && distance > MIN_SIZE) {
             return Err(invalid(format!("distance must be more than {MIN_SIZE} m")));
         }
-        self.bevel_changes(instance, edges, Profile::Chamfer { distance }, distances)
+        let profile = Profile::Chamfer { distance };
+        let profiles = per_edge(profile, edges.len(), distances)?;
+        self.bevel_changes(instance, edges, profiles)
     }
 
     /// `fillet_edges`: as `chamfer_edges`, rounding with `radius` in `segments` (default 8)
@@ -47,37 +85,66 @@ impl Document {
         if !(1..=MAX_SEGMENTS).contains(&segments) {
             return Err(invalid(format!("segments must be 1 to {MAX_SEGMENTS}")));
         }
-        self.bevel_changes(instance, edges, Profile::Fillet { radius, segments }, radii)
+        let profile = Profile::Fillet { radius, segments };
+        let profiles = per_edge(profile, edges.len(), radii)?;
+        self.bevel_changes(instance, edges, profiles)
     }
 
-    /// Bevels `edges` (see `chamfer_edges`) with `profile`; on an error nothing changes.
+    /// `bevel_edges`: each edge in `edges` rounded or chamfered by its own `kinds` and `sizes`.
+    pub(super) fn bevel_edges_changes(
+        &mut self,
+        instance: Option<EntityId>,
+        edges: &[EntityId],
+        sizes: &[f64],
+        kinds: &[BevelKind],
+        segments: Option<u32>,
+    ) -> Result<SceneChange, CommandError> {
+        let segments = segments.unwrap_or(DEFAULT_SEGMENTS);
+        // Only rounds use it.
+        if kinds.contains(&BevelKind::Round) && !(1..=MAX_SEGMENTS).contains(&segments) {
+            return Err(invalid(format!("segments must be 1 to {MAX_SEGMENTS}")));
+        }
+        for (what, len) in [("sizes", sizes.len()), ("kinds", kinds.len())] {
+            if len != edges.len() {
+                return Err(invalid(format!(
+                    "{what} must have one value for each of the {} edges, not {len}",
+                    edges.len()
+                )));
+            }
+        }
+        let profiles: Vec<Profile> = sizes
+            .iter()
+            .zip(kinds)
+            .map(|(size, kind)| match kind {
+                BevelKind::Round => Profile::Fillet {
+                    radius: *size,
+                    segments,
+                },
+                BevelKind::Chamfer => Profile::Chamfer { distance: *size },
+            })
+            .collect();
+        for profile in &profiles {
+            let size = profile.size();
+            if !(size.is_finite() && size > MIN_SIZE) {
+                return Err(invalid(format!(
+                    "{} must be more than {MIN_SIZE} m, not {size}",
+                    profile.noun()
+                )));
+            }
+        }
+        self.bevel_changes(instance, edges, profiles)
+    }
+
+    /// Bevels `edges` (see `chamfer_edges`), edge `i` with `profiles[i]`; on an error nothing
+    /// changes.
     fn bevel_changes(
         &mut self,
         instance: Option<EntityId>,
         edges: &[EntityId],
-        profile: Profile,
-        sizes: Option<&[f64]>,
+        profiles: Vec<Profile>,
     ) -> Result<SceneChange, CommandError> {
         if edges.is_empty() {
             return Err(invalid("edges must name at least 1 edge"));
-        }
-        let (noun, plural) = match profile {
-            Profile::Chamfer { .. } => ("distance", "distances"),
-            Profile::Fillet { .. } => ("radius", "radii"),
-        };
-        if let Some(sizes) = sizes {
-            if sizes.len() != edges.len() {
-                return Err(invalid(format!(
-                    "{plural} must have one value for each of the {} edges, not {}",
-                    edges.len(),
-                    sizes.len()
-                )));
-            }
-            if let Some(bad) = sizes.iter().find(|s| !(s.is_finite() && **s > MIN_SIZE)) {
-                return Err(invalid(format!(
-                    "{noun} must be more than {MIN_SIZE} m, not {bad}"
-                )));
-            }
         }
         let (mesh, owner) = match instance {
             None => (self.active(), None),
@@ -100,7 +167,7 @@ impl Document {
         let m = self.scene.mesh(mesh).expect("the mesh exists");
         let mut seen = BTreeSet::new();
         let mut ids: Vec<EdgeId> = Vec::new();
-        let mut each: Vec<(EdgeId, f64)> = Vec::new();
+        let mut each: Vec<(EdgeId, Profile)> = Vec::new();
         let mut missing = Vec::new();
         for (at, id) in edges.iter().enumerate() {
             let EntityId::Edge(e) = *id else {
@@ -122,7 +189,7 @@ impl Document {
                 return Err(invalid(format!("{id} is named twice")).with_ids(vec![*id]));
             }
             ids.push(e);
-            each.push((e, sizes.map_or(profile.size(), |s| s[at])));
+            each.push((e, profiles[at]));
         }
         if !missing.is_empty() {
             return Err(match owner {
@@ -138,7 +205,7 @@ impl Document {
             });
         }
         self.scene
-            .bevel_edges_each(mesh, &each, profile)
+            .bevel_edges_mixed(mesh, &each)
             .map_err(|e| match e {
                 BevelError::NotSolid(why) => {
                     invalid(format!("the open context is not a solid: {why}"))

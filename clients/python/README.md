@@ -83,8 +83,9 @@ m.render("out.png", 1600, 1000, camera={"eye": [1, -1, 0.8], "target": [0.2, 0.1
   `sweep(points, radius | profile, inner_radius, closed)`, `spring(...)`.
   The profile helpers draw in the open context and group the result, so they merge with loose
   geometry they touch there: keep parts in groups (every helper here returns one).
-- Solids: `union`, `subtract(target, tools)`, `intersect`; `Instance.fillet` and `chamfer` on
-  edge ids from `Instance.edges(where)`.
+- Solids: `union`, `subtract(target, tools)`, `intersect`; `Instance.fillet`, `chamfer` and
+  `bevel(edges, sizes, kinds)` (a round or a chamfer for each edge, in one call) on edge ids
+  from `Instance.edges(where)`.
 - Instances: `move`, `rotate`, `set_transform`, `apply(t)` (on top of the current transform),
   `transform()`, `copy(offset, count)`, `polar(axis, angle, copies, origin)` (a radial array),
   `clone()` (a group copy with a definition of its own), `paint`, `hide`, `name`, `section`.

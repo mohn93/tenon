@@ -279,6 +279,7 @@ fn describe_lists_methods_and_schemas() {
         "make_solid",
         "chamfer_edges",
         "fillet_edges",
+        "bevel_edges",
         "paste",
         "new",
         "open",

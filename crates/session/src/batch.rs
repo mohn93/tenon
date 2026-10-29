@@ -360,7 +360,10 @@ fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
                 | ("definition", Some("rename_definition" | "place_instance"))
                 | ("path", Some("open_path" | "follow_me" | "copy_along_path"))
                 | ("target" | "tools", Some("solid_subtract" | "solid_trim"))
-                | ("instance" | "edges", Some("chamfer_edges" | "fillet_edges"))
+                | (
+                    "instance" | "edges",
+                    Some("chamfer_edges" | "fillet_edges" | "bevel_edges")
+                )
                 | (
                     "a" | "b",
                     Some("add_dimension" | "solid_split" | "add_joint")
@@ -903,6 +906,9 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
             instance, edges, ..
         }
         | Command::FilletEdges {
+            instance, edges, ..
+        }
+        | Command::BevelEdges {
             instance, edges, ..
         } => match instance {
             Some(instance) => {

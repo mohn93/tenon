@@ -361,6 +361,18 @@ class ModelTests(unittest.TestCase):
         other.chamfer(upright, 0.05)
         self.assertAlmostEqual(self.client.query("solid", id=other.id)["volume"], 1 - 4 * 0.00125, places=9)
 
+    def test_bevel_rounds_and_chamfers_in_one_call(self):
+        box = self.m.box((9, 0, 0), (1, 1, 1))
+        tops = box.edges(lambda a, b: a[2] > 0.99 and b[2] > 0.99)
+        self.assertEqual(len(tops), 4)
+        box.bevel(tops, [0.1] * 4, ["round", "chamfer", "round", "chamfer"], segments=4)
+        self.assertTrue(self.solid(box))
+        volume = self.client.query("solid", id=box.id)["volume"]
+        self.assertLess(volume, 1.0)
+        self.assertGreater(volume, 1.0 - 4 * 0.005)
+        with self.assertRaises(Exception):
+            box.bevel(tops, [0.1], ["round"])
+
     def test_section_clone_polar_and_cut(self):
         box = self.m.box((0, 0, 0), (1, 1, 1))
         box.apply(Transform.translate(5, 0, 0) @ Transform.axis_angle((0, 0, 1), 90))
