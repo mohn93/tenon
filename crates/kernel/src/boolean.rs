@@ -289,8 +289,29 @@ fn outer_shells(m: &Model) -> Result<Model, BooleanError> {
     Ok(subset(m, &faces))
 }
 
+/// Pairs of `shells` of `m` where one lies inside the other (a void in its solid, a part
+/// floating in a void), either way round.
+pub(crate) fn nested_shells(m: &Model, shells: &[Vec<FaceId>]) -> Vec<[usize; 2]> {
+    let parts: Vec<Model> = shells.iter().map(|faces| subset(m, faces)).collect();
+    let mut pairs = Vec::new();
+    for (i, faces) in shells.iter().enumerate() {
+        let Some(p) = faces
+            .iter()
+            .find_map(|f| interior_point(m, *f).map(|p| (p, m.face(*f).expect("face").normal)))
+        else {
+            continue;
+        };
+        for (j, other) in parts.iter().enumerate() {
+            if i != j && classify(p.0, p.1, other) == Some(Class::Inside) {
+                pairs.push([i, j]);
+            }
+        }
+    }
+    pairs
+}
+
 /// The faces of `m` grouped into shells: faces joined across the edges of their loops.
-fn shells_of(m: &Model) -> Vec<Vec<FaceId>> {
+pub(crate) fn shells_of(m: &Model) -> Vec<Vec<FaceId>> {
     let ids: Vec<FaceId> = m.faces().map(|(id, _)| id).collect();
     let at: HashMap<FaceId, usize> = ids.iter().enumerate().map(|(i, f)| (*f, i)).collect();
     let mut parent: Vec<usize> = (0..ids.len()).collect();
