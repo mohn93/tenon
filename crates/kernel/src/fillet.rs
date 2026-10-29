@@ -262,8 +262,9 @@ pub fn bevelled(m: &Model, edges: &[EdgeId], profile: Profile) -> Result<Model, 
 }
 
 /// As [`bevelled`], with the distance or radius of each edge given (the profile's own size is
-/// not used). Rounds of different radii meeting at a vertex keep their crossed cuts there (no
-/// sphere patch), which is still a closed solid; chamfers at a trihedral corner close with a
+/// not used). Three convex rounds of different radii at a trihedral vertex get a star-shaped
+/// patch (see `corner`; a corner it cannot build keeps its crossed rounds, still a closed
+/// solid); chamfers at a trihedral corner close with a
 /// flat triangle when no distance there is more than the other two together (else the corner
 /// stays crossed). Sizes within `SNAP` of each other are made equal (the first of each group,
 /// in ascending order), so nearly equal radii get the same corner as equal ones.
@@ -272,6 +273,15 @@ pub fn bevelled_each(
     edges: &[(EdgeId, f64)],
     profile: Profile,
 ) -> Result<Model, BevelError> {
+    bevel_core(m, edges, profile).map(|(acc, _)| acc)
+}
+
+/// [`bevelled_each`] and the corners of `m` that got a patch.
+fn bevel_core(
+    m: &Model,
+    edges: &[(EdgeId, f64)],
+    profile: Profile,
+) -> Result<(Model, Vec<VertexId>), BevelError> {
     let noun = profile.noun();
     for (_, size) in edges {
         if !(size.is_finite() && *size > MIN_SIZE) {
@@ -401,7 +411,8 @@ pub fn bevelled_each(
         let step = std::f64::consts::FRAC_PI_2 / segments as f64;
         corner::soften(&mut acc, &corners, &done, step);
     }
-    Ok(acc)
+    let patched = done.iter().map(|i| corners[*i].vertex).collect();
+    Ok((acc, patched))
 }
 
 /// Where a fillet's surface lies, to soften the edges along it.
@@ -2185,7 +2196,7 @@ mod tests {
             assert!(has_vertex(&r, p), "{p:?}");
         }
         assert!(r.faces().any(|(_, f)| f.outer.len() == 3));
-        // Rounds of 0.3, 0.3 and 0.5 have no common ball: crossed rounds, closed, no patch.
+        // Rounds of 0.3, 0.3 and 0.5 have no common ball: a ringed patch, not the sphere.
         let sized: Vec<(EdgeId, f64)> = edges.iter().copied().zip([0.3, 0.3, 0.5]).collect();
         let r = bevelled_each(&m, &sized, fillet(0.1)).unwrap();
         closed(&r);
@@ -2230,5 +2241,85 @@ mod tests {
         // Two edges, not at a corner.
         let two = [(edges[0], 0.3), (edges[1], 0.30001)];
         closed(&bevelled_each(&m, &two, fillet(0.1)).unwrap());
+    }
+
+    #[test]
+    fn corners_of_three_different_radii_get_a_ringed_patch() {
+        let mut shapes: Vec<(String, Model, f64)> = vec![
+            ("box".into(), cuboid([2.0, 3.0, 4.0]), 1.0),
+            ("small box".into(), cuboid([1.0, 1.0, 1.0]), 0.5),
+        ];
+        for sides in [3, 5, 6] {
+            let p = Solid::prism(1.0, 2.0, sides, 0.0).unwrap().to_model();
+            shapes.push((format!("{sides}-sided prism"), p, 0.3));
+        }
+        for shear in [0.1, 0.5] {
+            shapes.push((format!("shear {shear}"), sheared_box(2.0, shear), 1.0));
+        }
+        for (name, m, scale) in &shapes {
+            let ids: Vec<EdgeId> = m
+                .edges()
+                .filter(|(_, e)| !e.soft && e.curve.is_none_or(|_| e.polygon))
+                .map(|(id, _)| id)
+                .collect();
+            // Radii 0.1, 0.15 and 0.2 in turn, so most corners meet three different ones.
+            let sized: Vec<(EdgeId, f64)> = ids
+                .iter()
+                .enumerate()
+                .map(|(i, e)| (*e, [0.1, 0.15, 0.2][i % 3] * scale))
+                .collect();
+            let (out, patched) = bevel_core(m, &sized, fillet(0.1)).unwrap();
+            closed(&out);
+            let corners = m.vertices().count();
+            // A corner may keep its crossed rounds (the hexagonal prism has one that does).
+            assert!(
+                patched.len() + 1 >= corners,
+                "{name}: {} of {corners}",
+                patched.len()
+            );
+            assert!(signed_volume(&out) < signed_volume(m), "{name}");
+            // No hard edge between two curved faces near a corner, except at a corner that
+            // kept its crossed rounds.
+            let flat = |n: DVec3| m.faces().any(|(_, f)| f.normal.dot(n) > 1.0 - 1e-9);
+            let mut hard = 0;
+            for (_, e) in out.edges() {
+                let (p, q) = (out.pos(e.v[0]), out.pos(e.v[1]));
+                let near = m.vertices().any(|(_, v)| {
+                    v.pos.distance(p) < 0.5 * scale && v.pos.distance(q) < 0.5 * scale
+                });
+                let [f, g] = out.faces_on_side(e.v[0], e.v[1])[..] else {
+                    continue;
+                };
+                let (nf, ng) = (out.face(f).unwrap().normal, out.face(g).unwrap().normal);
+                if near && !e.soft && !flat(nf) && !flat(ng) {
+                    hard += 1;
+                }
+            }
+            assert!(
+                hard == 0 || patched.len() < corners,
+                "{name}: {hard} hard edges"
+            );
+        }
+    }
+
+    #[test]
+    fn a_corner_of_three_radii_lies_between_the_corners_of_the_least_and_most() {
+        let m = cuboid([2.0, 3.0, 4.0]);
+        let edges = [
+            edge_at(&m, [0.0, 0.0, 4.0], [2.0, 0.0, 4.0]),
+            edge_at(&m, [0.0, 0.0, 4.0], [0.0, 3.0, 4.0]),
+            edge_at(&m, [0.0, 0.0, 0.0], [0.0, 0.0, 4.0]),
+        ];
+        let of = |radii: [f64; 3]| {
+            let sized: Vec<(EdgeId, f64)> = edges.iter().copied().zip(radii).collect();
+            let (out, patched) = bevel_core(&m, &sized, fillet(0.1)).unwrap();
+            closed(&out);
+            (signed_volume(&out), patched.len())
+        };
+        let (small, _) = of([0.1; 3]);
+        let (large, _) = of([0.2; 3]);
+        let (mixed, patches) = of([0.1, 0.15, 0.2]);
+        assert_eq!(patches, 1);
+        assert!(large < mixed && mixed < small, "{large} {mixed} {small}");
     }
 }

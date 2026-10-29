@@ -19,9 +19,14 @@ after the edge cutters, falling back to the crossed result when it fails.
    cuts (closed solid, no patch): the ideal surface there is a toroidal blend, not worth building.
 3. **Mixed radii and round plus chamfer.** One call may carry per-edge sizes (`radii`,
    `distances`, optional lists parallel to `edges`; `radius` and `distance` stay the required
-   defaults). Corners whose three radii differ keep the crossed rounds (no common ball and the
-   tangent points on a face differ, so a blending patch needs a flat polygon on each face too:
-   deferred). A second call whose edge ends at faces that are not flat and coplanar is still
+   defaults). Convex corners whose three radii differ get a star-shaped patch (`patch_mixed`):
+   each arc ends at the furthest of the two crossings of its tangent line with the neighbours'
+   (as `flat`'s `meet`, with fillet setbacks), a straight segment on each face joins one arc's
+   end to the next arc's start, rings are slerped from the apex (about the mean of the arc
+   centres) to the boundary and clamped inside the faceted rounds and below the faces. The
+   cutter is the patch plus skirts (in the arc planes, square to the face over a segment) and a
+   cone cap, so it touches the solid only along new lines. `took`, `on_sphere` and `soften` use
+   the patch's own vertex list. Concave corners of different radii keep the crossed cuts. A second call whose edge ends at faces that are not flat and coplanar is still
    refused. Round plus chamfer stays two calls.
 4. **Crash.** `vector_area` summed cross products of absolute positions: for a 0.02 m face at
    offset 1e5 the cancellation left a zero normal, `triangle_vertices` then fed NaN coordinates

@@ -790,10 +790,19 @@ radius, the corner is a concave sphere piece: the same patch built as a filler, 
 `radius` in the empty corner tangent to the three faces. A corner of concave and convex rounds
 (an L's inside corner where the cove meets the rounded edges beside it) keeps the crossed cuts:
 a closed solid, but no patch. `radii`, when given, is a list with one radius per entry of
-`edges` (same order, each more than 0.000001 m) in place of `radius`: the rounds have their own
-radii, and a corner whose three rounds differ in radius has no common ball, so it keeps the
-crossed rounds (closed, with a pinch where the cylinders cross, no patch); a corner whose radii
-are all equal still gets its sphere. A mix of chamfers and rounds at a corner comes from
+`edges` (same order, each more than 0.000001 m) in place of `radius`, and must match the expanded
+edge count when `edges` holds a batch reference such as `"$0:e*"`; radii within 0.0001 m of each
+other are made equal. A corner whose three convex rounds have different radii has no common ball:
+each round's end arc is cut at its own depth along its edge (the furthest of the two places its
+tangent line crosses the neighbours'), a straight segment across each face joins one arc's end to
+the next arc's start (each face loses a small corner triangle), and the patch is a star-shaped
+fill about the mean of the three arc centres, in concentric rings clamped inside the faceted
+rounds and below the faces. The patch is smooth with the rounds along its arcs (soft edges) but
+may crease up to about a facet step where it meets a face's segment. On a box, prisms with 3, 5
+and 6 sides and sheared boxes with radii 0.1, 0.15 and 0.2 in turn every corner got its patch
+except one corner of the hexagonal prism, which kept the crossed rounds (closed, a pinch where
+the cylinders cross); a corner whose radii are all equal still gets its sphere, and concave
+corners of different radii keep the crossed cuts. A mix of chamfers and rounds at a corner comes from
 separate calls, which stay closed solids (the second call's edges run into the first's rounds
 without a patch), and a second call whose edge ends at faces that are not flat and coplanar
 (beside an earlier round) is refused ("ends at v12, where the other faces do not lie in one

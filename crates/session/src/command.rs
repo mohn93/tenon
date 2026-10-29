@@ -1249,9 +1249,9 @@ pub enum Command {
     /// from the edge, `angle` the angle between the faces inside the solid (for a concave
     /// edge, outside it). Everything else is as `chamfer_edges`, with that setback in place of
     /// the distance. `radii`, when given, has one radius per edge (same order as `edges`) in
-    /// place of `radius`, which stays the required default; where rounds of different radii
-    /// meet at a corner the crossed rounds stay (still a closed solid), and three concave
-    /// rounds of one radius meeting at a vertex of three faces get a concave sphere piece.
+    /// place of `radius`, which stays the required default; three convex rounds of different
+    /// radii at a vertex of three faces get a ringed patch between their end arcs, and three
+    /// concave rounds of one radius get a concave sphere piece.
     FilletEdges {
         #[serde(default)]
         instance: Option<EntityId>,
