@@ -461,12 +461,11 @@ impl Document {
                 .collect();
             for (mesh, now) in contexts {
                 let want = stored.active.get(&mesh).copied();
-                if want != now {
-                    changes.push(
-                        self.scene
-                            .set_active_section(mesh, want)
-                            .expect("activating a plane the scene checked exists"),
-                    );
+                if want != now
+                    // A plane that is gone (a file edited by hand) is skipped.
+                    && let Ok(change) = self.scene.set_active_section(mesh, want)
+                {
+                    changes.push(change);
                 }
             }
             let d = &mut self.section_display;

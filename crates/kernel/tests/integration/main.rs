@@ -34,6 +34,7 @@ mod pages;
 mod perf;
 mod push_pull;
 mod scale;
+mod section_rooms;
 mod sections;
 mod smooth;
 mod soften;

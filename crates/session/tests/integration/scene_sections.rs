@@ -355,3 +355,88 @@ fn a_render_frame_of_a_scene_has_its_planes_active() {
     // The document itself is untouched.
     assert_eq!(active_in_context(&d), Some(r.root_b));
 }
+
+fn inner_planes_stored(d: &Document, s: &str) -> usize {
+    ask(d, json!({"type": "scene", "scene": s}))["sections"]["active"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| !p["context"].is_null())
+        .count()
+}
+
+#[test]
+fn exploding_or_erasing_a_group_drops_its_plane_from_the_scene() {
+    for how in ["explode", "erase"] {
+        let mut d = doc();
+        let r = rig(&mut d);
+        let s = scene_id(&ok(&mut d, json!({"type": "add_scene", "sections": true})));
+        assert_eq!(inner_planes_stored(&d, &s), 1);
+        ok(&mut d, json!({"type": how, "ids": [r.group]}));
+        assert_eq!(inner_planes_stored(&d, &s), 0, "{how}");
+        // Going to it does not fail.
+        ok(&mut d, json!({"type": "go_to_scene", "scene": s}));
+        while inner_planes_stored(&d, &s) == 0 {
+            ok(&mut d, json!({"type": "undo"}));
+        }
+        assert_eq!(inner_planes_stored(&d, &s), 1, "{how} undone");
+    }
+}
+
+#[test]
+fn purging_a_definition_drops_its_plane_from_the_scene() {
+    let mut d = doc();
+    let r = rig(&mut d);
+    ok(
+        &mut d,
+        json!({"type": "make_component", "ids": [r.group], "name": "C"}),
+    );
+    let inst = ask(&d, json!({"type": "outliner"}))["instances"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let s = scene_id(&ok(&mut d, json!({"type": "add_scene", "sections": true})));
+    assert!(inner_planes_stored(&d, &s) >= 1);
+    ok(&mut d, json!({"type": "erase", "ids": [inst]}));
+    ok(&mut d, json!({"type": "purge_definitions"}));
+    assert_eq!(inner_planes_stored(&d, &s), 0);
+    while inner_planes_stored(&d, &s) == 0 {
+        ok(&mut d, json!({"type": "undo"}));
+    }
+}
+
+#[test]
+fn a_file_whose_scene_stores_a_missing_plane_is_refused() {
+    use std::io::Write;
+    let mut d = doc();
+    let _ = rig(&mut d);
+    ok(&mut d, json!({"type": "add_scene", "sections": true}));
+    let path = scratch("missing.tnn");
+    ok(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    );
+    let mut v = stored(&path);
+    v["model"]["pages"][0]["sections"]["active"][0]["plane"] = json!(99999);
+    let bad = scratch("missing-bad.tnn");
+    let mut zin = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+    let mut zout = zip::ZipWriter::new(std::fs::File::create(&bad).unwrap());
+    let opts = zip::write::SimpleFileOptions::default();
+    for i in 0..zin.len() {
+        let mut f = zin.by_index(i).unwrap();
+        let name = f.name().unwrap().to_string();
+        zout.start_file(&name, opts).unwrap();
+        if name == "document.json" {
+            zout.write_all(v.to_string().as_bytes()).unwrap();
+        } else {
+            std::io::copy(&mut f, &mut zout).unwrap();
+        }
+    }
+    zout.finish().unwrap();
+    let mut e = doc();
+    let err = run(
+        &mut e,
+        json!({"type": "open", "path": bad.to_str().unwrap()}),
+    );
+    assert!(err.is_err(), "{err:?}");
+}
