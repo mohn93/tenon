@@ -293,9 +293,9 @@ GLOWS = {
     "crown2": ("Glow, crown blue", ((170, 190, 215), 0, 1), ((130, 190, 255), 7, 1)),
     "spire": ("Glow, spire", ((222, 226, 232), 0, 1), ((255, 252, 240), 10, 1)),
     "led": ("Khalifa light fins", ((206, 214, 226), 0, 1), ((170, 212, 255), 6, 1)),
-    "jet2": ("Fountain mist", ((236, 244, 250), 0, 0.3), ((190, 224, 255), 4, 0.38)),
+    "jet2": ("Fountain mist", ((250, 252, 255), 0.4, 0.55), ((196, 226, 255), 1.6, 0.6)),
     "star": ("Star", ((200, 220, 255), 0, 0.0), ((235, 240, 255), 9, 1)),
-    "jet": ("Fountain jet", ((236, 244, 250), 0, 0.55), ((190, 224, 255), 6, 0.7)),
+    "jet": ("Fountain jet", ((252, 253, 255), 0.55, 0.78), ((205, 232, 255), 2.2, 0.8)),
     "tail": ("Glow, tail light", ((120, 20, 20), 0, 1), ((255, 40, 30), 5, 1)),
     "head": ("Glow, headlight", ((222, 222, 214), 0, 1), ((255, 248, 220), 8, 1)),
     "sail": ("Glow, sail", ((246, 244, 238), 0, 0.96), ((120, 150, 255), 3.6, 0.96)),
@@ -1274,14 +1274,14 @@ class Parts:
         self.d["foam"] = b.comp("foam", lambda: [b.box((-1.6, -0.35, 0), (1.6, 0.35, 0.1), M["foam"], "Surf")])
         self.d["star"] = b.comp("star", lambda: [b.box((-0.5, -0.5, -0.5), (0.5, 0.5, 0.5), M["star"], "Star")])
 
-        def plume():
-            # one unit high, scaled up: a tapered translucent column over a brighter core, widening to a soft head
-            # of mist, with a low skirt of spray round the foot
-            return [b.cone((0, 0, 0), 1.0, 0.8, M["jet2"], "Plume column", top=0.55, seg=10),
-                    b.cone((0, 0, 0), 0.55, 1.0, M["jet"], "Plume core", top=0.15, seg=8),
-                    b.sph((0, 0, 0.92), 0.8, M["jet2"], "Plume head", seg=8),
-                    b.sph((0, 0, 0.1), 1.5, M["jet2"], "Plume skirt", seg=8)]
-        self.d["plume"] = b.comp("plume", plume)
+        # the fountain's water: a thin tapered column (one unit high, one wide at its foot, scaled to the jet),
+        # a short tube for the arched jets (placed along each piece of the arch), a puff of spray and a
+        # low ring of foam where a jet lands
+        self.d["jetcol"] = b.comp("jetcol", lambda: [b.cone((0, 0, 0), 1.0, 1.0, M["jet"], "Water jet", top=0.5, seg=8)])
+        self.d["jetseg"] = b.comp("jetseg", lambda: [b.cone((0, 0, 0), 1.0, 1.0, M["jet"], "Water arch", top=0.92, seg=6)])
+        self.d["puff"] = b.comp("puff", lambda: [b.sph((0, 0, 0), 1.0, M["jet2"], "Spray", seg=6)])
+        self.d["spray"] = b.comp("spray", lambda: [b.cone((0, 0, 0), 0.3, 1.0, M["jet2"], "Spray", top=1.0, seg=8)])
+        self.d["splash"] = b.comp("splash", lambda: [b.cone((0, 0, 0), 1.0, 0.45, M["jet2"], "Splash", top=0.35, seg=10)])
 
         def cabin():
             return [b.box((-1.3, -1.0, -1.4), (1.3, 1.0, 1.4), M["cabin"], "Cabin"),
@@ -1812,6 +1812,80 @@ class Dubai:
 
     # -- Downtown -----------------------------------------------------------------------
 
+    def fountain(self, lcx, lcy):
+        """The lake's fountain: curving rows of thin jets that rise and fall in waves, arched jets thrown
+        across the rows, and the tall jets in the middle, each tipped with a puff of spray."""
+        b, P, rng = self.b, self.P, self.rng
+        z0 = 0.42
+
+        def tube(p0, p1, r):
+            """A piece of arch from ``p0`` to ``p1``, ``r`` wide (placed with its axis along the piece)."""
+            # a little past the end, so the joint between two pieces is hidden
+            p1 = tuple(a + 1.18 * (b - a) for a, b in zip(p0, p1))
+            ax = (p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2])
+            ln = math.sqrt(ax[0] ** 2 + ax[1] ** 2 + ax[2] ** 2)
+            w = (ax[0] / ln, ax[1] / ln, ax[2] / ln)
+            ref = (0, 0, 1) if abs(w[2]) < 0.9 else (1, 0, 0)
+            u = (w[1] * ref[2] - w[2] * ref[1], w[2] * ref[0] - w[0] * ref[2], w[0] * ref[1] - w[1] * ref[0])
+            un = math.sqrt(sum(c * c for c in u))
+            u = tuple(c / un for c in u)
+            v = (w[1] * u[2] - w[2] * u[1], w[2] * u[0] - w[0] * u[2], w[0] * u[1] - w[1] * u[0])
+            b.add(type="place_instance", definition=P.d["jetseg"],
+                  transform={"origin": [round(c, 3) for c in p0], "x_axis": [round(r * c, 4) for c in u],
+                             "y_axis": [round(r * c, 4) for c in v], "z_axis": [round(ln * c, 4) for c in w]})
+
+        def column(x, y, h, r, lean=(0.0, 0.0)):
+            b.place(P.d["jetcol"], x, y, z0, s=r, sz=h, lean=lean)
+            # the water breaks into a few puffs of spray over its top
+            rr = max(0.9, 0.05 * h)
+            for j, (f, k, w) in enumerate(((0.80, 0.9, 1.0), (0.92, 0.8, -1.0), (1.0, 1.1, 0.6))):
+                q = h * f
+                b.place(P.d["puff"], x + lean[0] * q + 0.5 * rr * w, y + lean[1] * q - 0.3 * rr * w, z0 + q,
+                        s=rr * k, sz=rr * k * 1.5)
+            b.place(P.d["splash"], x, y, z0, s=r * 3.0 + 1.2, sz=1.4)
+
+        def arch(x0, y0, x1, y1, apex, r, n=11):
+            pts = []
+            for i in range(n + 1):
+                t = i / n
+                pts.append((x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, z0 + 4 * apex * t * (1 - t) + (0.2 if 0 < i < n else 0)))
+            for i in range(n):
+                tube(pts[i], pts[i + 1], r * (1.0 - 0.25 * i / n))
+            b.place(P.d["puff"], pts[n][0], pts[n][1], z0 + 0.5, s=r * 2.2 + 0.7, sz=r * 1.2 + 0.5)
+            b.place(P.d["splash"], x0, y0, z0, s=r * 3.0 + 1.4, sz=1.4)
+
+        nx = 21 if not self.q else 7
+        rows = (-84, -42, 0, 42, 84)
+        for ri, off in enumerate(rows):
+            amp = 24 - 6 * abs(ri - 2)
+            pts = []
+            for k in range(nx):
+                u = k / (nx - 1)
+                x = lcx - 230 + u * 460
+                y = lcy + off * (1 - 0.35 * (2 * u - 1) ** 2) + amp * math.sin(u * 5.0 + ri * 0.9)
+                pts.append((x, y, u))
+            for k in range(nx - 1):
+                (x0, y0, u), (x1, y1, _) = pts[k], pts[k + 1]
+                crest = 0.5 + 0.5 * math.sin(u * 9.0 + ri * 1.7) ** 2
+                mid = 1.0 - 0.5 * abs(2 * u - 1)
+                h = 9 + 24 * crest * mid + rng.uniform(-1.5, 1.5)
+                # the jet leaves one nozzle and lands at the next, so the rows read as chains of arches
+                arch(x0, y0, x1, y1, h, 0.55 + 0.012 * h)
+                if (k + ri) % 3 == 0:
+                    column(x0, y0, 8 + 22 * crest * mid, 0.5 + 0.01 * h)
+        # the tall jets in the middle
+        for k, hh in enumerate((58, 84, 70, 96, 66, 52)):
+            x = lcx - 105 + k * 42
+            y = lcy + 9 * math.sin(k * 1.3)
+            column(x, y, hh, 1.5 + 0.012 * hh)
+            for sgn in (-1, 1):
+                column(x + 3, y + sgn * 7, hh * 0.58, 1.0, lean=(0.0, sgn * 0.16))
+        # long arches across the middle of the lake
+        for k in range(3 if not self.q else 1):
+            x = lcx - 150 + k * 150
+            arch(x, lcy - 90, x + 30, lcy - 20, 40 + 10 * k, 1.1, n=10)
+            arch(x + 40, lcy + 90, x + 10, lcy + 20, 36 + 10 * k, 1.1, n=10)
+
     def downtown(self):
         b, M, rng, P = self.b, self.M, self.rng, self.P
         kx, ky = KHALIFA
@@ -1824,20 +1898,7 @@ class Dubai:
         b.poly(ellipse(lcx, lcy, 290, 136, n=72, wob=0.045, phase=0.5), 0.2, M["plaza"], "Promenade")
         b.poly(ellipse(lcx, lcy, 276, 124, n=72, wob=0.045, phase=0.5), 0.3, M["quay"], "Lake wall")
         b.poly(lake, 0.42, M["lake"], "Burj Lake")
-        # the fountain: a line of plumes along the lake, two flanks leaning outwards, and the big jets
-        nx = 30 if not self.q else 8
-        for k in range(nx):
-            x = lcx - 210 + k * (420.0 / (nx - 1))
-            h = 14 + 22 * abs(math.sin(k * 0.5)) + (8 if k % 5 == 0 else 0)
-            b.place(P.d["plume"], x, lcy + 12 * math.sin(k * 0.3), 0.42, s=0.17 * h, sz=h)
-            for sgn in (-1, 1):
-                if k % 2 == (0 if sgn > 0 else 1):
-                    h2 = 8 + 3 * (k % 3)
-                    b.place(P.d["plume"], x, lcy + sgn * 34, 0.42, s=0.15 * h2, sz=h2, lean=(0, -sgn * 0.55))
-                    h3 = 5 + 2 * (k % 4)
-                    b.place(P.d["plume"], x + 3, lcy + sgn * 58, 0.42, s=0.15 * h3, sz=h3, lean=(0, -sgn * 0.7))
-        for k, hh in enumerate((55, 78, 66, 84, 60, 50)):
-            b.place(P.d["plume"], lcx - 100 + k * 40, lcy + 6, 0.42, s=0.16 * hh, sz=hh)
+        self.fountain(lcx, lcy)
         # the Address Downtown and the towers round the lake
         pool = P.tower_pool((110, 170, 230), 2 if self.q else 3, name="Downtown")
         address = dict(kind="box", w=34, d=34, h=302, glass="gl_silver", band="bandw", fin="steelw", crown="lantern", fh=4.0,
