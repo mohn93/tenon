@@ -1,4 +1,5 @@
-//! Dimensions and text of a 2021+ file.
+//! Dimensions and text of a 2021+ file (the 2017-2020 container's are read in `legacy.rs`
+//! into the same `RawAnnotation`s, sharing `linear_offset`).
 //!
 //! Layouts measured on the corpus's files (SketchUp's own tag names, `tags.rs`): 13 linear
 //! dimensions in `Untitled.skp` and the 3 text labels of the tutorial.
@@ -9,7 +10,7 @@
 //!     DimensionPtRef1 / DimensionPtRef2 -> PointRef,
 //!     DimensionNormal      3 x f64   the plane's normal,
 //!     DimensionXAxis       3 x f64   in the plane, opposite to start -> end in every sample,
-//!     DimensionType        u32       1 in every sample,
+//!     DimensionType        u32       0 aligned, 1 horizontal (every 2021+ sample), 2 vertical,
 //!     DimensionYPos        f64       the dimension line's distance from the measured points,
 //!     DimensionXPos        f64       0 in every sample (the text along the line),
 //!     DimensionTextPos     u32       3 in every sample }
@@ -26,9 +27,13 @@
 //! the position left at zero; it is resolved here for a vertex or a guide point of the same
 //! component (an empty instance list) and is otherwise unread. Other types are unread.
 //!
-//! The dimension line is the measured segment moved by `YPos * (normal x x_axis)`: in the
-//! samples this puts the line above a top edge and below a floor edge, where a dimension is
-//! drawn, and the other sign would put it inside the wall.
+//! The dimension line is the measured segment moved by `YPos` along a direction set by
+//! `DimensionType` (`linear_offset`): `normal x x_axis` for a horizontal dimension, which is
+//! every dimension of `Untitled.skp` (it puts the line above a top edge and below a floor
+//! edge, where a dimension is drawn, and the other sign would put it inside the wall). The
+//! vertical and aligned types are measured on a 2017 file's 26 dimensions
+//! (`capilla_quiroz_v17.skp`; the 2017-2020 container stores the same fields) and no 2021+
+//! file has one.
 //!
 //! Not read, and counted instead (no file with one is in the corpus, so their layouts are not
 //! established): radial dimensions (`ComponentDimensionsRadial`; the arc, the leader position
@@ -145,17 +150,66 @@ fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     ]
 }
 
+/// The vector from a linear dimension's measured segment to its dimension line, in inches
+/// (both containers store the same fields): `y_pos` along a direction that depends on the
+/// dimension's type, with `y_axis = normal x x_axis`.
+///
+/// ```text
+/// 0 aligned      the segment's own perpendicular in the plane, normal x (end - start)
+/// 1 horizontal   y_axis   (the segment runs along x_axis)
+/// 2 vertical     normal x y_axis = -x_axis   (the segment runs along y_axis)
+/// ```
+///
+/// Measured on `capilla_quiroz_v17.skp` (SketchUp 2017, 26 dimensions on an elevation, every
+/// type): with these signs every dimension line lies outside the building (above the roof
+/// line, below the base, beside the end walls, beyond the roof slopes); the other sign of any
+/// type would put it inside. A horizontal or vertical dimension whose segment is not parallel
+/// to its axis (SketchUp measures its projection, which a dimension here cannot) and a type
+/// not known give `None`.
+pub(crate) fn linear_offset(
+    kind: u32,
+    normal: [f64; 3],
+    x_axis: [f64; 3],
+    y_pos: f64,
+    start: [f64; 3],
+    end: [f64; 3],
+) -> Option<[f64; 3]> {
+    let norm = |v: [f64; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    let d = [end[0] - start[0], end[1] - start[1], end[2] - start[2]];
+    let y_axis = cross(normal, x_axis);
+    let parallel = |axis: [f64; 3]| norm(cross(d, axis)) <= 1e-4 * norm(d) * norm(axis);
+    let dir = match kind {
+        0 => {
+            let p = cross(normal, d);
+            let (pl, dl) = (norm(p), norm(d));
+            if !(pl > 1e-6 * dl) {
+                return None;
+            }
+            [p[0] / pl, p[1] / pl, p[2] / pl]
+        }
+        1 if parallel(x_axis) => y_axis,
+        2 if parallel(y_axis) => cross(normal, y_axis),
+        _ => return None,
+    };
+    let offset = [dir[0] * y_pos, dir[1] * y_pos, dir[2] * y_pos];
+    finite3(offset).then_some(offset)
+}
+
 fn linear(rec: &Record, g: &DefGeometry, points: &[(u64, [f64; 3])]) -> Option<RawAnnotation> {
     let start = point_of(&rec.child(t::DIMENSION_PT_REF1)?, g, points)?;
     let end = point_of(&rec.child(t::DIMENSION_PT_REF2)?, g, points)?;
     let normal = rec.child(t::DIMENSION_NORMAL)?.vec3_at(0).ok()?;
     let x_axis = rec.child(t::DIMENSION_X_AXIS)?.vec3_at(0).ok()?;
     let y_pos = rec.child(t::DIMENSION_Y_POS)?.f64_at(0).ok()?;
-    let y_axis = cross(normal, x_axis);
-    let offset = [y_axis[0] * y_pos, y_axis[1] * y_pos, y_axis[2] * y_pos];
-    if !(finite3(start) && finite3(end) && finite3(offset)) {
+    // A record without a type is a horizontal one, as every sample is.
+    let kind = rec
+        .child(t::DIMENSION_TYPE)
+        .and_then(|k| k.u32_at(0).ok())
+        .unwrap_or(1);
+    if !(finite3(start) && finite3(end)) {
         return None;
     }
+    let offset = linear_offset(kind, normal, x_axis, y_pos, start, end)?;
     let base = rec.child(t::DIMENSION);
     let custom_text = base
         .as_ref()
@@ -405,6 +459,32 @@ mod tests {
             panic!()
         };
         assert!(custom_text);
+    }
+
+    #[test]
+    fn dimension_types_set_the_offset_direction() {
+        let n = [0.0, 1.0, 0.0];
+        let x = [-1.0, 0.0, 0.0];
+        // y_axis = n x x = +z.
+        let off = |kind, y, a: [f64; 3], b: [f64; 3]| linear_offset(kind, n, x, y, a, b);
+        assert_eq!(
+            off(1, 2.0, [0.0; 3], [-5.0, 0.0, 0.0]),
+            Some([0.0, 0.0, 2.0])
+        );
+        // Vertical: beside the segment, along -x_axis.
+        assert_eq!(
+            off(2, 3.0, [0.0; 3], [0.0, 0.0, -5.0]),
+            Some([3.0, 0.0, 0.0])
+        );
+        // Aligned: n x (end - start), unit length.
+        let o = off(0, 2.0, [0.0; 3], [3.0, 0.0, 4.0]).unwrap();
+        assert!((o[0] - 1.6).abs() < 1e-12 && o[1] == 0.0 && (o[2] + 1.2).abs() < 1e-12);
+        // A horizontal or vertical segment off its axis, a zero aligned one, an unknown type.
+        assert_eq!(off(1, 2.0, [0.0; 3], [-5.0, 0.0, 1.0]), None);
+        assert_eq!(off(2, 2.0, [0.0; 3], [1.0, 0.0, -5.0]), None);
+        assert_eq!(off(0, 2.0, [1.0; 3], [1.0; 3]), None);
+        assert_eq!(off(3, 2.0, [0.0; 3], [-5.0, 0.0, 0.0]), None);
+        assert_eq!(off(1, f64::NAN, [0.0; 3], [-5.0, 0.0, 0.0]), None);
     }
 
     #[test]

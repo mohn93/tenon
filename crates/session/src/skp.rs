@@ -87,10 +87,7 @@ pub(crate) struct SkpNotes {
     pub lost_entities: usize,
     /// Faces of a 2017-2020 file read short of their holes.
     pub faces_short: usize,
-    /// Dimensions and text labels of a 2017-2020 file, which are not imported (their records
-    /// are skipped, not read).
-    pub annotations: usize,
-    /// Radial dimensions of a 2021+ file: not imported (their layout is not established).
+    /// Radial dimensions of a 2021+ file (a 2017-2020 file's are not recognised): not imported (their layout is not established).
     pub radial_dimensions: usize,
     /// Text of a 2021+ file with no pushpin leader (screen text, view-based leaders): not
     /// imported.
@@ -167,11 +164,6 @@ impl SkpNotes {
                 "tags past the {MAX_IMPORT_TAGS} an import may add were left off; what is on \
                  them is Untagged"
             ),
-        );
-        say(
-            self.annotations,
-            "dimension or text label was not imported",
-            "dimensions and text labels were not imported",
         );
         say(
             self.radial_dimensions,
@@ -348,7 +340,6 @@ pub(crate) fn read_skp(
         faces_short: stats
             .as_ref()
             .map_or(0, |s| saturate(s.faces_short_of_exact)),
-        annotations: stats.as_ref().map_or(0, |s| saturate(s.annotations)),
         ..SkpNotes::default()
     };
 
