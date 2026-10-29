@@ -510,6 +510,12 @@ fn make_unique_gives_the_copy_the_scenes_stored_plane_too() {
 
     ok(&mut d, json!({"type": "make_unique", "ids": [second]}));
     assert_eq!(inner_planes_stored(&d, &s), 2, "the copy's plane is stored");
+    // One undo takes the make_unique and the stored plane back together.
+    ok(&mut d, json!({"type": "undo"}));
+    assert_eq!(inner_planes_stored(&d, &s), 1);
+    assert_eq!(instances_and_their_planes(&mut d).len(), 2);
+    ok(&mut d, json!({"type": "redo"}));
+    assert_eq!(inner_planes_stored(&d, &s), 2);
     // Deactivate every inner plane, then go to the scene: both instances are cut again.
     deactivate_inner(&mut d);
     assert!(
@@ -541,13 +547,4 @@ fn make_unique_gives_the_copy_the_scenes_stored_plane_too() {
             .iter()
             .all(|p| p.1.is_some())
     );
-
-    // Undo takes the make_unique and the stored plane back in one step.
-    ok(&mut d, json!({"type": "undo"}));
-    while inner_planes_stored(&d, &s) == 2 {
-        ok(&mut d, json!({"type": "undo"}));
-    }
-    assert_eq!(inner_planes_stored(&d, &s), 1);
-    ok(&mut d, json!({"type": "redo"}));
-    assert_eq!(inner_planes_stored(&d, &s), 2);
 }
