@@ -49,6 +49,42 @@ const CAMERA_TEMPLATE: [u8; 176] = [
     0, 0, 0, 0, 0, 240, 63, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
+/// The scaffold's rendering-options block after its model camera: a page repeats it after
+/// its own camera (209 bytes, the model's current options).
+const PAGE_OPTIONS: std::ops::Range<usize> = 3163..3163 + 209;
+/// The scaffold's `CSkpStyle` record after its GUID, up to the next record: name,
+/// description and settings. A page holds a copy of the model's style.
+const PAGE_STYLE_BODY: std::ops::Range<usize> = 4040..4898;
+/// The scaffold's geographic location (the save time, city, country, latitude, longitude and
+/// time zone) through the thumbnail size, which a page repeats.
+const PAGE_GEO: std::ops::Range<usize> = 3521..3627;
+/// The three identity matrices after the geographic block (axes, in the scaffold).
+const PAGE_AXES: std::ops::Range<usize> = 3643..3746;
+const PAGE_SCHEMA: u16 = 15;
+const STYLE_SCHEMA: u16 = 2;
+
+/// What `Archive::page` writes of one scene.
+pub(crate) struct PageRecord<'a> {
+    pub name: &'a str,
+    /// The capture flags: `0x1ff` restores everything SketchUp's own pages do, less the
+    /// camera bit when the scene stores no view.
+    pub flags: u32,
+    /// Eye, target, up (inches), the vertical field of view (degrees), the view's height at
+    /// the target for parallel projection (inches), and whether it is a perspective camera.
+    pub eye: [f64; 3],
+    pub target: [f64; 3],
+    pub up: [f64; 3],
+    pub fov_deg: f64,
+    pub height: f64,
+    pub perspective: bool,
+    /// The slots of the hidden tags' layers.
+    pub hidden_slots: &'a [u16],
+    /// The style record's GUID.
+    pub guid: [u8; 16],
+    /// The thumbnail PNG.
+    pub thumbnail: &'a [u8],
+}
+
 /// The side of a face's texture mapping that is not positioned.
 const IDENTITY_UV: [f64; 9] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
 
@@ -579,5 +615,50 @@ impl Archive {
         self.f64s(&position);
         self.f64s(&[0.0; 3]);
         self.u8(0);
+    }
+
+    /// A `CViewPage` (a scene) as SketchUp writes one: the entity preamble, name,
+    /// description and capture flags; the camera; the rendering options; a `CSkpStyle` (a new
+    /// object for every page; the first declares the class); the geographic block; the axes
+    /// matrices; the hidden-layer list; and the thumbnail. Returns the page's slot.
+    pub(crate) fn page(&mut self, p: &PageRecord) -> u32 {
+        let scaffold = crate::SCAFFOLD;
+        let slot = self.new_of_class("CViewPage", PAGE_SCHEMA);
+        self.preamble();
+        self.string(p.name);
+        self.string("");
+        self.u32(p.flags);
+        self.new_of_prefix_class(CAMERA_SLOT);
+        self.f64s(&p.eye);
+        self.f64s(&p.target);
+        self.f64s(&p.up);
+        self.f64(1.0);
+        self.f64(1000.0);
+        self.u8(p.perspective as u8);
+        self.f64(p.fov_deg);
+        self.f64(p.height);
+        self.bytes(&CAMERA_TEMPLATE[105..]);
+        self.bytes(&scaffold[PAGE_OPTIONS]);
+        self.new_of_class("CSkpStyle", STYLE_SCHEMA);
+        self.preamble();
+        self.bytes(&p.guid);
+        self.bytes(&scaffold[PAGE_STYLE_BODY]);
+        self.bytes(&scaffold[PAGE_GEO]);
+        self.bytes(&[0; 8]);
+        self.bytes(&scaffold[PAGE_AXES]);
+        self.u8(1);
+        self.u32(0);
+        self.u32(p.hidden_slots.len() as u32);
+        for s in p.hidden_slots {
+            self.u16(*s);
+        }
+        self.u32(0);
+        self.u8(1);
+        self.f64(-1.0);
+        self.f64(-1.0);
+        self.bytes(&[0, 0, 1, 1, 1]);
+        self.u32(p.thumbnail.len() as u32);
+        self.bytes(p.thumbnail);
+        slot
     }
 }

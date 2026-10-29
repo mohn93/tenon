@@ -791,6 +791,142 @@ mod craft {
         pub guides: Option<u64>,
         /// The file's scenes, in tab order.
         pub pages: Vec<Page>,
+        /// Dimensions and text in the root, and in every definition.
+        pub root_annotations: Vec<Ann>,
+        pub def_annotations: Vec<Ann>,
+    }
+
+    /// Where an annotation's point is: free, or on the entity with this pid.
+    #[derive(Clone, Copy)]
+    pub enum Spot {
+        Free([f64; 3]),
+        Entity(u64),
+    }
+
+    /// A dimension or text label as a file states it, in inches.
+    #[derive(Clone)]
+    pub enum Ann {
+        /// A linear dimension; its line is `y_pos` along normal x x-axis, `(-1,0,0)` x
+        /// `(0,-1,0)` = z.
+        Linear {
+            a: Spot,
+            b: Spot,
+            y_pos: f64,
+            text: &'static str,
+            hidden: bool,
+            layer: Option<u64>,
+        },
+        /// A label: leader type 2 is a pushpin leader, 0 screen text, 1 a view-based one.
+        Leader {
+            at: Spot,
+            vector: [f64; 3],
+            text: &'static str,
+            leader_type: u32,
+            layer: Option<u64>,
+        },
+        /// A radial dimension (a record the importer does not read).
+        Radial,
+    }
+
+    fn spot(s: Spot, tag: u16) -> Vec<u8> {
+        let (kind, p, path) = match s {
+            Spot::Free(p) => (1u32, p, Vec::new()),
+            Spot::Entity(pid) => (
+                3,
+                [0.0; 3],
+                rec(
+                    t::POINT_REF_INSTANCE_PATH,
+                    &rec(
+                        t::INSTANCE_PATH,
+                        &[
+                            id(t::INSTANCE_PATH_LEAF_PID_REF, pid),
+                            rec(t::INSTANCE_PATH_INSTANCE_PID_REFS, &[]),
+                        ]
+                        .concat(),
+                    ),
+                ),
+            ),
+        };
+        rec(
+            tag,
+            &rec(
+                t::POINT_REF,
+                &[
+                    rec(t::POINT_REF_TYPE, &kind.to_le_bytes()),
+                    rec(t::POINT_REF_POINT, &doubles(&p)),
+                    path,
+                ]
+                .concat(),
+            ),
+        )
+    }
+
+    fn element(layer: Option<u64>, hidden: bool) -> Vec<u8> {
+        let mut body = rec(t::ENTITY, &id(t::ENTITY_PID, 9_000));
+        body.extend(layer_ref(layer));
+        body.extend(rec(t::DRAWING_ELEMENT_FLAGS, &[if hidden { 7 } else { 6 }]));
+        rec(t::DRAWING_ELEMENT, &body)
+    }
+
+    /// The component's dimension and text lists (only those there are records for).
+    fn annotation_lists(anns: &[Ann]) -> Vec<u8> {
+        let (mut linear, mut radial, mut texts) = (Vec::new(), Vec::new(), Vec::new());
+        for a in anns {
+            match a {
+                Ann::Linear {
+                    a,
+                    b,
+                    y_pos,
+                    text,
+                    hidden,
+                    layer,
+                } => {
+                    let mut body = rec(
+                        t::DIMENSION,
+                        &[
+                            element(*layer, *hidden),
+                            rec(t::DIMENSION_TEXT, text.as_bytes()),
+                        ]
+                        .concat(),
+                    );
+                    body.extend(spot(*a, t::DIMENSION_PT_REF1));
+                    body.extend(spot(*b, t::DIMENSION_PT_REF2));
+                    body.extend(rec(t::DIMENSION_NORMAL, &doubles(&[-1.0, 0.0, 0.0])));
+                    body.extend(rec(t::DIMENSION_X_AXIS, &doubles(&[0.0, -1.0, 0.0])));
+                    body.extend(rec(t::DIMENSION_TYPE, &1u32.to_le_bytes()));
+                    body.extend(rec(t::DIMENSION_Y_POS, &doubles(&[*y_pos])));
+                    body.extend(rec(t::DIMENSION_X_POS, &doubles(&[0.0])));
+                    body.extend(rec(t::DIMENSION_TEXT_POS, &3u32.to_le_bytes()));
+                    linear.extend(rec(t::DIMENSION_LINEAR, &body));
+                }
+                Ann::Radial => radial.extend(rec(t::DIMENSION_RADIAL, &[])),
+                Ann::Leader {
+                    at,
+                    vector,
+                    text,
+                    leader_type,
+                    layer,
+                } => {
+                    let mut body = element(*layer, false);
+                    body.extend(rec(t::TEXT_STRING, text.as_bytes()));
+                    body.extend(spot(*at, t::TEXT_LEADER_POINT_REF));
+                    body.extend(rec(t::TEXT_LEADER_VEC, &doubles(vector)));
+                    body.extend(rec(t::TEXT_LEADER_TYPE, &leader_type.to_le_bytes()));
+                    texts.extend(rec(t::TEXT, &body));
+                }
+            }
+        }
+        let mut out = Vec::new();
+        if !linear.is_empty() {
+            out.extend(rec(t::COMPONENT_DIMENSIONS_LINEAR, &linear));
+        }
+        if !radial.is_empty() {
+            out.extend(rec(t::COMPONENT_DIMENSIONS_RADIAL, &radial));
+        }
+        if !texts.is_empty() {
+            out.extend(rec(t::COMPONENT_TEXTS, &texts));
+        }
+        out
     }
 
     /// A scene as a file states it: its name, its flags (`None`: no flags record), its
@@ -997,6 +1133,7 @@ mod craft {
             component.extend(edge(layering.edge));
             component.extend(instances(places, None));
             component.extend(guide_lists(guides, None));
+            component.extend(annotation_lists(&layering.def_annotations));
             let mut d = rec(t::COMPONENT, &component);
             d.extend(rec(
                 t::COMPONENT_DEFINITION_NAME,
@@ -1010,6 +1147,7 @@ mod craft {
         );
         let mut root = instances(root, layering.instances);
         root.extend(guide_lists(root_guides, layering.guides));
+        root.extend(annotation_lists(&layering.root_annotations));
         let root = rec(t::SKETCH_UP_MODEL_ROOT, &rec(t::COMPONENT, &root));
         let mut list = Vec::new();
         for (pid, name) in materials {
@@ -1875,11 +2013,21 @@ fn corpus_tutorial_tags() {
     assert_eq!(want.iter().filter(|t| !t.2).count(), 6, "{want:?}");
     assert!(want.iter().any(|t| t.3 > 0), "{want:?}");
 
+    // The 2017-2020 copies give the same tags, but not the tutorial's three text labels (one
+    // on "Scene 04", two on "Scene 05"), which a tag's count includes.
+    let mut want_legacy = want.clone();
+    for t in &mut want_legacy {
+        match t.0.as_str() {
+            "Scene 04" => t.3 -= 1,
+            "Scene 05" => t.3 -= 2,
+            _ => {}
+        }
+    }
     for year in 2017..=2020 {
         let (d, _) = open(&dir.join(format!("../legacy_out/tutorial01_v{year}.skp")));
         let got = summary(&d);
         println!("{year}: {got:?}");
-        assert_eq!(got, want, "{year}");
+        assert_eq!(got, want_legacy, "{year}");
     }
 
     let mut d = d;
@@ -1892,7 +2040,8 @@ fn corpus_tutorial_tags() {
     .unwrap();
     println!("exported: {}", out["export"]);
     let (back, _) = open(&path);
-    assert_eq!(summary(&back), want);
+    // Notes are not written to a SketchUp file.
+    assert_eq!(summary(&back), want_legacy);
 }
 
 #[test]
@@ -2052,8 +2201,12 @@ fn scenes_import_with_their_cameras_and_hidden_tags() {
     d.scene().validate().unwrap();
     let report = &r["import"];
     assert_eq!(report["scenes"], 4, "{report}");
-    assert!(
-        !warnings(report).iter().any(|w| w.contains("scene")),
+    // "Front" hides Layer0, which is no tag: the only thing said.
+    assert_eq!(
+        warnings(report),
+        [
+            "1 hidden tag of a scene is not in the model (Layer0, or past the tag limit); the scene shows it"
+        ],
         "{report}"
     );
     assert_eq!(scene_names(&d), ["Front", "Plan", "Tags only", "Nothing"]);
@@ -2337,7 +2490,7 @@ fn opening_a_file_with_scenes_keeps_them() {
 }
 
 /// The tutorial's twelve scenes each show their own tags (a tag named "Scene 02" is shown
-/// only on the second scene); its 2017-2020 copies keep the warning. `SKP_CORPUS` must be an
+/// only on the second scene); its 2017-2020 copies give the same scenes. `SKP_CORPUS` must be an
 /// absolute path (the files are opened by path, not from the test's directory).
 #[test]
 #[ignore = "needs a local corpus in SKP_CORPUS (an absolute path)"]
@@ -2386,6 +2539,11 @@ fn corpus_tutorial_scenes() {
     assert_eq!(shown("Scene 7"), ["Scene 04-12", "Scene 07"]);
     assert_eq!(shown("Scene 12"), ["Scene 04-12"]);
 
+    let want: Vec<(String, Vec<String>)> = (1..=12)
+        .map(|n| (format!("Scene {n}"), shown(&format!("Scene {n}"))))
+        .collect();
+    let want_eye = scene_by_name(&d, "Scene 1")["view"]["eye"].clone();
+
     // Going to the second scene shows its tags.
     let id = scene_by_name(&d, "Scene 2")["id"].clone();
     run(&mut d, json!({"type": "go_to_scene", "scene": id})).unwrap();
@@ -2396,6 +2554,7 @@ fn corpus_tutorial_scenes() {
         .collect();
     assert_eq!(visible.len(), 2, "{visible:?}");
 
+    // The 2017-2020 copies give the same twelve scenes, each showing the same tags.
     for year in 2017..=2020 {
         let path = dir.join(format!("../legacy_out/tutorial01_v{year}.skp"));
         let mut d = doc();
@@ -2404,12 +2563,33 @@ fn corpus_tutorial_scenes() {
             json!({"type": "import", "path": path.to_str().unwrap()}),
         )
         .unwrap();
+        d.scene().validate().unwrap();
+        assert_eq!(r["import"]["scenes"], 12, "{year}: {}", r["import"]);
         assert!(
-            warnings(&r["import"]).contains(&"12 scenes were not imported".to_string()),
+            !warnings(&r["import"]).iter().any(|w| w.contains("scene")),
             "{year}: {}",
             r["import"]
         );
-        assert!(scene_list(&d).is_empty(), "{year}");
+        for (name, tags) in &want {
+            let s = scene_by_name(&d, name);
+            let hidden: Vec<Value> = s["hidden_tags"].as_array().unwrap().clone();
+            let mut shown: Vec<String> = tags_of(&d)
+                .iter()
+                .filter(|t| !hidden.contains(&t["id"]))
+                .map(|t| t["name"].as_str().unwrap().to_string())
+                .collect();
+            shown.sort();
+            assert_eq!(&shown, tags, "{year} {name}");
+        }
+        assert_near(
+            &scene_by_name(&d, "Scene 1")["view"]["eye"],
+            [
+                want_eye[0].as_f64().unwrap(),
+                want_eye[1].as_f64().unwrap(),
+                want_eye[2].as_f64().unwrap(),
+            ],
+            1e-6,
+        );
     }
 }
 
@@ -2508,4 +2688,417 @@ fn opening_a_legacy_file_sets_the_display_unit_too() {
     )
     .unwrap();
     assert_eq!(d.units(), session::Units::default());
+}
+
+// -- dimensions and text (2021+ files) ---------------------------------------------------
+
+/// A crafted 2023 file with layer "Notes" (pid 500) and one definition, a one-inch edge from
+/// (0,0,0) (vertex pid 1) to (1,0,0) (vertex pid 2), placed once by the root. Its dimensions
+/// and text (see the assertions) are in the definition; the root has one dimension and one
+/// note of its own (on the layer "Notes").
+fn annotations_file() -> Vec<u8> {
+    use craft::{Ann, Layering, Spot, file_with_layers, scaled};
+    let linear = |a, b, y_pos, text, hidden| Ann::Linear {
+        a,
+        b,
+        y_pos,
+        text,
+        hidden,
+        layer: None,
+    };
+    let leader = |at, vector, text, leader_type| Ann::Leader {
+        at,
+        vector,
+        text,
+        leader_type,
+        layer: None,
+    };
+    let free = Spot::Free;
+    let layering = Layering {
+        layers: vec![(500, "Notes".to_string(), false)],
+        def_annotations: vec![
+            // Between the edge's vertices, by pid, 2 inches below.
+            linear(Spot::Entity(1), Spot::Entity(2), -2.0, "", false),
+            // Free points that are the vertices (and its own text).
+            linear(free([0.0; 3]), free([1.0, 0.0, 0.0]), 1.0, "5'", false),
+            // Free points away from any vertex.
+            linear(free([0.0, 0.0, 5.0]), free([1.0, 0.0, 5.0]), 1.0, "", false),
+            // Hidden.
+            linear(free([0.0; 3]), free([0.0, 3.0, 0.0]), 1.0, "", true),
+            // Leaders: on a vertex by pid, free with automatic text, screen text, a
+            // view-based leader, a radial dimension, and a leader on a pid the component
+            // lacks.
+            leader(Spot::Entity(2), [0.0, 0.0, 2.0], "Hello", 2),
+            leader(free([5.0, 5.0, 5.0]), [1.0, 0.0, 0.0], "", 2),
+            leader(free([0.0; 3]), [0.0; 3], "Screen", 0),
+            leader(free([0.0; 3]), [0.0; 3], "View", 1),
+            Ann::Radial,
+            leader(Spot::Entity(77), [0.0; 3], "Lost", 2),
+        ],
+        root_annotations: vec![
+            Ann::Linear {
+                a: free([0.0; 3]),
+                b: free([0.0, 1.0, 0.0]),
+                y_pos: -1.0,
+                text: "",
+                hidden: false,
+                layer: Some(500),
+            },
+            Ann::Leader {
+                at: free([1.0, 1.0, 0.0]),
+                vector: [0.0, 0.0, 1.0],
+                text: "Root",
+                leader_type: 2,
+                layer: Some(500),
+            },
+        ],
+        ..Layering::default()
+    };
+    file_with_layers(
+        &[(vec![], vec![])],
+        &[(0, scaled(1.0, 0.0), None)],
+        &[],
+        &layering,
+    )
+}
+
+fn assert_vec(got: glam::DVec3, want: [f64; 3]) {
+    let got = got.to_array();
+    for i in 0..3 {
+        assert!((got[i] - want[i]).abs() < 1e-12, "{got:?} != {want:?}");
+    }
+}
+
+#[test]
+fn dimensions_and_text_import_anchored_where_they_meet_vertices() {
+    use kernel::{Anchor, Dimension, Note};
+    let mut d = doc();
+    let path = write("annotations.skp", &annotations_file());
+    let r = run(
+        &mut d,
+        json!({"type": "import", "path": path, "as": "context"}),
+    )
+    .unwrap();
+    d.scene().validate().unwrap();
+    let report = &r["import"];
+    assert_eq!(report["dimensions"], 4, "{report}");
+    assert_eq!(report["notes"], 3, "{report}");
+    let said = warnings(report);
+    for w in [
+        "1 radial dimension was not imported",
+        "2 text labels without a pushpin leader (screen text) were not imported",
+        "1 hidden dimension or text label was not imported",
+        "1 dimension or text label could not be read and was skipped",
+        "1 dimension's own text was not kept; it shows its length",
+    ] {
+        assert!(said.contains(&w.to_string()), "{w}: {report}");
+    }
+
+    // The definition's own: three dimensions and two notes.
+    let (_, def) = d.scene().definitions().next().unwrap();
+    let inch = 0.0254;
+    let verts: Vec<_> = def.mesh.vertices().map(|(id, v)| (id, v.pos)).collect();
+    assert_eq!(verts.len(), 2);
+    let at = |x: f64| {
+        verts
+            .iter()
+            .find(|(_, p)| (p.x - x * inch).abs() < 1e-12)
+            .unwrap()
+            .0
+    };
+    let dims: Vec<_> = def.mesh.dimensions().map(|(_, dim)| *dim).collect();
+    assert_eq!(dims.len(), 3, "{dims:?}");
+    let Dimension::Linear { a, b, offset, tag } = dims[0] else {
+        panic!()
+    };
+    assert_eq!((a, b), (Anchor::Vertex(at(0.0)), Anchor::Vertex(at(1.0))));
+    assert_vec(offset, [0.0, 0.0, -2.0 * inch]);
+    assert_eq!(tag, None);
+    let Dimension::Linear { a, b, offset, .. } = dims[1] else {
+        panic!()
+    };
+    assert_eq!((a, b), (Anchor::Vertex(at(0.0)), Anchor::Vertex(at(1.0))));
+    assert_vec(offset, [0.0, 0.0, 1.0 * inch]);
+    let Dimension::Linear { a, b, .. } = dims[2] else {
+        panic!()
+    };
+    let (Anchor::Point(a), Anchor::Point(b)) = (a, b) else {
+        panic!("{a:?} {b:?}")
+    };
+    assert_vec(a, [0.0, 0.0, 5.0 * inch]);
+    assert_vec(b, [1.0 * inch, 0.0, 5.0 * inch]);
+
+    let notes: Vec<_> = def.mesh.notes().map(|(_, n)| n.clone()).collect();
+    assert_eq!(notes.len(), 2, "{notes:?}");
+    let Note::Leader {
+        anchor,
+        position,
+        text,
+        ..
+    } = &notes[0]
+    else {
+        panic!()
+    };
+    assert_eq!(*anchor, Anchor::Vertex(at(1.0)));
+    assert_vec(*position, [1.0 * inch, 0.0, 2.0 * inch]);
+    assert_eq!(text.as_deref(), Some("Hello"));
+    let Note::Leader {
+        anchor,
+        position,
+        text,
+        ..
+    } = &notes[1]
+    else {
+        panic!()
+    };
+    assert!(matches!(anchor, Anchor::Point(_)));
+    assert_vec(*position, [6.0 * inch, 5.0 * inch, 5.0 * inch]);
+    assert_eq!(*text, None);
+
+    // The root's own (no vertices there): fixed points, on the tag the layer became.
+    let tag = d.scene().tags().next().unwrap().0;
+    let dims: Vec<_> = d.scene().root().dimensions().map(|(_, x)| *x).collect();
+    assert_eq!(dims.len(), 1);
+    let Dimension::Linear {
+        a, offset, tag: t, ..
+    } = dims[0]
+    else {
+        panic!()
+    };
+    assert!(matches!(a, Anchor::Point(_)));
+    // normal x x_axis = z; y_pos -1 inch.
+    assert_vec(offset, [0.0, 0.0, -inch]);
+    assert_eq!(t, Some(tag));
+    let notes: Vec<_> = d.scene().root().notes().map(|(_, n)| n.clone()).collect();
+    assert_eq!(notes.len(), 1);
+    assert!(
+        matches!(&notes[0], Note::Leader { tag: Some(t), text: Some(s), .. }
+        if *t == tag && s == "Root")
+    );
+
+    // One undo step takes the import, annotations included, back out.
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    assert!(d.scene().root().dimensions().next().is_none());
+    assert!(d.scene().root().notes().next().is_none());
+}
+
+#[test]
+fn imported_annotations_follow_the_scale() {
+    let mut d = doc();
+    let path = write("annotations-scaled.skp", &annotations_file());
+    run(
+        &mut d,
+        json!({"type": "import", "path": path, "as": "context", "scale": 2}),
+    )
+    .unwrap();
+    d.scene().validate().unwrap();
+    let kernel::Dimension::Linear { offset, .. } = *d.scene().root().dimensions().next().unwrap().1
+    else {
+        panic!()
+    };
+    assert_vec(offset, [0.0, 0.0, -2.0 * 0.0254]);
+}
+
+#[test]
+fn annotations_past_the_import_limit_are_left_off() {
+    use craft::{Ann, Layering, Spot, file_with_layers, scaled};
+    let many = (0..10_001)
+        .map(|k| Ann::Linear {
+            a: Spot::Free([0.0, 0.0, k as f64]),
+            b: Spot::Free([1.0, 0.0, k as f64]),
+            y_pos: 1.0,
+            text: "",
+            hidden: false,
+            layer: None,
+        })
+        .collect();
+    let bytes = file_with_layers(
+        &[(vec![], vec![])],
+        &[(0, scaled(1.0, 0.0), None)],
+        &[],
+        &Layering {
+            root_annotations: many,
+            ..Layering::default()
+        },
+    );
+    let (d, r, _) = import_timed("many-annotations.skp", &bytes);
+    let r = r.unwrap();
+    d.scene().validate().unwrap();
+    let report = &r["import"];
+    assert_eq!(report["dimensions"], 10_000, "{report}");
+    assert!(
+        warnings(report).contains(
+            &"1 dimension or text label past the 10000 an import may add was left off".to_string()
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn annotations_beyond_the_coordinate_limit_or_not_finite_are_skipped() {
+    use craft::{Ann, Layering, Spot, file_with_layers, scaled};
+    let dim = |x: f64, y_pos: f64| Ann::Linear {
+        a: Spot::Free([0.0; 3]),
+        b: Spot::Free([x, 0.0, 0.0]),
+        y_pos,
+        text: "",
+        hidden: false,
+        layer: None,
+    };
+    let bytes = file_with_layers(
+        &[(vec![], vec![])],
+        &[(0, scaled(1.0, 0.0), None)],
+        &[],
+        &Layering {
+            root_annotations: vec![
+                dim(1.0, 1.0),
+                // Past 1e6 m (1e6 / 0.0254 inches).
+                dim(1.0e8, 1.0),
+                // The line's offset past the limit.
+                dim(1.0, 1.0e8),
+                dim(f64::NAN, 1.0),
+                dim(1.0, f64::INFINITY),
+                Ann::Leader {
+                    at: Spot::Free([0.0; 3]),
+                    vector: [1.0e9, 0.0, 0.0],
+                    text: "far",
+                    leader_type: 2,
+                    layer: None,
+                },
+            ],
+            ..Layering::default()
+        },
+    );
+    let (d, r, _) = import_timed("annotations-limits.skp", &bytes);
+    let r = r.unwrap();
+    d.scene().validate().unwrap();
+    let report = &r["import"];
+    assert_eq!(report["dimensions"], 1, "{report}");
+    assert!(report.get("notes").is_none(), "{report}");
+    assert!(
+        warnings(report).contains(
+            &"5 dimensions and text labels could not be read and were skipped".to_string()
+        ),
+        "{report}"
+    );
+}
+
+/// The corpus's dimensions import: `Untitled.skp` has 13 (between free points), and the
+/// tutorial three labels.
+#[test]
+#[ignore = "needs a local corpus in SKP_CORPUS (an absolute path)"]
+fn corpus_annotations_import() {
+    let Some(dir) = std::env::var_os("SKP_CORPUS") else {
+        println!("SKP_CORPUS is not set; skipping");
+        return;
+    };
+    let dir = Path::new(&dir);
+    let mut d = doc();
+    let path = dir.join("openskp_fixtures/Untitled.skp");
+    let r = run(
+        &mut d,
+        json!({"type": "import", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    d.scene().validate().unwrap();
+    let report = &r["import"];
+    println!("{report}");
+    assert_eq!(report["dimensions"], 13, "{report}");
+    assert!(
+        !warnings(report).iter().any(|w| w.contains("dimension")),
+        "{report}"
+    );
+
+    let mut d = doc();
+    let path = dir.join("su2024/su007_Tutorial01_.skp");
+    let r = run(
+        &mut d,
+        json!({"type": "import", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    d.scene().validate().unwrap();
+    let report = &r["import"];
+    assert_eq!(report["notes"], 3, "{report}");
+}
+
+#[test]
+fn note_text_over_the_limits_is_shortened_and_counted() {
+    use craft::{Ann, Layering, Spot, file_with_layers, scaled};
+    let long: &'static str = "x".repeat(2000).leak();
+    let lines: &'static str = vec!["line"; 70].join("\n").leak();
+    let note = |text| Ann::Leader {
+        at: Spot::Free([0.0; 3]),
+        vector: [1.0, 0.0, 0.0],
+        text,
+        leader_type: 2,
+        layer: None,
+    };
+    let bytes = file_with_layers(
+        &[(vec![], vec![])],
+        &[(0, scaled(1.0, 0.0), None)],
+        &[],
+        &Layering {
+            root_annotations: vec![note(long), note(lines), note("fine")],
+            ..Layering::default()
+        },
+    );
+    let mut d = doc();
+    let path = write("long-notes.skp", &bytes);
+    let r = run(
+        &mut d,
+        json!({"type": "import", "path": path, "as": "context"}),
+    )
+    .unwrap();
+    d.scene().validate().unwrap();
+    let report = &r["import"];
+    assert_eq!(report["notes"], 3, "{report}");
+    assert!(
+        warnings(report).contains(&"2 notes' texts were shortened to the note limits".to_string()),
+        "{report}"
+    );
+    let texts: Vec<String> = d
+        .scene()
+        .root()
+        .notes()
+        .filter_map(|(_, n)| n.text().map(str::to_string))
+        .collect();
+    assert!(texts.iter().any(|t| t.chars().count() == 1024));
+    assert!(texts.iter().any(|t| t.lines().count() == 64));
+    assert!(texts.contains(&"fine".to_string()));
+}
+
+#[test]
+fn hidden_tags_that_are_not_in_the_model_are_counted() {
+    // Layer0 and a layer past the 1,024-tag limit, both hidden by one scene.
+    use craft::{Layering, Page, file_with_layers, scaled};
+    let mut layers = vec![(500, "Layer0".to_string(), false)];
+    layers.extend((0..1030).map(|k| (1000 + k as u64, format!("L{k}"), false)));
+    let bytes = file_with_layers(
+        &[(vec![], vec![])],
+        &[(0, scaled(1.0, 0.0), None)],
+        &[],
+        &Layering {
+            layers,
+            pages: vec![Page {
+                name: "Hides".into(),
+                flags: Some(0x20),
+                camera: None,
+                layers: vec![500, 1000 + 1029, 1000],
+            }],
+            ..Layering::default()
+        },
+    );
+    let (d, r, _) = import_timed("lost-hidden-tags.skp", &bytes);
+    let r = r.unwrap();
+    d.scene().validate().unwrap();
+    let report = &r["import"];
+    assert!(
+        warnings(report).contains(
+            &"2 hidden tags of scenes are not in the model (Layer0, or past the tag limit); the scenes show them"
+                .to_string()
+        ),
+        "{report}"
+    );
+    let hides = scene_by_name(&d, "Hides");
+    assert_eq!(hides["hidden_tags"].as_array().unwrap().len(), 1, "{hides}");
 }

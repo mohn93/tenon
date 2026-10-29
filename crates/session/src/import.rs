@@ -180,7 +180,7 @@ pub struct ImportReport {
     /// SketchUp: tags added, one per layer of the file but Layer0.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub tags: usize,
-    /// SketchUp: scenes added, one per scene of a SketchUp 2021 or newer file.
+    /// SketchUp: scenes added, one per scene of the file.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub scenes: usize,
     /// SketchUp: definitions made from the file's (each once, however often it is placed).
@@ -192,6 +192,12 @@ pub struct ImportReport {
     /// Guides made.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub guides: usize,
+    /// SketchUp 2021 and newer: linear dimensions made.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub dimensions: usize,
+    /// SketchUp 2021 and newer: leader notes made from the file's text.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub notes: usize,
     /// SketchUp: materials added with a texture.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub textures: usize,

@@ -661,29 +661,223 @@ fn warnings() {
     assert!(report.get("definitions").is_none(), "{report}");
 }
 
-#[test]
-fn scenes_are_not_written_and_say_so() {
-    let mut d = doc();
+fn unit_square(d: &mut Document) {
     run(
-        &mut d,
+        d,
         json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [1, 1, 0]}),
     )
     .unwrap();
-    run(&mut d, json!({"type": "add_scene"})).unwrap();
-    let report = export_to(&mut d, &scratch("one-scene.skp"));
+}
+
+fn scene_ids(d: &Document) -> Vec<(String, String)> {
+    ask(d, json!({"type": "scenes"}))["scenes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            (
+                s["id"].as_str().unwrap().to_string(),
+                s["name"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+/// A model with tags Walls and Roof and three scenes: "Front" (perspective, Roof hidden),
+/// "Plan" (parallel, nothing hidden) and "Tags only" (no view, Walls hidden).
+fn model_with_scenes() -> Document {
+    let mut d = doc();
+    unit_square(&mut d);
+    let tag = |d: &mut Document, name: &str| {
+        run(d, json!({"type": "add_tag", "name": name})).unwrap()["changes"]["tags"][0]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let walls = tag(&mut d, "Walls");
+    let roof = tag(&mut d, "Roof");
+    let visible = |d: &mut Document, t: &str, on: bool| {
+        run(d, json!({"type": "change_tag", "tag": t, "visible": on})).unwrap();
+    };
+    visible(&mut d, &roof, false);
+    run(
+        &mut d,
+        json!({"type": "set_camera", "eye": [3.0, -9.0, 4.0], "target": [0.5, 0.5, 0.0],
+               "up": [0.0, 0.0, 1.0], "fov_y_deg": 50, "projection": "perspective"}),
+    )
+    .unwrap();
+    run(&mut d, json!({"type": "add_scene", "name": "Front"})).unwrap();
+    visible(&mut d, &roof, true);
+    run(
+        &mut d,
+        json!({"type": "set_camera", "eye": [0.5, 0.5, 8.0], "target": [0.5, 0.5, 0.0],
+               "up": [0.0, 1.0, 0.0], "fov_y_deg": 30, "projection": "parallel"}),
+    )
+    .unwrap();
+    run(&mut d, json!({"type": "add_scene", "name": "Plan"})).unwrap();
+    visible(&mut d, &walls, false);
+    run(
+        &mut d,
+        json!({"type": "add_scene", "name": "Tags only", "camera": false}),
+    )
+    .unwrap();
+    d
+}
+
+#[test]
+fn scenes_are_written_and_read_back_by_the_importer() {
+    let mut d = model_with_scenes();
+    let path = scratch("scenes.skp");
+    let report = export_to(&mut d, &path);
+    assert_eq!(report["scenes"], 3, "{report}");
+    assert!(report.get("warnings").is_none(), "{report}");
+
+    // The file's own reader (the legacy path) sees the three pages.
+    let bytes = std::fs::read(&path).unwrap();
+    let src = skp::MemorySource::new(bytes);
+    let container = skp::Container::open(&src).unwrap();
+    let (_, index, _) =
+        skp::legacy::read_model_and_index(&src, &container, &skp::scene::ReadOptions::default())
+            .unwrap();
+    let names: Vec<&str> = index.scenes.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["Front", "Plan", "Tags only"]);
+    assert!(index.scenes[0].perspective && !index.scenes[1].perspective);
+    assert_eq!(index.scenes[2].flags & 1, 0);
+
+    // Importing it gives the same scenes: names, views and hidden tags.
+    let mut back = doc();
+    run(
+        &mut back,
+        json!({"type": "import", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    back.scene().validate().unwrap();
+    let tag_name = |d: &Document| -> BTreeMap<String, String> {
+        ask(d, json!({"type": "tags"}))["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| {
+                (
+                    t["id"].as_str().unwrap().to_string(),
+                    t["name"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    };
+    let (want, got) = (scene_ids(&d), scene_ids(&back));
     assert_eq!(
-        report["warnings"],
-        json!(["1 scene was not written"]),
+        want.iter().map(|s| &s.1).collect::<Vec<_>>(),
+        got.iter().map(|s| &s.1).collect::<Vec<_>>()
+    );
+    let (want_tags, got_tags) = (tag_name(&d), tag_name(&back));
+    for ((wid, name), (gid, _)) in want.iter().zip(&got) {
+        let w = ask(&d, json!({"type": "scene", "scene": wid}));
+        let g = ask(&back, json!({"type": "scene", "scene": gid}));
+        let hidden = |s: &Value, tags: &BTreeMap<String, String>| -> Vec<String> {
+            let mut h: Vec<String> = s["hidden_tags"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| tags[t.as_str().unwrap()].clone())
+                .collect();
+            h.sort();
+            h
+        };
+        assert_eq!(hidden(&w, &want_tags), hidden(&g, &got_tags), "{name}");
+        if w["view"].is_null() {
+            assert!(g["view"].is_null(), "{name}: {g}");
+            continue;
+        }
+        for key in ["eye", "target", "up"] {
+            for k in 0..3 {
+                let (a, b) = (
+                    w["view"][key][k].as_f64().unwrap(),
+                    g["view"][key][k].as_f64().unwrap(),
+                );
+                assert!((a - b).abs() < 1e-9, "{name} {key}: {a} != {b}");
+            }
+        }
+        let (a, b) = (
+            w["view"]["fov_y_deg"].as_f64().unwrap(),
+            g["view"]["fov_y_deg"].as_f64().unwrap(),
+        );
+        assert!((a - b).abs() < 1e-9, "{name} fov: {a} != {b}");
+        assert_eq!(w["view"]["projection"], g["view"]["projection"], "{name}");
+    }
+}
+
+#[test]
+fn scenes_alone_are_not_something_to_export() {
+    // Scenes alone are not content: an empty model is still refused.
+    let mut d = doc();
+    run(&mut d, json!({"type": "add_scene"})).unwrap();
+    let e = run(
+        &mut d,
+        json!({"type": "export", "path": scratch("empty-scenes.skp").to_str().unwrap()}),
+    )
+    .unwrap_err();
+    assert_eq!(e.0, ErrorKind::InvalidInput);
+}
+
+#[test]
+fn what_a_scene_holds_beyond_the_file_is_reported() {
+    let mut d = doc();
+    unit_square(&mut d);
+    // One scene with a night view, one with no tag visibility, one with stored positions.
+    run(&mut d, json!({"type": "set_lighting", "mode": "night"})).unwrap();
+    run(&mut d, json!({"type": "add_scene", "name": "Night"})).unwrap();
+    run(&mut d, json!({"type": "set_lighting", "mode": "day"})).unwrap();
+    run(
+        &mut d,
+        json!({"type": "add_scene", "name": "View only", "tags": false}),
+    )
+    .unwrap();
+    let report = export_to(&mut d, &scratch("held.skp"));
+    assert_eq!(report["scenes"], 2, "{report}");
+    let warnings = report["warnings"].as_array().unwrap().clone();
+    assert!(
+        warnings.contains(&json!(
+            "1 scene's lighting, shadow, style or display mode was not written"
+        )),
         "{report}"
     );
-    run(&mut d, json!({"type": "add_scene"})).unwrap();
-    run(&mut d, json!({"type": "add_scene"})).unwrap();
-    let report = export_to(&mut d, &scratch("three-scenes.skp"));
-    assert_eq!(
-        report["warnings"],
-        json!(["3 scenes were not written"]),
+    assert!(
+        warnings.contains(&json!(
+            "1 scene stores no tag visibility; it was written showing every tag"
+        )),
         "{report}"
     );
+}
+
+#[test]
+fn stored_positions_and_joints_are_reported() {
+    let mut d = doc();
+    unit_square(&mut d);
+    let ids = root_geometry(&d);
+    run(&mut d, json!({"type": "make_group", "ids": ids})).unwrap();
+    run(
+        &mut d,
+        json!({"type": "add_scene", "name": "Placed", "positions": true}),
+    )
+    .unwrap();
+    let report = export_to(&mut d, &scratch("positions.skp"));
+    let warnings = report["warnings"].as_array().unwrap().clone();
+    assert!(
+        warnings.contains(&json!(
+            "1 scene's instance positions were not written; SketchUp files cannot store them"
+        )),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_model_with_no_scenes_writes_none() {
+    let mut d = doc();
+    unit_square(&mut d);
+    let report = export_to(&mut d, &scratch("no-scenes.skp"));
+    assert!(report.get("scenes").is_none(), "{report}");
+    assert!(report.get("warnings").is_none(), "{report}");
 }
 
 #[test]
@@ -1060,4 +1254,69 @@ fn tags_round_trip() {
         tag_summary(&open(again.to_str().unwrap())),
         tag_summary(&back)
     );
+}
+
+/// The tutorial (twelve scenes, eight layers) imported from its 2017 copy, exported and
+/// imported again keeps its scenes: names, hidden tags (by name) and eyes.
+#[test]
+#[ignore = "needs a local corpus in SKP_CORPUS (an absolute path)"]
+fn corpus_tutorial_scenes_round_trip() {
+    let Some(dir) = std::env::var_os("SKP_CORPUS") else {
+        println!("SKP_CORPUS is not set; skipping");
+        return;
+    };
+    let source = PathBuf::from(dir).join("../legacy_out/tutorial01_v2017.skp");
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "import", "path": source.to_str().unwrap()}),
+    )
+    .unwrap();
+    let path = scratch("tutorial-scenes.skp");
+    let report = export_to(&mut d, &path);
+    assert_eq!(report["scenes"], 12, "{report}");
+    let mut back = doc();
+    run(
+        &mut back,
+        json!({"type": "import", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    back.scene().validate().unwrap();
+    let summary = |d: &Document| -> Vec<(String, Vec<String>, Value)> {
+        let tags: BTreeMap<String, String> = ask(d, json!({"type": "tags"}))["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| {
+                (
+                    t["id"].as_str().unwrap().to_string(),
+                    t["name"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        scene_ids(d)
+            .into_iter()
+            .map(|(id, name)| {
+                let s = ask(d, json!({"type": "scene", "scene": id}));
+                let mut hidden: Vec<String> = s["hidden_tags"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|t| tags[t.as_str().unwrap()].clone())
+                    .collect();
+                hidden.sort();
+                (name, hidden, s["view"]["eye"].clone())
+            })
+            .collect()
+    };
+    let (a, b) = (summary(&d), summary(&back));
+    assert_eq!(a.len(), 12);
+    for (x, y) in a.iter().zip(&b) {
+        assert_eq!(x.0, y.0);
+        assert_eq!(x.1, y.1, "{}", x.0);
+        for k in 0..3 {
+            let (p, q) = (x.2[k].as_f64().unwrap(), y.2[k].as_f64().unwrap());
+            assert!((p - q).abs() < 1e-9, "{}: {p} != {q}", x.0);
+        }
+    }
 }

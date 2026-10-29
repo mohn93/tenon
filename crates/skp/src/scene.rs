@@ -469,6 +469,19 @@ impl Model {
         self.geometries().map(|g| u64::from(g.unread_guides)).sum()
     }
 
+    /// What the annotation lists held that was not read, over the root and every definition
+    /// (2021+ files).
+    pub fn annotation_skips(&self) -> crate::annotations::AnnotationSkips {
+        let mut total = crate::annotations::AnnotationSkips::default();
+        for s in self.geometries().map(|g| g.annotation_skips) {
+            total.radial = total.radial.saturating_add(s.radial);
+            total.screen_text = total.screen_text.saturating_add(s.screen_text);
+            total.hidden = total.hidden.saturating_add(s.hidden);
+            total.unread = total.unread.saturating_add(s.unread);
+        }
+        total
+    }
+
     fn geometries(&self) -> impl Iterator<Item = &DefGeometry> {
         core::iter::once(&self.root).chain(self.definitions.iter().map(|d| &d.geom))
     }

@@ -323,6 +323,7 @@ fn textured_doc() -> Doc {
     Doc {
         materials,
         tags: Vec::new(),
+        pages: Vec::new(),
         definitions: Vec::new(),
         root: Geometry {
             vertices: more,
@@ -455,6 +456,7 @@ fn nested_doc() -> Doc {
             texture: None,
         }],
         tags: Vec::new(),
+        pages: Vec::new(),
         definitions: vec![b, a],
         root: Geometry {
             instances: vec![group([0.0, 0.0, 0.0]), group([100.0, 0.0, 0.0])],
@@ -603,6 +605,7 @@ fn a_guide_line_can_end_a_definition() {
     let doc = Doc {
         materials: Vec::new(),
         tags: Vec::new(),
+        pages: Vec::new(),
         definitions: vec![Definition {
             name: "Marked".into(),
             is_group: false,
@@ -700,6 +703,7 @@ fn many_entities_cross_the_slot_escape() {
     let doc = Doc {
         materials: Vec::new(),
         tags: Vec::new(),
+        pages: Vec::new(),
         definitions: vec![Definition {
             name: name.clone(),
             is_group: false,
