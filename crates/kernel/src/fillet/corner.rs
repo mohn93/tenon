@@ -172,6 +172,11 @@ fn patch(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3], concave: bool) -
 /// plain trihedral one.
 fn flat(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<Patch> {
     let distance = cuts.iter().map(|(_, c)| c.setback).fold(0.0, f64::max);
+    // A distance more than the other two together leaves the corner crossed.
+    let total: f64 = cuts.iter().map(|(_, c)| c.setback).sum();
+    if 2.0 * distance > total {
+        return None;
+    }
     let faces: Vec<FaceId> = m.faces_at(v).collect();
     if faces.len() != 3 || m.edges_at(v).len() != 3 {
         return None;

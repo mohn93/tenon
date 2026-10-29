@@ -12,8 +12,8 @@
 //! new faces take the first face's materials; the edges along a fillet (between its faces and
 //! where it meets the flat faces) are soft, so it is shaded as one smooth round. Where three
 //! fillets of convex edges meet at a vertex of three faces, `corner` trims the crossed rounds to
-//! a sphere patch; three chamfers close with a flat triangle. The result replaces the mesh's own geometry; faces and edges the cut did not
-//! touch keep their ids.
+//! a sphere patch; three chamfers close with a flat triangle. The result replaces the mesh's
+//! own geometry; faces and edges the cut did not touch keep their ids.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
@@ -35,6 +35,8 @@ pub const MIN_SIZE: f64 = 1e-6;
 pub const MAX_EDGES: usize = 1000;
 /// Faces whose normals are closer than this (degrees) are tangent: no edge to bevel.
 pub const MIN_ANGLE_DEG: f64 = 1.0;
+/// Sizes closer than this (meters) in one call are made equal.
+pub const SNAP: f64 = 1e-4;
 /// A fillet's faces per quarter turn by default, and the most allowed.
 pub const DEFAULT_SEGMENTS: u32 = 8;
 pub const MAX_SEGMENTS: u32 = 90;
@@ -262,7 +264,9 @@ pub fn bevelled(m: &Model, edges: &[EdgeId], profile: Profile) -> Result<Model, 
 /// As [`bevelled`], with the distance or radius of each edge given (the profile's own size is
 /// not used). Rounds of different radii meeting at a vertex keep their crossed cuts there (no
 /// sphere patch), which is still a closed solid; chamfers at a trihedral corner close with a
-/// flat triangle whatever their distances.
+/// flat triangle when no distance there is more than the other two together (else the corner
+/// stays crossed). Sizes within `SNAP` of each other are made equal (the first of each group,
+/// in ascending order), so nearly equal radii get the same corner as equal ones.
 pub fn bevelled_each(
     m: &Model,
     edges: &[(EdgeId, f64)],
@@ -300,6 +304,17 @@ pub fn bevelled_each(
     let mut by_edge: BTreeMap<EdgeId, f64> = BTreeMap::new();
     for (e, size) in edges {
         by_edge.entry(*e).or_insert(*size);
+    }
+    let mut sorted: Vec<f64> = by_edge.values().copied().collect();
+    sorted.sort_by(f64::total_cmp);
+    let mut groups: Vec<f64> = Vec::new();
+    for s in sorted {
+        if groups.last().is_none_or(|g| s - g > SNAP) {
+            groups.push(s);
+        }
+    }
+    for size in by_edge.values_mut() {
+        *size = *groups.iter().rev().find(|g| **g <= *size).expect("a group");
     }
     let edges: Vec<EdgeId> = by_edge.keys().copied().collect();
     let mut cuts = Vec::new();
@@ -2082,7 +2097,6 @@ mod tests {
                 for profile in [fillet(r), chamfer(r)] {
                     match bevelled(&m, &edges, profile) {
                         Ok(out) => closed(&out),
-                        // A radius near the 1e-6 tolerance may be refused, never a panic.
                         // A radius near the 1e-6 tolerance, or the boolean far from the origin
                         // (its precision), may be refused with an error; it must not panic.
                         Err(e) => assert!(r < 1e-4 || offset > 100.0, "{r} at {offset}: {e}"),
@@ -2189,5 +2203,32 @@ mod tests {
             bevelled_each(&m, &[(edges[0], 0.3), (edges[1], 0.0)], fillet(0.1)),
             Err(BevelError::Invalid(_))
         ));
+    }
+    #[test]
+    fn nearly_equal_sizes_are_made_equal() {
+        let m = cuboid([2.0, 3.0, 4.0]);
+        let edges = [
+            edge_at(&m, [0.0, 0.0, 4.0], [2.0, 0.0, 4.0]),
+            edge_at(&m, [0.0, 0.0, 4.0], [0.0, 3.0, 4.0]),
+            edge_at(&m, [0.0, 0.0, 0.0], [0.0, 0.0, 4.0]),
+        ];
+        for delta in [1e-8, 1e-6, 1e-5, 9e-5] {
+            let sized: Vec<(EdgeId, f64)> =
+                edges.iter().copied().zip([0.3, 0.3, 0.3 + delta]).collect();
+            let r =
+                bevelled_each(&m, &sized, fillet(0.1)).unwrap_or_else(|e| panic!("{delta}: {e}"));
+            closed(&r);
+            assert_eq!(
+                on_ball(&r, DVec3::new(0.3, 0.3, 3.7), 0.3).len(),
+                45,
+                "{delta}"
+            );
+            let r = bevelled_each(&m, &sized, chamfer(0.1)).unwrap();
+            closed(&r);
+            assert!(r.faces().any(|(_, f)| f.outer.len() == 3), "{delta}");
+        }
+        // Two edges, not at a corner.
+        let two = [(edges[0], 0.3), (edges[1], 0.30001)];
+        closed(&bevelled_each(&m, &two, fillet(0.1)).unwrap());
     }
 }

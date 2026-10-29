@@ -725,7 +725,10 @@ the three planes meeting in a point (a cone of empty space), as do corners of on
 edges and non-trihedral vertices. `distances`, when given, is a list with one distance per entry
 of `edges` (same order, each more than 0.000001 m) in place of `distance`, which stays required
 and is the default for the schema; the triangle's corners then follow each edge's own strip
-width. A list of another length is `invalid_input`.
+width, but only when no distance at the corner is larger than the other two together; otherwise
+the corner stays crossed (a closed solid, no triangle). Sizes within 0.0001 m of each other are
+made equal. A list of another length is `invalid_input`; with a batch reference such as `"$0:e*"`
+in `edges`, the list must match the expanded edge count.
 
 The geometry chamfered (the open context's faces, nested groups and components aside, or the
 instance's definition, which must have no nested ones) must be a solid (see the `solid` query);

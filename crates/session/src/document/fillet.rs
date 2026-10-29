@@ -61,11 +61,14 @@ impl Document {
         if edges.is_empty() {
             return Err(invalid("edges must name at least 1 edge"));
         }
-        let noun = profile.noun();
+        let (noun, plural) = match profile {
+            Profile::Chamfer { .. } => ("distance", "distances"),
+            Profile::Fillet { .. } => ("radius", "radii"),
+        };
         if let Some(sizes) = sizes {
             if sizes.len() != edges.len() {
                 return Err(invalid(format!(
-                    "{noun}s must have one value for each of the {} edges, not {}",
+                    "{plural} must have one value for each of the {} edges, not {}",
                     edges.len(),
                     sizes.len()
                 )));
@@ -99,7 +102,7 @@ impl Document {
         let mut ids: Vec<EdgeId> = Vec::new();
         let mut each: Vec<(EdgeId, f64)> = Vec::new();
         let mut missing = Vec::new();
-        for id in edges {
+        for (at, id) in edges.iter().enumerate() {
             let EntityId::Edge(e) = *id else {
                 if owner.is_none() && !self.exists(*id) {
                     if !missing.contains(id) {
@@ -119,7 +122,7 @@ impl Document {
                 return Err(invalid(format!("{id} is named twice")).with_ids(vec![*id]));
             }
             ids.push(e);
-            each.push((e, sizes.map_or(profile.size(), |s| s[ids.len() - 1])));
+            each.push((e, sizes.map_or(profile.size(), |s| s[at])));
         }
         if !missing.is_empty() {
             return Err(match owner {
