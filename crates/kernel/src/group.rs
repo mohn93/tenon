@@ -14,6 +14,9 @@ use crate::model::{Guide, Instance, Model, Op};
 use crate::scene::{DefinitionKind, MeshId, Parts, Scene, SceneChange, Step};
 use crate::transform::Stencil;
 
+/// A section plane (mesh, id) and the plane that stands for it in a copy of its definition.
+type PlaneCopy = ((MeshId, SectionId), (MeshId, SectionId));
+
 impl Scene {
     /// Moves edges, faces (with their edges) and instances of mesh `parent` into a new
     /// definition and places one instance of it, with an identity transform, where they were.
@@ -343,10 +346,7 @@ impl Scene {
 
     /// Makes every page that stores the plane `from` of a mesh also store `to`, its copy in
     /// another mesh, for each of `planes` (from, to).
-    fn copy_stored_sections(
-        &mut self,
-        planes: &[((MeshId, SectionId), (MeshId, SectionId))],
-    ) -> SceneChange {
+    fn copy_stored_sections(&mut self, planes: &[PlaneCopy]) -> SceneChange {
         let wanted: Vec<_> = self
             .pages()
             .filter_map(|(id, p)| {
@@ -382,7 +382,7 @@ impl Scene {
         &mut self,
         id: DefinitionId,
         name: Option<&str>,
-        planes_made: &mut Vec<((MeshId, SectionId), (MeshId, SectionId))>,
+        planes_made: &mut Vec<PlaneCopy>,
     ) -> (DefinitionId, SceneChange) {
         let original = self.definition(id).expect("copy of a missing definition");
         let (name, kind) = (
