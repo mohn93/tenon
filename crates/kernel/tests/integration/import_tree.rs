@@ -139,6 +139,7 @@ fn a_face_with_a_hole_and_soft_edges() {
             },
         ],
         instances: vec![],
+        ..Default::default()
     };
     let tree = ImportTree {
         definitions: vec![],
@@ -661,4 +662,139 @@ fn polygon_geometry_with_normals_stays_quick_on_long_polygons_sharing_their_side
         "{:?}",
         started.elapsed()
     );
+}
+
+#[test]
+fn dimensions_and_notes_anchor_to_vertices_within_the_tolerance() {
+    use kernel::{Anchor, Dimension, ImportDimension, ImportNote, MAX_IMPORT_ANNOTATIONS, Note};
+    // A loose edge (0,0,0)-(1,0,0) makes two vertices.
+    let root = ImportGeometry {
+        points: vec![DVec3::ZERO, DVec3::X],
+        edges: vec![edge(0, 1, false)],
+        dimensions: vec![
+            // On the vertices, one end 1e-8 off.
+            ImportDimension {
+                a: DVec3::new(1e-8, 0.0, 0.0),
+                b: DVec3::X,
+                offset: DVec3::new(0.0, 0.0, -0.5),
+                tag: None,
+            },
+            // Away from them: fixed points.
+            ImportDimension {
+                a: DVec3::new(0.0, 0.0, 3.0),
+                b: DVec3::new(1.0, 0.0, 3.0),
+                offset: DVec3::new(0.0, 1.0, 0.0),
+                tag: None,
+            },
+            // A dimension of no length is refused and counted.
+            ImportDimension {
+                a: DVec3::ONE,
+                b: DVec3::ONE,
+                offset: DVec3::Y,
+                tag: None,
+            },
+        ],
+        notes: vec![
+            ImportNote {
+                anchor: DVec3::X,
+                position: DVec3::new(2.0, 0.0, 1.0),
+                text: Some("Hi".into()),
+                tag: None,
+            },
+            // A blank text is refused and counted.
+            ImportNote {
+                anchor: DVec3::X,
+                position: DVec3::new(2.0, 0.0, 1.0),
+                text: Some("  ".into()),
+                tag: None,
+            },
+            ImportNote {
+                anchor: DVec3::new(9.0, 9.0, 9.0),
+                position: DVec3::new(9.0, 9.0, 10.0),
+                text: None,
+                tag: None,
+            },
+        ],
+        ..Default::default()
+    };
+    let tree = ImportTree {
+        definitions: vec![],
+        root,
+    };
+    let mut s = Scene::new();
+    let (report, _) = s.import_tree_into_root(MeshId::Root, &tree).unwrap();
+    assert_eq!((report.dimensions, report.notes), (2, 2));
+    assert_eq!(report.skipped_annotations, 2);
+    let m = s.root();
+    let vertex_at = |p: DVec3| {
+        m.vertices()
+            .find(|(_, v)| v.pos.distance(p) < 1e-9)
+            .unwrap()
+            .0
+    };
+    let dims: Vec<Dimension> = m.dimensions().map(|(_, d)| *d).collect();
+    let Dimension::Linear { a, b, offset, .. } = dims[0] else {
+        panic!()
+    };
+    assert_eq!(
+        (a, b),
+        (
+            Anchor::Vertex(vertex_at(DVec3::ZERO)),
+            Anchor::Vertex(vertex_at(DVec3::X))
+        )
+    );
+    assert!(offset.distance(DVec3::new(0.0, 0.0, -0.5)) < 1e-12);
+    let Dimension::Linear { a, .. } = dims[1] else {
+        panic!()
+    };
+    assert_eq!(a, Anchor::Point(DVec3::new(0.0, 0.0, 3.0)));
+    let notes: Vec<Note> = m.notes().map(|(_, n)| n.clone()).collect();
+    let Note::Leader { anchor, .. } = &notes[0] else {
+        panic!()
+    };
+    assert_eq!(*anchor, Anchor::Vertex(vertex_at(DVec3::X)));
+    let Note::Leader { anchor, text, .. } = &notes[1] else {
+        panic!()
+    };
+    assert!(matches!(anchor, Anchor::Point(_)) && text.is_none());
+    s.validate().unwrap();
+
+    // Past the cap, or not finite, or on a tag the scene lacks: refused, nothing changes.
+    let many = ImportTree {
+        definitions: vec![],
+        root: ImportGeometry {
+            dimensions: vec![
+                ImportDimension {
+                    a: DVec3::ZERO,
+                    b: DVec3::X,
+                    offset: DVec3::Y,
+                    tag: None,
+                };
+                MAX_IMPORT_ANNOTATIONS + 1
+            ],
+            ..Default::default()
+        },
+    };
+    let mut s = Scene::new();
+    assert!(matches!(
+        s.import_tree_into_root(MeshId::Root, &many),
+        Err(KernelError::InvalidImport(_))
+    ));
+    let nan = ImportTree {
+        definitions: vec![],
+        root: ImportGeometry {
+            notes: vec![ImportNote {
+                anchor: DVec3::NAN,
+                position: DVec3::ZERO,
+                text: None,
+                tag: None,
+            }],
+            ..Default::default()
+        },
+    };
+    assert!(matches!(
+        s.import_tree_into_root(MeshId::Root, &nan),
+        Err(KernelError::NotFinite)
+    ));
+    assert!(s.root().notes().next().is_none());
 }

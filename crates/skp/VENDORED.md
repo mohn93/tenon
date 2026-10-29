@@ -180,3 +180,11 @@ Upstream's tests are not copied: they read a private corpus.
     2021+ and the legacy path (a legacy mark rolls them back with the other guide arenas).
     `hidden_guides` and `ReadStats::hidden_guides` still count them. Each kept one counts
     against the element budget.
+12. `annotations.rs` (new, not upstream's) and `DefGeometry::annotations` /
+    `annotation_skips`, `Model::annotation_skips`: a 2021+ file's linear dimensions and
+    pushpin-leader text, read in `parse_component_within` after the guides (which now also
+    collect their guide points' pids so a label attached to one can be placed). Layouts are
+    measured on the corpus's files (13 dimensions in `Untitled.skp`, the tutorial's three
+    labels); see the module comment for what is established and what is not (radial
+    dimensions and screen text are counted, not read). Every element is spent against the
+    element budget.

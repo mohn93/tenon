@@ -40,6 +40,32 @@
 `session` `skp_export.rs` (export -> legacy reader -> import, warnings), corpus tests for the
 tutorial (`corpus_tutorial_scenes`, `corpus_tutorial_scenes_round_trip`).
 
-## M21b
+## M21b tasks
 
-See the section appended below once the record layout is established.
+1. **Find the layouts.** Corpus search (TLV walk of every file's `model.dat`): only
+   `openskp_fixtures/Untitled.skp` has linear dimensions (13) and only the tutorial has text
+   (3 labels, all pushpin leaders); no file has a radial dimension or screen text. Legacy
+   `CDimensionLinear`/`CText` are skipped by the legacy reader and say nothing about field
+   meanings.
+2. **Reader** (`skp` crate, `annotations.rs`): `RawAnnotation::{Linear, Leader}` per
+   `DefGeometry`, `AnnotationSkips` counters (radial, screen text, hidden, unread), element
+   budget spent per record.
+3. **Kernel:** `ImportGeometry::{dimensions, notes}` built in `add_shaped` after the guides;
+   an end within `LENGTH_TOL` of a vertex anchors to it, else fixed; refused ones counted
+   (`TreeReport::skipped_annotations`); cap `MAX_IMPORT_ANNOTATIONS` (10,000).
+4. **Session:** conversion to meters with the finite and coordinate-limit checks, report
+   fields `dimensions` and `notes`, warnings per skipped kind.
+
+## M21b rulings
+
+- Offset of a linear dimension = `DimensionYPos * (normal x x_axis)`. The sign is inferred:
+  in `Untitled.skp` the dimensions come out above top edges and below floor edges (outside
+  the body); the other sign puts them inside the wall. Not confirmed in SketchUp.
+- `DimensionXPos` (text along the line) and the text position mode are dropped (Tenon has
+  neither); a dimension's own text is not kept (counted).
+- Text maps only for leader type 2 (pushpin); the point ref's position is used for type 1
+  (free) and an entity pid (type 3) is resolved for a vertex or guide point of the same
+  definition; anything else is unread. Leader vector is the text's offset from the point.
+- Skipped and counted, layouts unknown: radial dimensions (the arc, leader parameter and
+  ratio fields) and screen / view-based text (position fields unverified). Hidden ones too.
+- 2017-2020 files keep the "N dimensions and text labels were not imported" warning.

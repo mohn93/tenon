@@ -1,21 +1,22 @@
 //! Reading SketchUp files (2017 and newer) into an import tree: every definition once, with
 //! its faces (holes included), edges (soft and smooth ones soft, hidden ones hidden),
 //! placements, guides, hidden faces, groups, components and guides (kept hidden), materials,
-//! tags (the file's layers) and, from SketchUp 2021 and newer files, scenes. Images are not
-//! carried; the notes say what was left out. Files from SketchUp
-//! 2017 to 2020 (the legacy container) are read by `skp::legacy` into the same shape as newer
-//! ones, without their scenes.
+//! tags (the file's layers), scenes and, from SketchUp 2021 and newer files, linear dimensions
+//! and leader text. Images are not carried; the notes say what was left out. Files from
+//! SketchUp 2017 to 2020 (the legacy container) are read by `skp::legacy` into the same shape
+//! as newer ones, without their dimensions and text.
 
 use std::collections::{HashMap, HashSet};
 
 use glam::{DAffine3, DMat3, DVec3};
 use kernel::geom::vector_area;
 use kernel::{
-    DefinitionKind, Guide, ImportDefinition, ImportEdge, ImportFace, ImportGeometry,
-    ImportInstance, ImportTree, MAX_TEXTURE_SIZE, MIN_DETERMINANT, MIN_TEXTURE_SIZE, Material,
-    MaterialId, PAGE_NAME_BASE, Page, PageView, SceneChange, Tag, TagId, Texture, TreeReport,
-    UNTAGGED,
+    DefinitionKind, Guide, ImportDefinition, ImportDimension, ImportEdge, ImportFace,
+    ImportGeometry, ImportInstance, ImportNote, ImportTree, MAX_IMPORT_ANNOTATIONS,
+    MAX_TEXTURE_SIZE, MIN_DETERMINANT, MIN_TEXTURE_SIZE, Material, MaterialId, PAGE_NAME_BASE,
+    Page, PageView, SceneChange, Tag, TagId, Texture, TreeReport, UNTAGGED,
 };
+use skp::annotations::RawAnnotation;
 use skp::container::{Container, Generation};
 use skp::geom::{DefGeometry, NO_LAYER, RawGuide, RawInstance};
 use skp::layers::color_is_unset;
@@ -86,9 +87,25 @@ pub(crate) struct SkpNotes {
     pub lost_entities: usize,
     /// Faces of a 2017-2020 file read short of their holes.
     pub faces_short: usize,
-    /// Dimensions and text labels of a 2017-2020 file, which are not imported (a newer
-    /// file's are not read, so not counted).
+    /// Dimensions and text labels of a 2017-2020 file, which are not imported (their records
+    /// are skipped, not read).
     pub annotations: usize,
+    /// Radial dimensions of a 2021+ file: not imported (their layout is not established).
+    pub radial_dimensions: usize,
+    /// Text of a 2021+ file with no pushpin leader (screen text, view-based leaders): not
+    /// imported.
+    pub screen_text: usize,
+    /// Hidden dimensions and text of a 2021+ file: not imported.
+    pub hidden_annotations: usize,
+    /// Dimensions and text of a 2021+ file that could not be read or made, or hold a number
+    /// that is not finite or lies beyond `MAX_COORDINATE`: skipped.
+    pub unread_annotations: usize,
+    /// Imported dimensions that had text of their own, which they show as their length.
+    pub custom_dimension_text: usize,
+    /// Dimensions and text past `MAX_IMPORT_ANNOTATIONS`, left off.
+    pub dropped_annotations: usize,
+    /// Dimensions and text handed to the import tree so far.
+    pub annotations_kept: usize,
     pub images: usize,
     /// Instances of definitions the file does not have.
     pub missing: usize,
@@ -150,6 +167,42 @@ impl SkpNotes {
             self.annotations,
             "dimension or text label was not imported",
             "dimensions and text labels were not imported",
+        );
+        say(
+            self.radial_dimensions,
+            "radial dimension was not imported",
+            "radial dimensions were not imported",
+        );
+        say(
+            self.screen_text,
+            "text label without a pushpin leader (screen text) was not imported",
+            "text labels without a pushpin leader (screen text) were not imported",
+        );
+        say(
+            self.hidden_annotations,
+            "hidden dimension or text label was not imported",
+            "hidden dimensions and text labels were not imported",
+        );
+        say(
+            self.unread_annotations + built.skipped_annotations,
+            "dimension or text label could not be read and was skipped",
+            "dimensions and text labels could not be read and were skipped",
+        );
+        say(
+            self.custom_dimension_text,
+            "dimension's own text was not kept; it shows its length",
+            "dimensions' own text was not kept; they show their lengths",
+        );
+        say(
+            self.dropped_annotations,
+            &format!(
+                "dimension or text label past the {MAX_IMPORT_ANNOTATIONS} an import may add \
+                 was left off"
+            ),
+            &format!(
+                "dimensions and text labels past the {MAX_IMPORT_ANNOTATIONS} an import may \
+                 add were left off"
+            ),
         );
         say(
             self.dropped_scenes,
@@ -825,13 +878,100 @@ fn geometry(
             None => notes.skipped_guides += 1,
         }
     }
+    let (dimensions, text_notes) = annotations(g, unit, ids, notes);
     Ok(ImportGeometry {
         points,
         faces,
         edges,
         guides,
         instances,
+        dimensions,
+        notes: text_notes,
     })
+}
+
+/// A mesh's dimensions and leader notes in meters (`unit` per inch), counting what is left
+/// out in `notes`: a number that is not finite, a point (the leader's text included, or a
+/// dimension line's end) beyond `MAX_COORDINATE`, text that is too long, and what is past
+/// `MAX_IMPORT_ANNOTATIONS` for the whole import.
+fn annotations(
+    g: &DefGeometry,
+    unit: f64,
+    ids: &Ids,
+    notes: &mut SkpNotes,
+) -> (Vec<ImportDimension>, Vec<ImportNote>) {
+    notes.radial_dimensions += g.annotation_skips.radial as usize;
+    notes.screen_text += g.annotation_skips.screen_text as usize;
+    notes.hidden_annotations += g.annotation_skips.hidden as usize;
+    notes.unread_annotations += g.annotation_skips.unread as usize;
+    let fits = |p: DVec3| p.is_finite() && p.abs().max_element() <= MAX_COORDINATE;
+    let at = |p: [f64; 3]| {
+        let p = DVec3::from_array(p) * unit;
+        fits(p).then_some(p)
+    };
+    let (mut dimensions, mut text_notes) = (Vec::new(), Vec::new());
+    for a in &g.annotations {
+        if notes.annotations_kept >= MAX_IMPORT_ANNOTATIONS {
+            notes.dropped_annotations += 1;
+            continue;
+        }
+        let made = match a {
+            RawAnnotation::Linear {
+                start,
+                end,
+                offset,
+                layer,
+                custom_text,
+            } => (|| {
+                let (a, b) = (at(*start)?, at(*end)?);
+                let offset = DVec3::from_array(*offset) * unit;
+                // The dimension line's ends are within the limit too.
+                if !(fits(a + offset) && fits(b + offset)) {
+                    return None;
+                }
+                dimensions.push(ImportDimension {
+                    a,
+                    b,
+                    offset,
+                    tag: ids.tag(*layer),
+                });
+                notes.custom_dimension_text += usize::from(*custom_text);
+                Some(())
+            })(),
+            RawAnnotation::Leader {
+                anchor,
+                vector,
+                text,
+                layer,
+            } => (|| {
+                let anchor = at(*anchor)?;
+                let position = anchor + DVec3::from_array(*vector) * unit;
+                if !fits(position) {
+                    return None;
+                }
+                let text = match text.trim() {
+                    "" => None,
+                    _ => {
+                        kernel::check_note_text(text).ok()?;
+                        Some(text.clone())
+                    }
+                };
+                text_notes.push(ImportNote {
+                    anchor,
+                    position,
+                    text,
+                    tag: ids.tag(*layer),
+                });
+                Some(())
+            })(),
+        };
+        if made.is_some() {
+            notes.annotations_kept += 1;
+        } else {
+            notes.unread_annotations += 1;
+        }
+    }
+    (dimensions, text_notes)
 }
 
 /// A guide of the file in meters (`unit` per inch), or None when its point is not finite or

@@ -842,9 +842,9 @@ In the window the Dimension and Text tools (Tools menu and rail; no keys) make t
 a note with Select opens the window's note sheet to change its text (`change_note` here). The
 display units are set in the window in Settings, Model tab (`set_units` here).
 
-Files keep them (schema 12, see Files). A SketchUp file's dimensions and text are not imported.
-For a 2017-2020 file the import report's `warnings` counts them ("N dimensions and text labels
-were not imported"); a 2021 or newer file's are not read, so not counted.
+Files keep them (schema 12, see Files). A SketchUp 2021 or newer file's linear dimensions and
+pushpin-leader text labels are imported (see Import); its other annotations and a 2017-2020
+file's are not, and the import report's `warnings` counts them.
 
 ### Section planes
 
@@ -2307,6 +2307,22 @@ supported"). What is carried:
   cut to 240 characters and made unique against the model's tags and `Untagged` (`Walls 2`);
   existing tags are never changed. At most 1,024 tags are added; what is on the file's further
   layers is imported Untagged, with a warning.
+- Dimensions and text (SketchUp 2021 and newer files): each linear dimension becomes a linear
+  dimension and each text label with a pushpin leader a leader note, in the mesh of the
+  definition (or the file's top level) that holds it, on the tag of its layer. An end of a
+  dimension, and a leader's point, is anchored to the vertex of the mesh at that point (within
+  1e-6 m) and else fixed there; a point the file ties to a vertex or guide point of the same
+  definition by identity is read at that vertex or guide point. The dimension line is the file's
+  offset (`y position` along the plane's normal crossed with its x axis; the sign was fixed from
+  the file's dimensions, which sit above top edges and below floor edges). A dimension always
+  shows its length: text of its own is not kept (counted). A note without text shows its point's
+  coordinates, as `add_note` without `text` does. At most 10,000 dimensions and notes are added;
+  the report's `dimensions` and `notes` count them. Not imported, each counted in `warnings`:
+  radial dimensions and text without a pushpin leader (screen text and view-based leaders; the
+  files at hand hold neither, so their records are not decoded), hidden ones, those whose
+  numbers are not finite or lie beyond +/-1e6 m or whose text is blank-invalid or too long, and
+  those tied to anything but a vertex or guide point of their own definition. Angular
+  dimensions do not exist in the file format.
 - Scenes (from SketchUp 2017 and newer files; a 2017-2020 file's scenes are found in the end of its stream and read the same way): each of the file's scenes becomes a scene, after
   the model's, in the file's order, with its name (trimmed, cut to 240 characters, a blank one
   named as `add_scene` names it, and made unique against the model's scenes: `Front 2`). A
@@ -2330,8 +2346,7 @@ faces made from their outer loop, material references that match no material of 
 (or one whose id is too large to match), guides that cannot be
 read, and, in a 2017-2020 file, entities that could not be read after a damaged record
 ("12 entities could not be read and were skipped": the rest of the model is imported).
-Section planes, dimensions, text, texture positions and the file's camera and
-styles are not read.
+Section planes, texture positions and the file's camera and styles are not read.
 
 glTF 2.0 files (`.gltf` JSON or `.glb` binary) and COLLADA files (`.dae`, 1.4 and 1.5) are
 read as a tree of nodes. What is carried:
@@ -2428,9 +2443,10 @@ may make several), `vertices` the vertices made, `skipped` faces that made none 
 that cannot be read, fewer than three distinct corners, no area, or a duplicate), and
 `materials` the materials added. It also has `tags` (tags added), `scenes` (scenes added),
 `definitions` and `instances` (made from the file's, without the wrapper), `guides` (guides
-made), `textures` (materials added with a texture) and `warnings`
-(sentences, such as "2 scenes were not imported", "4 dimensions and text labels were not
-imported" (2017-2020 files only),
+made), `dimensions` and `notes` (from a 2021 or newer file), `textures` (materials added with a texture) and `warnings`
+(sentences, such as "4 dimensions and text labels were not imported" (2017-2020 files),
+"1 radial dimension was not imported", "2 text labels without a pushpin leader (screen text)
+were not imported",
 "1 image was skipped", "5 face holes could not be read and were dropped", "1 guide could not be
 read and was skipped"); each is absent when 0 or empty, and always absent for
 OBJ and STL. A glTF or COLLADA import reports `definitions`, `instances`, `textures` and
