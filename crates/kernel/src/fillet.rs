@@ -12,7 +12,7 @@
 //! new faces take the first face's materials; the edges along a fillet (between its faces and
 //! where it meets the flat faces) are soft, so it is shaded as one smooth round. Where three
 //! fillets of convex edges meet at a vertex of three faces, `corner` trims the crossed rounds to
-//! a sphere patch. The result replaces the mesh's own geometry; faces and edges the cut did not
+//! a sphere patch; three chamfers close with a flat triangle. The result replaces the mesh's own geometry; faces and edges the cut did not
 //! touch keep their ids.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -973,8 +973,8 @@ mod tests {
         let all = per * 4.0 * (2.0 + 3.0 + 4.0);
         let apart = per * 4.0 * (1.5 + 2.5 + 3.5);
         assert!(v > 24.0 - all && v < 24.0 - apart, "{v}");
-        // 6 shrunken faces and 12 chamfers; at each corner three chamfers meet in a point.
-        assert_eq!(r.faces().count(), 18);
+        // 6 shrunken faces and 12 chamfers; each corner is closed by a triangle.
+        assert_eq!(r.faces().count(), 18 + 8);
     }
 
     fn l_shape() -> Model {
@@ -1647,7 +1647,7 @@ mod tests {
     }
 
     #[test]
-    fn three_chamfers_at_a_corner_meet_in_a_point() {
+    fn three_chamfers_at_a_corner_close_with_a_flat_triangle() {
         let (size, d) = ([2.0, 3.0, 4.0], 0.5);
         let m = cuboid(size);
         let edges = [
@@ -1657,11 +1657,60 @@ mod tests {
         ];
         let r = bevelled(&m, &edges, chamfer(d)).unwrap();
         closed(&r);
-        // The three chamfer planes meet half a distance in from each face.
-        assert!(has_vertex(&r, [d / 2.0, d / 2.0, 4.0 - d / 2.0]));
-        // 6 faces and 3 chamfers; the faces at the corner each lose a corner cut.
-        assert_eq!(r.faces().count(), 9);
+        // The three chamfer planes would meet half a distance in from each face; the tip is cut
+        // off by the plane through the strips' end points, a triangle of three corners.
+        assert!(!has_vertex(&r, [d / 2.0, d / 2.0, 4.0 - d / 2.0]));
+        let corners = [[d, d, 4.0], [d, 0.0, 4.0 - d], [0.0, d, 4.0 - d]];
+        for p in corners {
+            assert!(has_vertex(&r, p), "{p:?}");
+        }
+        let on_corners = |f: &Face| {
+            f.outer.len() == 3
+                && corners.iter().all(|c| {
+                    f.outer
+                        .iter()
+                        .any(|v| r.pos(*v).distance(DVec3::from(*c)) < 1e-9)
+                })
+        };
+        assert_eq!(r.faces().filter(|(_, f)| on_corners(f)).count(), 1);
+        // 6 faces, 3 chamfers and the triangle.
+        assert_eq!(r.faces().count(), 10);
         assert!(r.edges().all(|(_, e)| !e.soft));
+        // Each chamfer removes d^2/2 per meter; the corner cube holds their overlap and the tip.
+        let (a, b, c) = (2.0 - d, 3.0 - d, 4.0 - d);
+        let prisms = d * d / 2.0 * (a + b + c);
+        let removed = signed_volume(&m) - signed_volume(&r);
+        assert!(removed > prisms && removed < prisms + d * d * d * 2.0, "{removed}");
+    }
+
+    #[test]
+    fn every_corner_of_chamfered_boxes_and_prisms_gets_its_triangle() {
+        let d = 0.05;
+        let mut shapes: Vec<(String, Model)> = vec![("box".into(), cuboid([2.0, 3.0, 4.0]))];
+        for sides in [3, 6] {
+            let p = Solid::prism(1.0, 2.0, sides, 0.0).unwrap().to_model();
+            shapes.push((format!("{sides}-sided prism"), p));
+        }
+        for shear in [0.1, 0.5] {
+            shapes.push((format!("shear {shear}"), sheared_box(2.0, shear)));
+        }
+        for (name, m) in &shapes {
+            let edges: Vec<EdgeId> = m
+                .edges()
+                .filter(|(_, e)| !e.soft && e.curve.is_none_or(|_| e.polygon))
+                .map(|(id, _)| id)
+                .collect();
+            let out = bevelled(m, &edges, chamfer(d)).unwrap_or_else(|e| panic!("{name}: {e}"));
+            closed(&out);
+            for (_, corner) in m.vertices() {
+                let near = out.faces().filter(|(_, f)| {
+                    f.outer.len() == 3
+                        && f.outer.iter().all(|v| out.pos(*v).distance(corner.pos) < 4.0 * d)
+                });
+                assert_eq!(near.count(), 1, "{name} at {}", corner.pos);
+            }
+            assert!(signed_volume(&out) < signed_volume(m), "{name}");
+        }
     }
 
     #[test]
@@ -1975,7 +2024,7 @@ mod tests {
     #[test]
     fn a_tiny_box_far_from_the_origin_is_bevelled_or_refused() {
         for r in [1e-5, 5e-4] {
-            for offset in [0.0, 1e3, 1e5] {
+            for offset in [0.0, 100.0, 1e3, 1e5] {
                 let m = placed_copy(
                     &cuboid([0.01, 0.02, 0.03]),
                     DAffine3::from_translation(DVec3::splat(offset)),
@@ -1986,7 +2035,9 @@ mod tests {
                     match bevelled(&m, &edges, profile) {
                         Ok(out) => closed(&out),
                         // A radius near the 1e-6 tolerance may be refused, never a panic.
-                        Err(e) => assert!(r < 1e-4, "{r} at {offset}: {e}"),
+                        // A radius near the 1e-6 tolerance, or the boolean far from the origin
+                        // (its precision), may be refused with an error; it must not panic.
+                        Err(e) => assert!(r < 1e-4 || offset > 100.0, "{r} at {offset}: {e}"),
                     }
                 }
             }

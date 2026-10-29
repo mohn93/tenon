@@ -29,13 +29,13 @@ pub(super) struct Patch {
     pub points: usize,
     /// Each edge at the corner with the distance from the vertex to its arc plane.
     pub edges: [(EdgeId, f64); 3],
+    /// For a chamfer corner, the corners of the flat triangle it makes (`centre` and `radius`
+    /// are then unused).
+    pub flat: Option<[DVec3; 3]>,
 }
 
 /// The patches for the fillets `cuts` (already closed at their ends) of `m`.
 pub(super) fn patches(m: &Model, cuts: &[(EdgeId, EdgeCut)], profile: Profile) -> Vec<Patch> {
-    let Profile::Fillet { .. } = profile else {
-        return Vec::new();
-    };
     let mut at: BTreeMap<VertexId, Vec<usize>> = BTreeMap::new();
     for (i, (_, cut)) in cuts.iter().enumerate() {
         if !cut.convex {
@@ -52,7 +52,10 @@ pub(super) fn patches(m: &Model, cuts: &[(EdgeId, EdgeCut)], profile: Profile) -
         .filter(|(_, list)| list.len() == 3)
         .filter_map(|(v, list)| {
             let three = [list[0], list[1], list[2]].map(|i| &cuts[i]);
-            patch(m, v, three, profile)
+            match profile {
+                Profile::Fillet { .. } => patch(m, v, three, profile),
+                Profile::Chamfer { distance } => flat(m, v, three, distance),
+            }
         })
         .collect();
     // Two patches on one edge must leave a straight run between them.
@@ -142,6 +145,121 @@ fn patch(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3], profile: Profile
         cutter,
         points,
         edges: [(ids[0], depth[0]), (ids[1], depth[1]), (ids[2], depth[2])],
+        flat: None,
+    })
+}
+
+/// The flat closure of three chamfers of `distance` at `v`, or None when the corner is not a
+/// plain trihedral one.
+fn flat(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3], distance: f64) -> Option<Patch> {
+    let faces: Vec<FaceId> = m.faces_at(v).collect();
+    if faces.len() != 3 || m.edges_at(v).len() != 3 {
+        return None;
+    }
+    let vertex = m.pos(v);
+    // Per edge: its direction from the vertex and, for each face, its direction into it.
+    let into = |cut: &EdgeCut, f: FaceId| if cut.f1 == f { cut.d1 } else { cut.d2 };
+    let away = |cut: &EdgeCut| if cut.va == v { cut.u } else { -cut.u };
+    let mut normal = [DVec3::ZERO; 3];
+    let mut meet = [DVec3::ZERO; 3];
+    for (k, f) in faces.iter().enumerate() {
+        let beside: Vec<&EdgeCut> = cuts
+            .iter()
+            .map(|(_, c)| c)
+            .filter(|c| c.f1 == *f || c.f2 == *f)
+            .collect();
+        let [a, b] = beside[..] else {
+            return None;
+        };
+        normal[k] = if a.f1 == *f { a.n1 } else { a.n2 };
+        let (ea, eb) = (away(a), away(b));
+        let (da, db) = (into(a, *f), into(b, *f));
+        let (ca, cb) = (db.dot(ea), da.dot(eb));
+        if ca.abs() < 1e-3 || cb.abs() < 1e-3 {
+            return None;
+        }
+        let (s, t) = (distance / ca, distance / cb);
+        if s <= 0.0 || t <= 0.0 {
+            return None;
+        }
+        meet[k] = vertex + ea * s + eb * t;
+    }
+    let mut across = (meet[1] - meet[0]).cross(meet[2] - meet[0]).try_normalize()?;
+    if across.dot(vertex - meet[0]) > 0.0 {
+        across = -across;
+    }
+    let reach = CAP * distance;
+    let planes: [(DVec3, DVec3); 4] = [
+        (across, meet[0]),
+        (normal[0], vertex + normal[0] * reach),
+        (normal[1], vertex + normal[1] * reach),
+        (normal[2], vertex + normal[2] * reach),
+    ];
+    let at = |k: [usize; 3]| -> Option<DVec3> {
+        let rows = DMat3::from_cols(planes[k[0]].0, planes[k[1]].0, planes[k[2]].0).transpose();
+        if rows.determinant().abs() < 1e-6 {
+            return None;
+        }
+        Some(
+            rows.inverse()
+                * DVec3::new(
+                    planes[k[0]].0.dot(planes[k[0]].1),
+                    planes[k[1]].0.dot(planes[k[1]].1),
+                    planes[k[2]].0.dot(planes[k[2]].1),
+                ),
+        )
+    };
+    // The tetrahedron below the plane and inside the caps: the tip is in it.
+    let top = at([1, 2, 3])?;
+    let base = [at([0, 2, 3])?, at([0, 1, 3])?, at([0, 1, 2])?];
+    if (top - meet[0]).dot(across) >= 0.0 {
+        return None;
+    }
+    let mut cutter = Model::new();
+    let ids: Vec<VertexId> = std::iter::once(top)
+        .chain(base)
+        .map(|p| cutter.insert_vertex(p))
+        .collect();
+    let centroid = (top + base[0] + base[1] + base[2]) / 4.0;
+    for (i, j) in (0..4).flat_map(|i| (i + 1..4).map(move |j| (i, j))) {
+        cutter.insert_edge(ids[i], ids[j]);
+    }
+    let [outer, inner] = cuts[0].1.paint;
+    for skip in 0..4 {
+        let mut l: Vec<VertexId> = (0..4).filter(|i| *i != skip).map(|i| ids[i]).collect();
+        let pts: Vec<DVec3> = l.iter().map(|w| cutter.pos(*w)).collect();
+        let mut normal = vector_area(&pts).try_normalize()?;
+        if normal.dot((pts[0] + pts[1] + pts[2]) / 3.0 - centroid) < 0.0 {
+            normal = -normal;
+            l.reverse();
+        }
+        let mut face = Face::new(l, Vec::new(), normal);
+        face.front = outer;
+        face.back = inner;
+        cutter.insert_face(face);
+    }
+    cutter.take_changes();
+    if open_reason(&cutter).is_some() || signed_volume(&cutter) <= 0.0 {
+        return None;
+    }
+    let reach_on = |k: usize| -> f64 {
+        let along = away(&cuts[k].1);
+        meet.iter()
+            .map(|p| (*p - vertex).dot(along))
+            .fold(0.0, f64::max)
+    };
+    Some(Patch {
+        vertex: v,
+        centre: vertex,
+        radius: distance,
+        cutter,
+        points: 0,
+        edges: [
+            (cuts[0].0, reach_on(0)),
+            (cuts[1].0, reach_on(1)),
+            (cuts[2].0, reach_on(2)),
+        ],
+        flat: Some(meet),
     })
 }
 
@@ -547,6 +665,12 @@ pub(super) fn apply(m: Model, patches: &[Patch]) -> (Model, Vec<usize>) {
 fn took(m: &Model, p: &Patch) -> bool {
     if open_reason(m).is_some() || signed_volume(m) <= 0.0 {
         return false;
+    }
+    if let Some(corners) = p.flat {
+        return corners.iter().all(|c| {
+            m.vertices()
+                .any(|(_, v)| v.pos.distance(*c) < 5.0 * LENGTH_TOL.min(1e-3 * p.radius))
+        });
     }
     on_sphere(m, p).count() >= p.points
 }
