@@ -32,7 +32,9 @@ const SAMPLE_OFFSET: f64 = 1e-7;
 /// one touching it from the kept side. The pieces are noded (split where a corner lies on
 /// another piece) into a planar arrangement; each bounded region of it is a closed loop with
 /// its holes when it lies inside a solid (judged just on the kept side of the plane, by the
-/// parity of the crossings of rays with `triangles`, most rays deciding). Pieces bounding no such region, and
+/// parity of the crossings of rays with `triangles`, most rays deciding; a region the parity
+/// rejects is still solid when every ray meets a surface and it shares an edge with a solid
+/// region, see `Arrangement::solid_faces`). Pieces bounding no such region, and
 /// dangling ones, are returned as open chains. Collinear points are dropped, so a loop's
 /// points are its corners. Nothing is cut when a number is not finite or `normal` has no
 /// direction.
@@ -70,7 +72,11 @@ pub fn section_loops(triangles: &[[DVec3; 3]], point: DVec3, normal: DVec3) -> S
         let at = point + u * s.x + v * s.y + normal * SAMPLE_OFFSET;
         hierarchy.inside(at)
     };
-    let found = Arrangement::new(&edges, &flat).solid_faces(&solid);
+    let enclosed = |s: DVec2| {
+        let at = point + u * s.x + v * s.y + normal * SAMPLE_OFFSET;
+        hierarchy.enclosed(at)
+    };
+    let found = Arrangement::new(&edges, &flat).solid_faces(&solid, &enclosed);
 
     let corners = |cycle: &[usize]| ring_corners(cycle.iter().map(|n| welder.points[*n]).collect());
     let mut closed: Vec<(f64, Vec<Vec<DVec3>>)> = Vec::new();
@@ -284,6 +290,12 @@ impl<'a> Triangles<'a> {
         count
     }
 
+    /// Whether every one of the `RAYS` from `p` meets a triangle: `p` is shut in on all sides.
+    fn enclosed(&self, p: DVec3) -> bool {
+        RAYS.iter()
+            .all(|d| self.crossings(p, DVec3::from_array(*d).normalize()) > 0)
+    }
+
     /// Whether `p` is inside the solids bounded by the triangles: an odd number of triangles
     /// lie in front of it along at least `INSIDE_VOTES` of the `RAYS`. A face two solids share
     /// exists once, which turns the count even for the rays that meet it; the others still
@@ -400,8 +412,20 @@ impl<'a> Arrangement<'a> {
         self.from(h ^ 1)
     }
 
-    /// The regions whose sample point `solid` accepts.
-    fn solid_faces(&self, solid: &dyn Fn(DVec2) -> bool) -> Solids {
+    /// The regions whose sample point `solid` accepts, and the regions that parity rejects but
+    /// are rooms between solids. Parity of ray crossings fails in a room whose walls are
+    /// shared with its neighbours (each shared wall exists once, so a ray out of a room in
+    /// the middle of a grid meets an even number of walls). Such a room is a region that
+    /// `enclosed` accepts (shut in on every side in 3D, so not an open courtyard) and that
+    /// shares an edge with a solid region in the same connected piece of the arrangement.
+    /// A cavity inside a solid does not qualify: it is a separate piece, so it is a hole of
+    /// the solid around it, never a neighbour beside it. This repeats until nothing changes, so
+    /// the middle of a 5 x 5 x 5 grid is filled from the rooms around it.
+    fn solid_faces(
+        &self,
+        solid: &dyn Fn(DVec2) -> bool,
+        enclosed: &dyn Fn(DVec2) -> bool,
+    ) -> Solids {
         let n = self.flat.len();
         let mut adjacent: Vec<Vec<usize>> = vec![Vec::new(); n];
         for (k, (a, b)) in self.edges.iter().enumerate() {
@@ -411,7 +435,7 @@ impl<'a> Arrangement<'a> {
         let mut alive = vec![true; self.edges.len()];
         // Take away dangling pieces and bridges (a piece with the same region on both sides)
         // until none is left: what remains outlines regions.
-        let cycles = loop {
+        let (cycles, cycle_of) = loop {
             let mut degree: Vec<usize> = adjacent
                 .iter()
                 .map(|l| l.iter().filter(|e| alive[**e]).count())
@@ -438,7 +462,7 @@ impl<'a> Arrangement<'a> {
                 .filter(|e| alive[*e] && cycle_of[2 * e] == cycle_of[2 * e + 1])
                 .collect();
             if bridges.is_empty() {
-                break cycles;
+                break (cycles, cycle_of);
             }
             for e in bridges {
                 alive[e] = false;
@@ -505,6 +529,9 @@ impl<'a> Arrangement<'a> {
             faces: Vec::new(),
             bounds_solid: vec![false; self.edges.len()],
         };
+        // Per region: its cycles and sample point, and whether it is solid.
+        let mut regions: Vec<(usize, Vec<usize>, DVec2)> = Vec::new();
+        let mut is_solid: HashMap<usize, bool> = HashMap::new();
         for f in faces {
             let cycles: Vec<usize> = std::iter::once(f)
                 .chain(holes.get(&f).into_iter().flatten().copied())
@@ -513,7 +540,31 @@ impl<'a> Arrangement<'a> {
             let Some(sample) = interior_point(&rings) else {
                 continue;
             };
-            if solid(sample) {
+            is_solid.insert(f, solid(sample));
+            regions.push((f, cycles, sample));
+        }
+        loop {
+            let mut changed = false;
+            for (f, _, sample) in &regions {
+                if is_solid[f] {
+                    continue;
+                }
+                // The regions beside this one across its outline's edges.
+                let beside_solid = all[*f].half_edges.iter().any(|h| {
+                    let other = cycle_of[h ^ 1];
+                    is_solid.get(&other).copied().unwrap_or(false)
+                });
+                if beside_solid && enclosed(*sample) {
+                    is_solid.insert(*f, true);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        for (f, cycles, _) in regions {
+            if is_solid[&f] {
                 for c in &cycles {
                     for h in &all[*c].half_edges {
                         out.bounds_solid[h / 2] = true;
