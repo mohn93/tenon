@@ -764,7 +764,7 @@ sheared box's), the corner is a patch of the sphere of `radius` tangent to the t
 (centre `radius` inside each), bounded by the three rounds' end arcs, which are planar sections
 perpendicular to each edge through the sphere's centre: shared vertices, so the solid stays
 closed, and soft edges, so it shades smooth. With equal arc step counts (a box: 8 each) the
-patch is a grid of n^2 triangles (64 for a box corner); otherwise a fan from its middle. A corner
+patch is a grid of n^2 triangles (64 for a box corner); otherwise concentric rings from its middle point out to the arcs. A corner
 whose edges are too short to hold both patches, whose faces or edges are not just those three,
 or whose patch the boolean cannot cut, keeps the crossed rounds (the three cylinders intersect in
 a sharp pinch); so do corners with one or two chosen edges. A chamfer corner (`chamfer_edges`)

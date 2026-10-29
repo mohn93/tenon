@@ -10,10 +10,9 @@
 //! fillers' own regions are taken out of the cutters, so a chamfer never removes what a cove
 //! beside it adds; a cove whose two faces are both cut away at an end stops short there. The
 //! new faces take the first face's materials; the edges along a fillet (between its faces and
-//! where it meets the flat faces) are soft, so it is shaded as one smooth round. The result
-//! Where three fillets of convex edges meet at a vertex of three faces, `corner` trims the
-//! crossed rounds to a sphere patch. The result
-//! replaces the mesh's own geometry; faces and edges the cut did not touch keep their ids.
+//! where it meets the flat faces) are soft, so it is shaded as one smooth round. Where three
+//! fillets of convex edges meet at a vertex of three faces, `corner` trims the crossed rounds to
+//! a sphere patch. The result replaces the mesh's own geometry; faces and edges the cut did not touch keep their ids.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
@@ -1222,7 +1221,7 @@ mod tests {
             let v = signed_volume(&r);
             assert!((v - (24.0 - quarter_loss(0.5, segments as usize) * 2.0)).abs() < 1e-9);
         }
-        // A triangular prism's upright edges turn 120 degrees: 8 * 108 / 90, rounded, faces.
+        // A triangular prism's upright edges turn 120 degrees: 8 * 120 / 90, rounded, faces.
         assert_eq!(arc_steps(8, 120f64.to_radians()), 11);
         assert_eq!(arc_steps(1, 10f64.to_radians()), 1);
         let p = Solid::prism(1.0, 2.0, 3, 0.0).unwrap().to_model();
@@ -1445,6 +1444,30 @@ mod tests {
         m
     }
 
+    /// Checks the sphere patch about `centre`: its faces' planes lie within `sag` of the ball,
+    /// and every edge between a patch face and any other face is soft. Gives the patch's
+    /// face count.
+    fn check_patch(m: &Model, centre: DVec3, r: f64, sag: f64) -> usize {
+        let on = |f: &Face| {
+            f.holes.is_empty()
+                && f.outer
+                    .iter()
+                    .all(|w| (m.pos(*w).distance(centre) - r).abs() < 1e-9)
+        };
+        let patch: Vec<FaceId> = m.faces().filter(|(_, f)| on(f)).map(|(id, _)| id).collect();
+        for id in &patch {
+            let f = m.face(*id).unwrap();
+            let depth = (m.pos(f.outer[0]) - centre).dot(f.normal);
+            assert!(r - depth < sag * r, "sag {} of r", (r - depth) / r);
+            for i in 0..f.outer.len() {
+                let (a, b) = (f.outer[i], f.outer[(i + 1) % f.outer.len()]);
+                let e = m.edge(m.edge_between(a, b).unwrap()).unwrap();
+                assert!(e.soft, "hard edge {} {}", m.pos(a), m.pos(b));
+            }
+        }
+        patch.len()
+    }
+
     #[test]
     fn oblique_corners_get_sphere_patches_tangent_to_their_faces() {
         let (size, r) = (2.0, 0.15);
@@ -1466,21 +1489,9 @@ mod tests {
                 .transpose();
             let centre = corner.pos + rows.inverse() * DVec3::splat(-r);
             let on = on_ball(&out, centre, r);
-            // Arcs of 7 to 9 steps and the fan's middle point; one triangle to each boundary side.
-            let fan = out
-                .faces()
-                .filter(|(_, f)| {
-                    f.outer
-                        .iter()
-                        .all(|w| (out.pos(*w).distance(centre) - r).abs() < 1e-9)
-                })
-                .count();
-            assert!(
-                on.len() > 3 * 7 && fan == on.len() - 1,
-                "{} {fan} at {}",
-                on.len(),
-                corner.pos
-            );
+            // Arcs of 7 to 9 steps, rings out to them, and a soft join to every fillet.
+            assert!(on.len() > 3 * 7, "{} at {}", on.len(), corner.pos);
+            check_patch(&out, centre, r, 0.02);
             patches += 1;
         }
         assert_eq!(patches, 8);
@@ -1488,7 +1499,7 @@ mod tests {
     }
 
     #[test]
-    fn a_prism_corner_with_unequal_arcs_gets_a_fan_patch() {
+    fn a_prism_corner_with_unequal_arcs_gets_a_ringed_patch() {
         // A triangular prism's top corner: two 90 degree edges and an upright of 120.
         let p = Solid::prism(1.0, 2.0, 3, 0.0).unwrap().to_model();
         let r = 0.1;
@@ -1529,8 +1540,15 @@ mod tests {
         // The ball sits r inside the top and both sides, here on the vertical bisector.
         let centre = DVec3::new(1.0 - r / 30f64.to_radians().sin(), 0.0, 2.0 - r);
         let on = on_ball(&out, centre, r);
-        // Arcs of 8, 8 and 11 steps and the fan's middle point.
-        assert_eq!(on.len(), 8 + 8 + 11 + 1);
+        // Arcs of 8, 8 and 11 steps: 27 boundary points, some inner rings of 27, the middle.
+        let faces = check_patch(&out, centre, r, 0.02);
+        assert!(
+            on.len() > 27 + 27 && (on.len() - 1).is_multiple_of(27),
+            "{}",
+            on.len()
+        );
+        let rings = (on.len() - 1) / 27;
+        assert_eq!(faces, 27 * (1 + 2 * (rings - 1)));
     }
 
     #[test]
@@ -1588,9 +1606,14 @@ mod tests {
             })
             .map(|(id, _)| id)
             .unwrap();
-        let both = bevelled(&big, &[third], fillet(0.2));
-        if let Ok(both) = both {
-            closed(&both);
+        // The third round (0.2) is smaller than the two at the corner (0.6): refused cleanly,
+        // where the other faces at its end do not lie in one plane.
+        match bevelled(&big, &[third], fillet(0.2)) {
+            Err(BevelError::Edge(id, why)) => {
+                assert_eq!(id, third);
+                assert!(why.contains("do not lie in one plane"), "{why}");
+            }
+            other => panic!("{other:?}"),
         }
     }
 

@@ -13,7 +13,7 @@ tangent to the three faces (centre = intersection of the faces offset inward by 
 all three fillet cylinders, so only the crossed leftovers are removed. The patch triangles are built
 from the fillets' own profile points on the planes `P_k`, so the boundary arcs coincide with the
 cylinder facets exactly. Equal arc step counts give a barycentric grid (octant: n^2 triangles),
-unequal counts a fan from the patch centre.
+unequal counts concentric rings from the patch middle (rings about 1.25 arc steps apart, quads cut on the shorter diagonal).
 
 Chosen over stopping the edge cutters at the planes: that leaves a pinched face (the corner square
 touches the rest of the face at one point) between boolean steps. A corner cutter on top of the

@@ -315,16 +315,53 @@ fn cutter(
             }
         }
     } else {
-        // Unequal arcs: a fan from the middle of the patch round the boundary.
+        // Unequal arcs: concentric rings from the middle point out to the boundary, each ring
+        // slerped from the middle to every boundary point; neighbouring rings are joined by
+        // quads cut in two, the innermost ring by a fan.
         let mut ring: Vec<VertexId> = Vec::new();
         for k in [2, 0, 1] {
             ring.extend(&arc_ids[k][..arc_ids[k].len() - 1]);
         }
+        let count = ring.len();
         let middle = (n[0] + n[1] + n[2]).try_normalize()?;
+        // Rings about one and a quarter arc steps apart: a ring closer to the boundary would
+        // poke through the faceted fillets there.
+        let step = arcs
+            .iter()
+            .map(|a| (a[0] - centre).angle_between(a[a.len() - 1] - centre) / (a.len() - 1) as f64)
+            .fold(f64::INFINITY, f64::min);
+        let reach = ring
+            .iter()
+            .map(|id| middle.angle_between(m.pos(*id) - centre))
+            .fold(0.0, f64::max);
+        let rings = ((reach / (1.25 * step)).ceil() as usize).max(1);
         let q = m.insert_vertex(centre + middle * radius);
-        points = ring.len() + 1;
-        for i in 0..ring.len() {
-            tris.push([q, ring[i], ring[(i + 1) % ring.len()]]);
+        let mut layers: Vec<Vec<VertexId>> = Vec::new();
+        for j in 1..rings {
+            let t = j as f64 / rings as f64;
+            let mut layer = Vec::with_capacity(count);
+            for id in &ring {
+                let to = (m.pos(*id) - centre) / radius;
+                layer.push(m.insert_vertex(centre + slerp(middle, to, t) * radius));
+            }
+            layers.push(layer);
+        }
+        layers.push(ring);
+        points = 1 + layers.iter().map(Vec::len).sum::<usize>();
+        for i in 0..count {
+            let j = (i + 1) % count;
+            tris.push([q, layers[0][i], layers[0][j]]);
+            for w in layers.windows(2) {
+                // Cut the quad along its shorter diagonal.
+                let d = |a: VertexId, b: VertexId| m.pos(a).distance(m.pos(b));
+                if d(w[0][i], w[1][j]) <= d(w[0][j], w[1][i]) {
+                    tris.push([w[0][i], w[1][i], w[1][j]]);
+                    tris.push([w[0][i], w[1][j], w[0][j]]);
+                } else {
+                    tris.push([w[0][i], w[1][i], w[0][j]]);
+                    tris.push([w[1][i], w[1][j], w[0][j]]);
+                }
+            }
         }
     }
     let mut painted = Vec::new();
@@ -351,6 +388,15 @@ fn cutter(
         return None;
     }
     Some((m, points))
+}
+
+/// The unit vector a fraction `t` of the way from `a` to `b` along the great circle.
+fn slerp(a: DVec3, b: DVec3, t: f64) -> DVec3 {
+    let omega = a.dot(b).clamp(-1.0, 1.0).acos();
+    if omega < 1e-9 {
+        return a;
+    }
+    ((a * ((1.0 - t) * omega).sin() + b * (t * omega).sin()) / omega.sin()).normalize()
 }
 
 /// Subtracts the patches' cutters from `m`: all at once where they allow, else one at a time,
@@ -398,7 +444,9 @@ fn took(m: &Model, p: &Patch) -> bool {
 
 fn on_sphere<'a>(m: &'a Model, p: &'a Patch) -> impl Iterator<Item = VertexId> + 'a {
     m.vertices()
-        .filter(|(_, v)| (v.pos.distance(p.centre) - p.radius).abs() < 5.0 * LENGTH_TOL)
+        .filter(|(_, v)| {
+            (v.pos.distance(p.centre) - p.radius).abs() < (5.0 * LENGTH_TOL).min(1e-3 * p.radius)
+        })
         .map(|(id, _)| id)
 }
 
