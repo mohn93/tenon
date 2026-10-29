@@ -2408,6 +2408,9 @@ impl State {
             UiAction::StoreSceneJoints(scene, on) => {
                 self.editor.set_scene_joints(scene, on);
             }
+            UiAction::StoreSceneSections(scene, on) => {
+                self.editor.set_scene_sections(scene, on);
+            }
             UiAction::StoreSceneCamera(scene, on) => {
                 self.editor.set_scene_stores(scene, Some(on), None);
             }
@@ -3573,6 +3576,7 @@ fn scene_rows(doc: &session::Document) -> Vec<SceneRow> {
             tags: p.tags.is_some(),
             positions: p.positions.is_some(),
             joints: p.joints.is_some(),
+            sections: p.sections.is_some(),
             selected: selected == Some(id),
         })
         .collect()
@@ -4803,6 +4807,7 @@ mod tests {
                     tags: false,
                     positions: None,
                     joints: None,
+                    sections: None,
                 },
             );
             e.doc().selected_scene().unwrap()

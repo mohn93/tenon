@@ -375,6 +375,11 @@ pub struct DefGeometry {
     /// (an unknown record, or a guide without its point or line), skipped. Always 0 for
     /// legacy files.
     pub unread_guides: u32,
+    /// 2021+ files: the linear dimensions and pushpin-leader text labels read (legacy files
+    /// have none: their annotations are counted in `legacy::ReadStats::annotations`).
+    pub annotations: Vec<crate::annotations::RawAnnotation>,
+    /// 2021+ files: what the annotation lists held that is not in `annotations`.
+    pub annotation_skips: crate::annotations::AnnotationSkips,
 }
 
 /// A guide (construction line or point) as the file states it, in inches. A guide line is
@@ -708,6 +713,7 @@ pub fn parse_component_within(payload: &[u8], budget: &mut u64) -> Result<DefGeo
     // carry the hidden bit. A line's start and end parameters are dropped: a
     // guide line is infinite. Anything else in either list is skipped and
     // counted, never read as a guide.
+    let mut guide_points: Vec<(u64, [f64; 3])> = Vec::new();
     for sec in Tlv::new(payload) {
         let points = match sec.tag {
             t::COMPONENT_CONSTRUCTION_LINES => false,
@@ -717,6 +723,9 @@ pub fn parse_component_within(payload: &[u8], budget: &mut u64) -> Result<DefGeo
         for r in sec.children() {
             let (guide, common) = guide_of(&r, points);
             let flags = common.flags;
+            if let (Some(RawGuide::Point { position }), true) = (&guide, common.pid != 0) {
+                guide_points.push((common.pid, *position));
+            }
             let Some(guide) = guide else {
                 g.unread_guides = g.unread_guides.saturating_add(1);
                 continue;
@@ -733,6 +742,10 @@ pub fn parse_component_within(payload: &[u8], budget: &mut u64) -> Result<DefGeo
             g.guide_layer.push(layer_ref(&common));
         }
     }
+
+    // Dimensions and text (`annotations.rs`); a label's guide point is found by pid.
+    guide_points.sort_by_key(|(pid, _)| *pid);
+    crate::annotations::read_annotations(payload, &mut g, &guide_points, budget)?;
 
     // Placements. Three sections carry them and two of the three wrap each
     // one in a single-record envelope:

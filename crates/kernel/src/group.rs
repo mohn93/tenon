@@ -298,7 +298,9 @@ impl Scene {
     /// own when their definition is placed elsewhere too: all the listed instances of one
     /// definition share one new copy, named by `unique_name`. A definition whose every placed
     /// instance is listed, groups, and sole instances stay as they are. Only meshes the root
-    /// reaches count. Returns the new definitions, in the order of the old ones' ids.
+    /// reaches count. Returns the new definitions, in the order of the old ones' ids. The copy's section
+    /// planes have new ids, so a scene that stored the original's active plane does not
+    /// activate one in the copy (going to it leaves the copy uncut).
     pub fn make_unique(
         &mut self,
         parent: MeshId,
@@ -552,6 +554,7 @@ impl Scene {
             let Some(id) = unused else { break };
             steps.push(self.remove_definition(id));
         }
+        steps.extend(self.drop_stale_sections().steps);
         SceneChange { steps }
     }
 }

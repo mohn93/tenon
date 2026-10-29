@@ -58,6 +58,7 @@ mod rotate;
 mod scale;
 mod scene_fuzz;
 mod scene_joints;
+mod scene_sections;
 mod scenes;
 mod sections;
 mod selection;

@@ -48,11 +48,14 @@ pub fn is_model_extension(ext: &str) -> bool {
 /// section fill and instances left whole by section planes, version 23 the instance positions a
 /// scene stores, and version 24 the scene transition setting, and version 25 joints, and version
 /// 26 material density, and version 27 couplings between joints, and version 28 cam
-/// followers, and version 29 the joint values a scene stores; older files still open
+/// followers, and version 29 the joint values a scene stores, and version 30 the section
+/// planes and section display a scene stores; older files still open
 /// (untagged before version 10, without scenes before version 11, without annotations and in
 /// the default units before version 12, without section planes and with the default section
 /// display before version 13).
-pub const SCHEMA_VERSION: u32 = 29;
+pub const SCHEMA_VERSION: u32 = 30;
+/// The version written when a scene stores section planes.
+pub const SCENE_SECTIONS_SCHEMA_VERSION: u32 = 30;
 /// The version written when a scene stores joint values.
 pub const SCENE_JOINTS_SCHEMA_VERSION: u32 = 29;
 /// The version written when the model has a cam follower.
@@ -346,6 +349,7 @@ pub(crate) fn write_bytes(
             .any(|p| p.view.is_some_and(|v| !v.shadows.is_default()));
     let moving_scenes = model.pages.iter().any(|p| p.positions.is_some());
     let jointed_scenes = model.pages.iter().any(|p| p.joints.is_some());
+    let sectioned_scenes = model.pages.iter().any(|p| p.sections.is_some());
     let styled = !model.styles.is_empty()
         || style.is_some()
         || model
@@ -383,7 +387,9 @@ pub(crate) fn write_bytes(
     images.dedup_by(|a, b| a.0 == b.0);
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: if jointed_scenes {
+        schema_version: if sectioned_scenes {
+            SCENE_SECTIONS_SCHEMA_VERSION
+        } else if jointed_scenes {
             SCENE_JOINTS_SCHEMA_VERSION
         } else if !model.cam_followers.is_empty() {
             CAM_FOLLOWERS_SCHEMA_VERSION
@@ -882,6 +888,7 @@ mod tests {
             tags: None,
             positions: None,
             joints: None,
+            sections: None,
         };
         scene.add_page(page).unwrap();
         let dir = std::env::temp_dir().join(format!("session-file-far-{}", std::process::id()));

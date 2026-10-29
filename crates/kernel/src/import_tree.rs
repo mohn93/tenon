@@ -8,8 +8,9 @@ use std::collections::{HashMap, HashSet};
 use glam::{DAffine3, DVec3};
 
 use crate::MIN_DETERMINANT;
+use crate::annotation::{Anchor, Dimension, Note};
 use crate::edit::KernelError;
-use crate::geom::vector_area;
+use crate::geom::{LENGTH_TOL, vector_area};
 use crate::ids::{DefinitionId, EdgeId, InstanceId, MaterialId, TagId, VertexId};
 use crate::import::{FLAT_TOL, MAX_IMPORT_FACES, normal_of, pieces, weld};
 use crate::model::{ChangeSet, Edge, Face, Guide, Instance, Model};
@@ -32,6 +33,9 @@ pub const MAX_IMPORT_PLACEMENTS: u64 = 1_000_000;
 
 /// Most faces an import tree may show, counting a definition's faces once per placement.
 pub const MAX_IMPORT_PLACED_FACES: u64 = 20_000_000;
+
+/// Most dimensions and notes an import tree may have, over all its geometries.
+pub const MAX_IMPORT_ANNOTATIONS: usize = 10_000;
 
 /// Most pairs of loop sides one import checks for crossings (the check is quadratic in a face's
 /// corners). Faces past it are made from their outer loop alone, as a bent face is.
@@ -59,6 +63,29 @@ pub struct ImportGeometry {
     pub edges: Vec<ImportEdge>,
     pub guides: Vec<Guide>,
     pub instances: Vec<ImportInstance>,
+    pub dimensions: Vec<ImportDimension>,
+    pub notes: Vec<ImportNote>,
+}
+
+/// A linear dimension between two points of the mesh, its line moved by `offset`. Each end is
+/// anchored to the vertex made at its point (within `LENGTH_TOL`), else fixed there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImportDimension {
+    pub a: DVec3,
+    pub b: DVec3,
+    pub offset: DVec3,
+    pub tag: Option<TagId>,
+}
+
+/// A leader note: text at `position`, its leader ending at `anchor` (anchored to the vertex
+/// at that point when there is one, else fixed there). Without text the label is the
+/// anchored point's coordinates.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImportNote {
+    pub anchor: DVec3,
+    pub position: DVec3,
+    pub text: Option<String>,
+    pub tag: Option<TagId>,
 }
 
 /// A face: loop 0 is the outer loop, the others holes, each in any winding. The face looks
@@ -121,6 +148,13 @@ pub struct TreeReport {
     pub skipped_guides: usize,
     /// Definitions no instance reaches from the root: not built.
     pub unused: usize,
+    /// Dimensions made.
+    pub dimensions: usize,
+    /// Notes made.
+    pub notes: usize,
+    /// Dimensions and notes the mesh refused (a dimension of no length, a note text that is
+    /// not valid).
+    pub skipped_annotations: usize,
 }
 
 impl Scene {
@@ -183,6 +217,16 @@ impl Scene {
         if points().any(|p| !p.is_finite()) {
             return Err(KernelError::NotFinite);
         }
+        if geometries.iter().any(|g| {
+            g.dimensions
+                .iter()
+                .any(|d| !(d.a.is_finite() && d.b.is_finite() && d.offset.is_finite()))
+                || g.notes
+                    .iter()
+                    .any(|n| !(n.anchor.is_finite() && n.position.is_finite()))
+        }) {
+            return Err(KernelError::NotFinite);
+        }
         let missing = |m: &Option<MaterialId>| m.is_some_and(|m| self.material(m).is_none());
         if geometries.iter().any(|g| {
             g.faces
@@ -199,6 +243,8 @@ impl Scene {
                 || g.edges.iter().any(|e| lacks(e.tag))
                 || g.instances.iter().any(|i| lacks(i.tag))
                 || g.guides.iter().any(|g| lacks(g.tag()))
+                || g.dimensions.iter().any(|d| lacks(d.tag))
+                || g.notes.iter().any(|n| lacks(n.tag))
         }) {
             return Err(KernelError::TagNotFound);
         }
@@ -222,6 +268,8 @@ impl Scene {
             && root.edges.is_empty()
             && root.guides.is_empty()
             && root.instances.is_empty()
+            && root.dimensions.is_empty()
+            && root.notes.is_empty()
         {
             return Err(KernelError::NothingToImport);
         }
@@ -288,6 +336,15 @@ fn check_tree(tree: &ImportTree) -> Result<Vec<usize>, KernelError> {
     if instances > MAX_IMPORT_INSTANCES {
         return invalid(format!(
             "the file has {instances} instances, more than {MAX_IMPORT_INSTANCES}"
+        ));
+    }
+    let annotations: usize = std::iter::once(&tree.root)
+        .chain(tree.definitions.iter().map(|d| &d.geometry))
+        .map(|g| g.dimensions.len() + g.notes.len())
+        .sum();
+    if annotations > MAX_IMPORT_ANNOTATIONS {
+        return invalid(format!(
+            "the file has {annotations} dimensions and notes, more than {MAX_IMPORT_ANNOTATIONS}"
         ));
     }
     for d in std::iter::once(None).chain((0..n).map(Some)) {
@@ -407,6 +464,8 @@ struct Shaped<'a> {
     edges: Vec<ShapedEdge>,
     guides: Vec<Guide>,
     instances: &'a [ImportInstance],
+    dimensions: &'a [ImportDimension],
+    notes: &'a [ImportNote],
 }
 
 struct ShapedFace {
@@ -526,6 +585,8 @@ fn shape<'a>(
         edges,
         guides,
         instances: &g.instances,
+        dimensions: &g.dimensions,
+        notes: &g.notes,
     })
 }
 
@@ -665,6 +726,82 @@ impl Model {
             report.instances += 1;
         }
         ops.extend(self.take_changes().ops);
+        ops.extend(self.add_annotations(s, report).ops);
+        ChangeSet { ops }
+    }
+}
+
+/// The grid cell of a point, `LENGTH_TOL` on a side: a point's vertex within that distance is
+/// in its cell or a neighbour.
+fn cell(p: DVec3) -> [i64; 3] {
+    let c = |x: f64| (x / LENGTH_TOL).floor() as i64;
+    [c(p.x), c(p.y), c(p.z)]
+}
+
+impl Model {
+    /// The dimensions and notes of `s`, anchored to the vertex at an end when there is one
+    /// within `LENGTH_TOL`, else fixed there. One the mesh refuses is counted.
+    fn add_annotations(&mut self, s: &Shaped, report: &mut TreeReport) -> ChangeSet {
+        let mut ops = Vec::new();
+        if s.dimensions.is_empty() && s.notes.is_empty() {
+            return ChangeSet { ops };
+        }
+        let mut grid: HashMap<[i64; 3], Vec<(VertexId, DVec3)>> = HashMap::new();
+        for (id, v) in self.vertices() {
+            grid.entry(cell(v.pos)).or_default().push((id, v.pos));
+        }
+        let anchor = |p: DVec3| -> Anchor {
+            let c = cell(p);
+            let mut best: Option<(f64, VertexId)> = None;
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        let key = [
+                            c[0].saturating_add(dx),
+                            c[1].saturating_add(dy),
+                            c[2].saturating_add(dz),
+                        ];
+                        for (id, q) in grid.get(&key).into_iter().flatten() {
+                            let d = q.distance(p);
+                            if d < LENGTH_TOL && best.is_none_or(|(b, _)| d < b) {
+                                best = Some((d, *id));
+                            }
+                        }
+                    }
+                }
+            }
+            best.map_or(Anchor::Point(p), |(_, id)| Anchor::Vertex(id))
+        };
+        for d in s.dimensions {
+            let dimension = Dimension::Linear {
+                a: anchor(d.a),
+                b: anchor(d.b),
+                offset: d.offset,
+                tag: d.tag,
+            };
+            match self.add_dimension(dimension) {
+                Ok(c) => {
+                    ops.extend(c.ops);
+                    report.dimensions += 1;
+                }
+                Err(_) => report.skipped_annotations += 1,
+            }
+        }
+        for n in s.notes {
+            let note = Note::Leader {
+                anchor: anchor(n.anchor),
+                position: n.position,
+                text: n.text.clone(),
+                tag: n.tag,
+            };
+            match self.add_note(note) {
+                Ok(c) => {
+                    ops.extend(c.ops);
+                    report.notes += 1;
+                }
+                Err(_) => report.skipped_annotations += 1,
+            }
+        }
         ChangeSet { ops }
     }
 }

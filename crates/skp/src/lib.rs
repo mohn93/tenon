@@ -22,6 +22,7 @@
 
 extern crate alloc;
 
+pub mod annotations;
 pub mod container;
 pub mod edges;
 pub mod error;

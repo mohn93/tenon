@@ -409,6 +409,8 @@ pub struct Runs {
     /// Vertex ranges of the simplified meshes (see `lod`) drawn in place of some solid chunks,
     /// by level.
     pub lod: Vec<Vec<Range<u32>>>,
+    /// Ranges of the triangles those chunks keep whole (see `lod`), set by the caller.
+    pub lod_kept: Vec<Range<u32>>,
 }
 
 /// `ranges` with the box of the primitives `keep` lists, and again with that of the others;

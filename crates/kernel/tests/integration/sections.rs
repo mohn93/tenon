@@ -949,3 +949,57 @@ fn a_courtyard_enclosed_by_four_walls_stays_empty() {
     let (_, area) = fill_of(&tris, p(0.0, 0.0, 1.5), DVec3::Z);
     assert!((area - 36.0).abs() < 1e-9, "{area}");
 }
+
+/// An `n` x `n` x `n` grid of unit rooms as one mesh: each face between two rooms exists once.
+fn room_grid(n: usize) -> Vec<[DVec3; 3]> {
+    let mut tris = Vec::new();
+    for axis in 0..3 {
+        let (a, b) = ((axis + 1) % 3, (axis + 2) % 3);
+        for level in 0..=n {
+            for i in 0..n {
+                for j in 0..n {
+                    let at = |u: usize, v: usize| {
+                        let mut c = [0.0; 3];
+                        c[axis] = level as f64;
+                        c[a] = u as f64;
+                        c[b] = v as f64;
+                        DVec3::from_array(c)
+                    };
+                    let q = [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)];
+                    tris.push([q[0], q[1], q[2]]);
+                    tris.push([q[0], q[2], q[3]]);
+                }
+            }
+        }
+    }
+    tris
+}
+
+#[test]
+fn rooms_sharing_single_faces_are_all_filled() {
+    for n in [3, 5] {
+        let tris = room_grid(n);
+        let whole = (n * n) as f64;
+        for (normal, point) in [
+            (DVec3::X, p(1.5, 0.0, 0.0)),
+            (DVec3::Y, p(0.0, 1.5, 0.0)),
+            (DVec3::Z, p(0.0, 0.0, 1.5)),
+            (DVec3::Z, p(0.0, 0.0, 0.5)),
+        ] {
+            let (r, area) = fill_of(&tris, point, normal);
+            assert!(r.open.is_empty(), "{n} {normal}: {:?}", r.open);
+            assert!((area - whole).abs() < 1e-9, "{n} {normal} {point}: {area}");
+        }
+    }
+}
+
+#[test]
+fn a_cavity_inside_a_solid_stays_a_hole_next_to_shared_rooms() {
+    // A 4 cube with a 2 cube cavity: the cavity is not a room.
+    let mut tris = box_tris(DVec3::ZERO, p(4.0, 4.0, 4.0));
+    for t in box_tris(p(1.0, 1.0, 1.0), p(3.0, 3.0, 3.0)) {
+        tris.push([t[0], t[2], t[1]]);
+    }
+    let (_, area) = fill_of(&tris, p(0.0, 0.0, 2.0), DVec3::Z);
+    assert!((area - 12.0).abs() < 1e-9, "{area}");
+}

@@ -901,6 +901,10 @@ pub enum Command {
         /// Absent or false: not stored.
         #[serde(default)]
         joints: Option<SceneJoints>,
+        /// Also store the active section plane of each context and the section display
+        /// settings; going to the scene restores them. Absent or false: not stored.
+        #[serde(default)]
+        sections: Option<bool>,
     },
     /// Store the current view (`camera`) and hidden tags (`tags`) in a scene again, as one undo
     /// step; false stops storing that part. Absent parts are stored again if the scene stores
@@ -917,9 +921,13 @@ pub enum Command {
         /// The joint values (see `SceneJoints`); absent: stored again if stored.
         #[serde(default)]
         joints: Option<SceneJoints>,
+        /// The active section planes and section display; absent: stored again if stored,
+        /// false stops storing them.
+        #[serde(default)]
+        sections: Option<bool>,
     },
     /// Rename a scene and choose what it stores, as one undo step (none when nothing changes).
-    /// At least one of `name`, `camera`, `tags`, `positions` and `joints` is needed. `camera` or `tags` false stops
+    /// At least one of `name`, `camera`, `tags`, `positions`, `joints` and `sections` is needed. `camera` or `tags` false stops
     /// storing that part; true stores it from the current view or tag visibility only if the
     /// scene does not store it yet. A part that stays stored keeps exactly what was stored.
     ChangeScene {
@@ -936,6 +944,10 @@ pub enum Command {
         /// The joint values (see `SceneJoints`); absent: kept as stored.
         #[serde(default)]
         joints: Option<SceneJoints>,
+        /// The active section planes and section display: false drops them, true stores the
+        /// current ones only if the scene stores none; absent: kept as stored.
+        #[serde(default)]
+        sections: Option<bool>,
     },
     /// Move a scene to `index` in the order (0: first), as one undo step. An index past the
     /// last scene is invalid input.
@@ -948,7 +960,9 @@ pub enum Command {
     /// instances' transforms in that one undo step, labelled "Go to scene <name>"; a scene that
     /// stores joint values then drives those joints (solving couplings and cam followers) in
     /// the same step, and is refused (`invalid_input`, nothing changed) when they cannot all be
-    /// met. It becomes the selected scene.
+    /// met. A scene that stores section planes makes exactly those planes active (a context it
+    /// lists no plane for has none active) and sets the section display, in that same step. It
+    /// becomes the selected scene.
     GoToScene { scene: PageId },
     /// Add a style after the last one, as one undo step: a copy of the style `from`, or the
     /// default settings (today's look: near-black edges on a light gray background, no

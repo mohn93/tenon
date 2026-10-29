@@ -1,21 +1,22 @@
 //! Reading SketchUp files (2017 and newer) into an import tree: every definition once, with
 //! its faces (holes included), edges (soft and smooth ones soft, hidden ones hidden),
 //! placements, guides, hidden faces, groups, components and guides (kept hidden), materials,
-//! tags (the file's layers) and, from SketchUp 2021 and newer files, scenes. Images are not
-//! carried; the notes say what was left out. Files from SketchUp
-//! 2017 to 2020 (the legacy container) are read by `skp::legacy` into the same shape as newer
-//! ones, without their scenes.
+//! tags (the file's layers), scenes and, from SketchUp 2021 and newer files, linear dimensions
+//! and leader text. Images are not carried; the notes say what was left out. Files from
+//! SketchUp 2017 to 2020 (the legacy container) are read by `skp::legacy` into the same shape
+//! as newer ones, without their dimensions and text.
 
 use std::collections::{HashMap, HashSet};
 
 use glam::{DAffine3, DMat3, DVec3};
 use kernel::geom::vector_area;
 use kernel::{
-    DefinitionKind, Guide, ImportDefinition, ImportEdge, ImportFace, ImportGeometry,
-    ImportInstance, ImportTree, MAX_TEXTURE_SIZE, MIN_DETERMINANT, MIN_TEXTURE_SIZE, Material,
-    MaterialId, PAGE_NAME_BASE, Page, PageView, SceneChange, Tag, TagId, Texture, TreeReport,
-    UNTAGGED,
+    DefinitionKind, Guide, ImportDefinition, ImportDimension, ImportEdge, ImportFace,
+    ImportGeometry, ImportInstance, ImportNote, ImportTree, MAX_IMPORT_ANNOTATIONS,
+    MAX_TEXTURE_SIZE, MIN_DETERMINANT, MIN_TEXTURE_SIZE, Material, MaterialId, PAGE_NAME_BASE,
+    Page, PageView, SceneChange, Tag, TagId, Texture, TreeReport, UNTAGGED,
 };
+use skp::annotations::RawAnnotation;
 use skp::container::{Container, Generation};
 use skp::geom::{DefGeometry, NO_LAYER, RawGuide, RawInstance};
 use skp::layers::color_is_unset;
@@ -86,9 +87,25 @@ pub(crate) struct SkpNotes {
     pub lost_entities: usize,
     /// Faces of a 2017-2020 file read short of their holes.
     pub faces_short: usize,
-    /// Dimensions and text labels of a 2017-2020 file, which are not imported (a newer
-    /// file's are not read, so not counted).
+    /// Dimensions and text labels of a 2017-2020 file, which are not imported (their records
+    /// are skipped, not read).
     pub annotations: usize,
+    /// Radial dimensions of a 2021+ file: not imported (their layout is not established).
+    pub radial_dimensions: usize,
+    /// Text of a 2021+ file with no pushpin leader (screen text, view-based leaders): not
+    /// imported.
+    pub screen_text: usize,
+    /// Hidden dimensions and text of a 2021+ file: not imported.
+    pub hidden_annotations: usize,
+    /// Dimensions and text of a 2021+ file that could not be read or made, or hold a number
+    /// that is not finite or lies beyond `MAX_COORDINATE`: skipped.
+    pub unread_annotations: usize,
+    /// Imported dimensions that had text of their own, which they show as their length.
+    pub custom_dimension_text: usize,
+    /// Dimensions and text past `MAX_IMPORT_ANNOTATIONS`, left off.
+    pub dropped_annotations: usize,
+    /// Dimensions and text handed to the import tree so far.
+    pub annotations_kept: usize,
     pub images: usize,
     /// Instances of definitions the file does not have.
     pub missing: usize,
@@ -96,13 +113,16 @@ pub(crate) struct SkpNotes {
     pub flat: usize,
     /// The file's layers past `MAX_IMPORT_TAGS`, not imported.
     pub dropped_tags: usize,
-    /// Scenes not imported (a 2017-2020 file's, whose scenes are not read).
-    pub scenes: usize,
     /// Imported scenes whose camera could not be used (an eye on its target, or none read
     /// though the scene restores one): they store no view.
     pub unusable_views: usize,
     /// The file's scenes past `MAX_IMPORT_SCENES`, not imported.
     pub dropped_scenes: usize,
+    /// Hidden tags of scenes that are not in the model: Layer0, or a layer past
+    /// `MAX_IMPORT_TAGS` (counted per scene).
+    pub lost_hidden_tags: usize,
+    /// Notes whose text was cut to the note limits.
+    pub shortened_text: usize,
     /// Materials used past `MAX_IMPORT_MATERIALS`, imported as no material (set by the
     /// caller, which counts the materials built faces keep).
     pub dropped_materials: usize,
@@ -149,19 +169,60 @@ impl SkpNotes {
             ),
         );
         say(
-            self.scenes,
-            "scene was not imported",
-            "scenes were not imported",
-        );
-        say(
             self.annotations,
             "dimension or text label was not imported",
             "dimensions and text labels were not imported",
         );
         say(
+            self.radial_dimensions,
+            "radial dimension was not imported",
+            "radial dimensions were not imported",
+        );
+        say(
+            self.screen_text,
+            "text label without a pushpin leader (screen text) was not imported",
+            "text labels without a pushpin leader (screen text) were not imported",
+        );
+        say(
+            self.hidden_annotations,
+            "hidden dimension or text label was not imported",
+            "hidden dimensions and text labels were not imported",
+        );
+        say(
+            self.unread_annotations + built.skipped_annotations,
+            "dimension or text label could not be read and was skipped",
+            "dimensions and text labels could not be read and were skipped",
+        );
+        say(
+            self.custom_dimension_text,
+            "dimension's own text was not kept; it shows its length",
+            "dimensions' own text was not kept; they show their lengths",
+        );
+        say(
+            self.dropped_annotations,
+            &format!(
+                "dimension or text label past the {MAX_IMPORT_ANNOTATIONS} an import may add \
+                 was left off"
+            ),
+            &format!(
+                "dimensions and text labels past the {MAX_IMPORT_ANNOTATIONS} an import may \
+                 add were left off"
+            ),
+        );
+        say(
             self.dropped_scenes,
             &format!("scene past the {MAX_IMPORT_SCENES} an import may add was left off"),
             &format!("scenes past the {MAX_IMPORT_SCENES} an import may add were left off"),
+        );
+        say(
+            self.lost_hidden_tags,
+            "hidden tag of a scene is not in the model (Layer0, or past the tag limit); the scene shows it",
+            "hidden tags of scenes are not in the model (Layer0, or past the tag limit); the scenes show them",
+        );
+        say(
+            self.shortened_text,
+            "note's text was shortened to the note limits",
+            "notes' texts were shortened to the note limits",
         );
         say(
             self.unusable_views,
@@ -288,11 +349,6 @@ pub(crate) fn read_skp(
             .as_ref()
             .map_or(0, |s| saturate(s.faces_short_of_exact)),
         annotations: stats.as_ref().map_or(0, |s| saturate(s.annotations)),
-        // A 2017-2020 file's scenes are not read (counted); a newer file's are added below.
-        scenes: match container.generation {
-            Generation::Legacy => index.scenes.len(),
-            Generation::Vff => 0,
-        },
         ..SkpNotes::default()
     };
 
@@ -393,17 +449,18 @@ pub(crate) fn read_skp(
     };
     notes.added_tags = tags.added;
     notes.dropped_tags = tags.dropped;
-    if container.generation == Generation::Vff {
-        match add_pages(document, &index.scenes, &tags.ids, unit) {
-            Ok(pages) => {
-                notes.added_pages = pages.added;
-                notes.unusable_views = pages.unusable_views;
-                notes.dropped_scenes = pages.dropped;
-            }
-            Err(e) => {
-                remove_added(document, &notes);
-                return Err(e);
-            }
+    // Both containers' scenes: a 2017-2020 file's layer ids are list positions, the same
+    // numbering its `LayerDef`s and its scenes' hidden tags use.
+    match add_pages(document, &index.scenes, &index.layers, &tags.ids, unit) {
+        Ok(pages) => {
+            notes.added_pages = pages.added;
+            notes.unusable_views = pages.unusable_views;
+            notes.dropped_scenes = pages.dropped;
+            notes.lost_hidden_tags = pages.lost_hidden_tags;
+        }
+        Err(e) => {
+            remove_added(document, &notes);
+            return Err(e);
         }
     }
     let ids = Ids {
@@ -837,13 +894,116 @@ fn geometry(
             None => notes.skipped_guides += 1,
         }
     }
+    let (dimensions, text_notes) = annotations(g, unit, ids, notes);
     Ok(ImportGeometry {
         points,
         faces,
         edges,
         guides,
         instances,
+        dimensions,
+        notes: text_notes,
     })
+}
+
+/// `text` cut to the note limits (the first `MAX_NOTE_LINES` lines, then the first
+/// `MAX_NOTE_CHARS` characters); None when nothing is left.
+fn shorten_note_text(text: &str) -> Option<String> {
+    let mut cut: String = text
+        .lines()
+        .take(kernel::MAX_NOTE_LINES)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .chars()
+        .take(kernel::MAX_NOTE_CHARS)
+        .collect();
+    cut.truncate(cut.trim_end().len());
+    kernel::check_note_text(&cut).ok().map(|()| cut)
+}
+
+/// A mesh's dimensions and leader notes in meters (`unit` per inch), counting what is left
+/// out in `notes`: a number that is not finite, a point (the leader's text included, or a
+/// dimension line's end) beyond `MAX_COORDINATE`, text that is too long, and what is past
+/// `MAX_IMPORT_ANNOTATIONS` for the whole import.
+fn annotations(
+    g: &DefGeometry,
+    unit: f64,
+    ids: &Ids,
+    notes: &mut SkpNotes,
+) -> (Vec<ImportDimension>, Vec<ImportNote>) {
+    notes.radial_dimensions += g.annotation_skips.radial as usize;
+    notes.screen_text += g.annotation_skips.screen_text as usize;
+    notes.hidden_annotations += g.annotation_skips.hidden as usize;
+    notes.unread_annotations += g.annotation_skips.unread as usize;
+    let fits = |p: DVec3| p.is_finite() && p.abs().max_element() <= MAX_COORDINATE;
+    let at = |p: [f64; 3]| {
+        let p = DVec3::from_array(p) * unit;
+        fits(p).then_some(p)
+    };
+    let (mut dimensions, mut text_notes) = (Vec::new(), Vec::new());
+    for a in &g.annotations {
+        if notes.annotations_kept >= MAX_IMPORT_ANNOTATIONS {
+            notes.dropped_annotations += 1;
+            continue;
+        }
+        let made = match a {
+            RawAnnotation::Linear {
+                start,
+                end,
+                offset,
+                layer,
+                custom_text,
+            } => (|| {
+                let (a, b) = (at(*start)?, at(*end)?);
+                let offset = DVec3::from_array(*offset) * unit;
+                // The dimension line's ends are within the limit too.
+                if !(fits(a + offset) && fits(b + offset)) {
+                    return None;
+                }
+                dimensions.push(ImportDimension {
+                    a,
+                    b,
+                    offset,
+                    tag: ids.tag(*layer),
+                });
+                notes.custom_dimension_text += usize::from(*custom_text);
+                Some(())
+            })(),
+            RawAnnotation::Leader {
+                anchor,
+                vector,
+                text,
+                layer,
+            } => (|| {
+                let anchor = at(*anchor)?;
+                let position = anchor + DVec3::from_array(*vector) * unit;
+                if !fits(position) {
+                    return None;
+                }
+                let text = match text.trim() {
+                    "" => None,
+                    _ => {
+                        let cut = shorten_note_text(text)?;
+                        notes.shortened_text += usize::from(cut != *text);
+                        Some(cut)
+                    }
+                };
+                text_notes.push(ImportNote {
+                    anchor,
+                    position,
+                    text,
+                    tag: ids.tag(*layer),
+                });
+                Some(())
+            })(),
+        };
+        if made.is_some() {
+            notes.annotations_kept += 1;
+        } else {
+            notes.unread_annotations += 1;
+        }
+    }
+    (dimensions, text_notes)
 }
 
 /// A guide of the file in meters (`unit` per inch), or None when its point is not finite or
@@ -1122,6 +1282,8 @@ struct AddedPages {
     unusable_views: usize,
     /// Scenes past `MAX_IMPORT_SCENES`.
     dropped: usize,
+    /// Hidden tags of the scenes that are layers of the file but no tag of the model.
+    lost_hidden_tags: usize,
 }
 
 /// Adds one scene per page of a 2021+ file, in the file's order and after the model's scenes,
@@ -1139,11 +1301,14 @@ struct AddedPages {
 fn add_pages(
     document: &mut Document,
     scenes: &[SceneDef],
+    layers: &[LayerDef],
     tags: &HashMap<u32, TagId>,
     unit: f64,
 ) -> Result<AddedPages, CommandError> {
+    let known: HashSet<u32> = layers.iter().map(|l| l.id).collect();
     let mut out = AddedPages {
         added: Vec::new(),
+        lost_hidden_tags: 0,
         unusable_views: 0,
         dropped: scenes.len().saturating_sub(MAX_IMPORT_SCENES),
     };
@@ -1179,6 +1344,13 @@ fn add_pages(
         } else {
             None
         };
+        if def.flags & page_flag::VISIBLE_LAYERS != 0 {
+            out.lost_hidden_tags += def
+                .hidden_layer_ids
+                .iter()
+                .filter(|l| known.contains(l) && !tags.contains_key(l))
+                .count();
+        }
         let tags = (def.flags & page_flag::VISIBLE_LAYERS != 0).then(|| {
             def.hidden_layer_ids
                 .iter()
@@ -1191,6 +1363,7 @@ fn add_pages(
             tags,
             positions: None,
             joints: None,
+            sections: None,
         };
         match document.scene_mut().add_page(page) {
             Ok((_, change)) => out.added.push(change),

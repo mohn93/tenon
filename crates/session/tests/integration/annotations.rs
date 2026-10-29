@@ -1158,7 +1158,7 @@ fn files_with_broken_annotations_are_refused_clearly() {
     // A newer schema is refused as before.
     let newer = scratch("newer.tnn");
     std::fs::copy(&path, &newer).unwrap();
-    edit_file(&newer, |doc| doc["schema_version"] = json!(30));
+    edit_file(&newer, |doc| doc["schema_version"] = json!(31));
     let (_, message, _) = open(&newer);
     assert!(message.contains("newer"), "{message}");
 }
