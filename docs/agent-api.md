@@ -855,9 +855,9 @@ In the window the Dimension and Text tools (Tools menu and rail; no keys) make t
 a note with Select opens the window's note sheet to change its text (`change_note` here). The
 display units are set in the window in Settings, Model tab (`set_units` here).
 
-Files keep them (schema 12, see Files). A SketchUp file's dimensions and text are not imported.
-For a 2017-2020 file the import report's `warnings` counts them ("N dimensions and text labels
-were not imported"); a 2021 or newer file's are not read, so not counted.
+Files keep them (schema 12, see Files). A SketchUp 2021 or newer file's linear dimensions and
+pushpin-leader text labels are imported (see Import); its other annotations and a 2017-2020
+file's are not, and the import report's `warnings` counts them.
 
 ### Section planes
 
@@ -1238,7 +1238,7 @@ SketchUp file start with it off.
 A scene saves a view and which tags are hidden, to go back to in one step (SketchUp's scenes).
 A scene may store the view, the tag visibility, both or neither. The scenes are in an order
 (their tabs' order in the window) and shared by the whole model. Importing or opening a
-SketchUp file (2021 or newer) adds its scenes (see Import).
+SketchUp file (2017 or newer) adds its scenes (see Import), and an `skp` export writes them.
 
 | Command | Effect |
 |---|---|
@@ -2197,7 +2197,7 @@ within 16 MiB); `skp` starts with SketchUp's file header; `3mf` is a zip with a 
 | `stl` | Binary STL: one record per triangle with its normal; Z up, as in the model; no colors or opacity |
 | `glb` | Binary glTF 2.0: one mesh of flat-shaded triangles (`POSITION`, `NORMAL`), one primitive per material; materials are double-sided, so lone faces show from behind; a painted one has its name and its color as `baseColorFactor` (linear, with the opacity as alpha), and a see-through one `alphaMode` `BLEND`; the default one is named `default`; a material with a texture has a `TEXCOORD_0` attribute and a `baseColorTexture` (its image file, as it was read, in the buffer; a sampler with linear mipmapped filtering that repeats both ways) with a white `baseColorFactor` (and the opacity as alpha); a glowing material has `emissiveFactor`, its color (linear) times its emission up to 1 (white, and an `emissiveTexture` naming its texture, when it has one), and an emission above 1 goes in `KHR_materials_emissive_strength` (`emissiveStrength`, listed in `extensionsUsed`); Y up |
 | `gltf` | The same glTF document as JSON, its buffer embedded as a base64 data URI |
-| `skp` | A SketchUp 2017 file (SketchUp 2017 and newer open it), written from the scene rather than triangles: the root and every group and component definition the root places (at any depth), each written once in its own coordinates and placed by its instances (transform and material kept, a mirrored one stays mirrored); faces with their holes and front and back materials; every edge, soft edges soft and smooth; guide lines and points; every material (color, opacity, texture image as it was read and its size); each textured face side carries its texture's placement (a face whose corners are too close to a line to fix it keeps the default projection, with a warning); every tag, used or not, as a layer with its name, color and visibility (hidden tags stay hidden), and every edge, face, instance and guide on its tag, hidden or not (Untagged ones on the file's Layer0); hidden edges, faces, instances and guides are written hidden. Lengths are inches, as SketchUp stores them; Z up. Material, tag and definition names are trimmed, blank ones become `Material`, `Tag`, `Group` or `Component`, they are cut to 240 UTF-16 units, and a name already taken gets the first free number (" 2", " 3"), so copied groups sharing a name come back as `Group`, `Group 2` (and a tag named `Layer0`, the file's own layer, is written as `Layer0 2`). Groups and components with nothing in them are left out. Curves (circles, arcs, polygons) are written as their separate edges. The same model gives the same bytes. |
+| `skp` | A SketchUp 2017 file (SketchUp 2017 and newer open it), written from the scene rather than triangles: the root and every group and component definition the root places (at any depth), each written once in its own coordinates and placed by its instances (transform and material kept, a mirrored one stays mirrored); faces with their holes and front and back materials; every edge, soft edges soft and smooth; guide lines and points; every material (color, opacity, texture image as it was read and its size); each textured face side carries its texture's placement (a face whose corners are too close to a line to fix it keeps the default projection, with a warning); every tag, used or not, as a layer with its name, color and visibility (hidden tags stay hidden), and every edge, face, instance and guide on its tag, hidden or not (Untagged ones on the file's Layer0); hidden edges, faces, instances and guides are written hidden. Lengths are inches, as SketchUp stores them; Z up. Material, tag and definition names are trimmed, blank ones become `Material`, `Tag`, `Group` or `Component`, they are cut to 240 UTF-16 units, and a name already taken gets the first free number (" 2", " 3"), so copied groups sharing a name come back as `Group`, `Group 2` (and a tag named `Layer0`, the file's own layer, is written as `Layer0 2`). Groups and components with nothing in them are left out. Curves (circles, arcs, polygons) are written as their separate edges. Scenes are written as SketchUp pages, in tab order: name, camera (eye, target, up, vertical field of view, perspective or parallel with the view's height at the target) when the scene stores a view, and hidden tags when it stores tag visibility (a page restores the camera only when its camera flag is set; a scene with no tag visibility is written showing every tag). Each page carries the model's own style, shadow and axes blocks and a plain grey thumbnail, which SketchUp redraws when the scene is updated. The same model gives the same bytes. |
 | `3mf` | A 3MF package for 3D printers and slicers (a zip of `[Content_Types].xml`, `_rels/.rels` and `3D/3dmodel.model`), written from the model's parts rather than one triangle soup: one `<object type="model">` per shown root group or component, named after its definition, with everything it places baked in at its world transform, plus one object "Loose geometry" for the root's own faces; each has a `<build>` item. A definition placed more than once with the same inherited paint is written once, in its own coordinates, and referenced by a `transform`ed build item per root placement and by a `<components>` object (whose own faces are a mesh object named "<name> (body)") where a group places it; a placement that mirrors is never shared: it is baked with its winding restored, so its triangles still face outward. `unit="millimeter"`, Z up as in the model. Vertices are welded within an object (indexed mesh). Colors are the triangles' front materials, in one `<basematerials>` group (name, `displaycolor` `#RRGGBBAA` with the opacity as alpha; `default` for unpainted), referenced by `pid`/`p1`. A textured material's triangles instead use a `<m:texture2dgroup>` (Materials and Properties extension, namespace `.../material/2015/02`, not listed as required; a textured object's default `pid`/`pindex` is still its most used base color, which a consumer without the extension may fall back to, though its triangles name the texture group) with one `<m:tex2coord>` per distinct coordinate and `pid`/`p1`/`p2`/`p3`; the image is written as the stored PNG or JPEG at `/3D/Textures/textureN.png|jpg` (`<m:texture2d>`, wrap tiling) with its content type and a 3D Texture relationship in `3D/_rels/3dmodel.model.rels`; v counts up from the image's bottom. The result's `export.objects` lists, per mesh object in file order (a shared definition once), `name`, `vertices`, `triangles`, `closed` and, when not closed, `why`; `closed` means every edge is used by exactly two triangles, consistently oriented, with outward faces. Each open object also adds a `warnings` line "<name> is not a closed mesh: <why>". `"selection": true` (3MF only; any other format is `invalid_input`) writes just the selected root groups and components and selected loose faces, and needs the root as the open context. |
 
 In the triangle formats (`obj`, `stl`, `glb`, `gltf`), colors and textures come from each face's
@@ -2219,7 +2219,7 @@ written, each definition counted once: `definitions`, `instances`, `faces`, `edg
 cannot hold: "N materials glow; SketchUp files cannot store that", "N curves were written as
 separate edges", "N empty groups or components were left out", "N textured faces kept the
 default texture placement; their corners are too close to a line", and what it does not write:
-"N scenes were not written" (scenes are not exported). Every format but SVG (which draws dimensions and notes and applies section cuts, see below), `skp` included, leaves out
+"N scenes' instance positions were not written; SketchUp files cannot store them", "N scenes' joint values were not written; SketchUp files cannot store them", "N scenes' lighting, shadow, style or display modes were not written", "N scenes store no tag visibility; they were written showing every tag" and "N hidden tags of scenes were left out; their layers are past what a scene's list holds". The report's `scenes` is the number of scenes written (absent when 0). Every format but SVG (which draws dimensions and notes and applies section cuts, see below), `skp` included, leaves out
 dimensions, notes and section planes; `warnings` then says "N dimensions were not written", "N notes were
 not written" and "N section planes were not written" ("1 section plane was not written"; the root and each definition the root places counted once). A binary STL holds at most 2^32 - 1
 triangles and a `.glb` at most 4 GiB (about 59 million triangles); a larger model is refused
@@ -2322,7 +2322,25 @@ supported"). What is carried:
   cut to 240 characters and made unique against the model's tags and `Untagged` (`Walls 2`);
   existing tags are never changed. At most 1,024 tags are added; what is on the file's further
   layers is imported Untagged, with a warning.
-- Scenes (from SketchUp 2021 and newer files): each of the file's scenes becomes a scene, after
+- Dimensions and text (SketchUp 2021 and newer files): each linear dimension becomes a linear
+  dimension and each text label with a pushpin leader a leader note, in the mesh of the
+  definition (or the file's top level) that holds it, on the tag of its layer. An end of a
+  dimension, and a leader's point, is anchored to the vertex of the mesh at that point (within
+  1e-6 m) and else fixed there; a point the file ties to a vertex or guide point of the same
+  definition by identity is read at that vertex or guide point. The dimension line is the file's
+  offset (`y position` along the plane's normal crossed with its x axis; the sign was fixed from
+  the file's dimensions, which sit above top edges and below floor edges). A dimension always
+  shows its length: text of its own is not kept (counted). A note whose text is blank shows its
+  point's coordinates, as `add_note` without `text` does; text over 64 lines or 1,024
+  characters is cut to them, counted in a warning ("N notes' texts were shortened to the note
+  limits"). At most 10,000 dimensions and notes are added;
+  the report's `dimensions` and `notes` count them. Not imported, each counted in `warnings`:
+  radial dimensions and text without a pushpin leader (screen text and view-based leaders; the
+  files at hand hold neither, so their records are not decoded), hidden ones, those whose
+  numbers are not finite or lie beyond +/-1e6 m, and those tied to anything but a vertex or guide point of their own definition. Angular
+  dimensions do not exist in the file format.
+- Scenes (from SketchUp 2017 and newer files; a 2017-2020 file's scenes are found in the end of
+  its stream and read the same way): each of the file's scenes becomes a scene, after
   the model's, in the file's order, with its name (trimmed, cut to 240 characters, a blank one
   named as `add_scene` names it, and made unique against the model's scenes: `Front 2`). A
   scene that restores the camera stores its view: the file's camera in meters times `scale`, in
@@ -2330,14 +2348,14 @@ supported"). What is carried:
   parallel, its field of view (a parallel camera keeps the height of its view through it), lit
   by day, not colored by tag. A scene that restores tag visibility stores the tags of its
   hidden layers as its hidden tags (Layer0, which is Untagged, and layers not imported are left
-  out). What a scene does not restore it does not store. A camera that cannot be used (its eye
+  out, counted in a warning: "N hidden tags of scenes are not in the model (Layer0, or past the
+  tag limit); the scenes show them"). What a scene does not restore it does not store. A camera that cannot be used (its eye
   on its target, beyond +/-1e6 m, or missing from a scene that restores one) is left out, with
   a warning ("1 scene's camera could not be used; the scene leaves the camera alone"). At most
   1,024 scenes are added; the file's further scenes are left off, with a warning. No scene is
   selected and the camera is not moved; `open` views the model as described there.
 
-Not carried, each counted in `warnings`: scenes of 2017-2020 files ("12 scenes were not
-imported"),
+Not carried, each counted in `warnings`:
 images (skipped),
 instances of a definition the file lacks or with a flat or broken transform (skipped),
 faces that cannot be made (skipped: an outline that cannot be read, fewer than three distinct
@@ -2346,8 +2364,7 @@ faces made from their outer loop, material references that match no material of 
 (or one whose id is too large to match), guides that cannot be
 read, and, in a 2017-2020 file, entities that could not be read after a damaged record
 ("12 entities could not be read and were skipped": the rest of the model is imported).
-Section planes, dimensions, text, texture positions and the file's camera and
-styles are not read.
+Section planes, texture positions and the file's camera and styles are not read.
 
 glTF 2.0 files (`.gltf` JSON or `.glb` binary) and COLLADA files (`.dae`, 1.4 and 1.5) are
 read as a tree of nodes. What is carried:
@@ -2444,9 +2461,10 @@ may make several), `vertices` the vertices made, `skipped` faces that made none 
 that cannot be read, fewer than three distinct corners, no area, or a duplicate), and
 `materials` the materials added. It also has `tags` (tags added), `scenes` (scenes added),
 `definitions` and `instances` (made from the file's, without the wrapper), `guides` (guides
-made), `textures` (materials added with a texture) and `warnings`
-(sentences, such as "2 scenes were not imported", "4 dimensions and text labels were not
-imported" (2017-2020 files only),
+made), `dimensions` and `notes` (from a 2021 or newer file), `textures` (materials added with a texture) and `warnings`
+(sentences, such as "4 dimensions and text labels were not imported" (2017-2020 files),
+"1 radial dimension was not imported", "2 text labels without a pushpin leader (screen text)
+were not imported",
 "1 image was skipped", "5 face holes could not be read and were dropped", "1 guide could not be
 read and was skipped"); each is absent when 0 or empty, and always absent for
 OBJ and STL. A glTF or COLLADA import reports `definitions`, `instances`, `textures` and

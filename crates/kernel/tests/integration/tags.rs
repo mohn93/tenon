@@ -527,6 +527,7 @@ fn an_import_tree_on_a_missing_tag_is_refused_and_keeps_its_tags() {
         }],
         guides: vec![Guide::point(p(1.0, 1.0, 1.0)).with_tag(guide)],
         instances: Vec::new(),
+        ..Default::default()
     };
     let tree = |t: [Option<TagId>; 4]| {
         let mut root = square(t[0], t[1], t[2]);

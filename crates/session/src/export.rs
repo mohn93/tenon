@@ -118,6 +118,9 @@ pub struct ExportReport {
     /// SketchUp files: tags written (every tag of the model). Absent when 0.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub tags: usize,
+    /// SketchUp files: scenes written (name, camera and hidden tags). Absent when 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub scenes: usize,
     /// SVG: polylines drawn (visible edges and cut edges). Absent when 0.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub lines: usize,

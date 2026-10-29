@@ -80,9 +80,9 @@ pub use ids::{
 };
 pub use import::{MAX_IMPORT_FACES, MeshPolygon, MeshReport, polygon_geometry};
 pub use import_tree::{
-    ImportDefinition, ImportEdge, ImportFace, ImportGeometry, ImportInstance, ImportTree,
-    MAX_IMPORT_DEFINITIONS, MAX_IMPORT_DEPTH, MAX_IMPORT_INSTANCES, MAX_IMPORT_PLACED_FACES,
-    MAX_IMPORT_PLACEMENTS, TreeReport,
+    ImportDefinition, ImportDimension, ImportEdge, ImportFace, ImportGeometry, ImportInstance,
+    ImportNote, ImportTree, MAX_IMPORT_ANNOTATIONS, MAX_IMPORT_DEFINITIONS, MAX_IMPORT_DEPTH,
+    MAX_IMPORT_INSTANCES, MAX_IMPORT_PLACED_FACES, MAX_IMPORT_PLACEMENTS, TreeReport,
 };
 pub use index::{Index, Shape, ray_hits_triangle};
 pub use joint::{

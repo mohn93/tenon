@@ -652,6 +652,8 @@ impl Document {
             definitions: b.built.definitions,
             instances: b.built.instances,
             guides: given_guides.saturating_sub(b.built.skipped_guides),
+            dimensions: b.built.dimensions,
+            notes: b.built.notes,
             textures,
             warnings: b.notes.warnings(&b.built),
             ..ImportReport::default()

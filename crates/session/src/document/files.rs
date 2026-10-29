@@ -871,6 +871,7 @@ fn skp_bytes(scene: &Scene) -> Result<(Vec<u8>, ExportReport), CommandError> {
             guides: stats.guides,
             materials: stats.materials,
             tags: stats.tags,
+            scenes: stats.scenes,
             warnings: stats.warnings,
             ..ExportReport::default()
         },
