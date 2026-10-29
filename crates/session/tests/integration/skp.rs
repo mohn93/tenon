@@ -2836,7 +2836,7 @@ fn dimensions_and_text_import_anchored_where_they_meet_vertices() {
         panic!()
     };
     assert_eq!(*anchor, Anchor::Vertex(at(1.0)));
-    assert_vec((*position), [1.0 * inch, 0.0, 2.0 * inch]);
+    assert_vec(*position, [1.0 * inch, 0.0, 2.0 * inch]);
     assert_eq!(text.as_deref(), Some("Hello"));
     let Note::Leader {
         anchor,
@@ -2848,7 +2848,7 @@ fn dimensions_and_text_import_anchored_where_they_meet_vertices() {
         panic!()
     };
     assert!(matches!(anchor, Anchor::Point(_)));
-    assert_vec((*position), [6.0 * inch, 5.0 * inch, 5.0 * inch]);
+    assert_vec(*position, [6.0 * inch, 5.0 * inch, 5.0 * inch]);
     assert_eq!(*text, None);
 
     // The root's own (no vertices there): fixed points, on the tag the layer became.
@@ -2863,7 +2863,7 @@ fn dimensions_and_text_import_anchored_where_they_meet_vertices() {
     };
     assert!(matches!(a, Anchor::Point(_)));
     // normal x x_axis = z; y_pos -1 inch.
-    assert_vec(offset, [0.0, 0.0, -1.0 * inch]);
+    assert_vec(offset, [0.0, 0.0, -inch]);
     assert_eq!(t, Some(tag));
     let notes: Vec<_> = d.scene().root().notes().map(|(_, n)| n.clone()).collect();
     assert_eq!(notes.len(), 1);
