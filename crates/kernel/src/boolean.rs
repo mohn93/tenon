@@ -290,7 +290,7 @@ fn outer_shells(m: &Model) -> Result<Model, BooleanError> {
 }
 
 /// The faces of `m` grouped into shells: faces joined across the edges of their loops.
-fn shells_of(m: &Model) -> Vec<Vec<FaceId>> {
+pub(crate) fn shells_of(m: &Model) -> Vec<Vec<FaceId>> {
     let ids: Vec<FaceId> = m.faces().map(|(id, _)| id).collect();
     let at: HashMap<FaceId, usize> = ids.iter().enumerate().map(|(i, f)| (*f, i)).collect();
     let mut parent: Vec<usize> = (0..ids.len()).collect();

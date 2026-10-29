@@ -20,7 +20,9 @@ use std::fmt;
 
 use glam::{DAffine3, DVec2, DVec3};
 
-use crate::boolean::{BooleanError, BooleanOp, apart, combine, placed_copy};
+use crate::boolean::{
+    BooleanError, BooleanOp, apart, combine, copy_into, placed_copy, shells_of, subset,
+};
 use crate::geom::{LENGTH_TOL, vector_area};
 use crate::ids::{CurveId, EdgeId, FaceId, MaterialId, VertexId};
 use crate::model::{Face, Model};
@@ -303,10 +305,56 @@ fn bevel_core(
             "at most {MAX_EDGES} edges can be bevelled at once"
         )));
     }
-    if let Some(why) = open_reason(m) {
+    // Only the shells holding a chosen edge are cut; other shells of the mesh (a part beside or
+    // on the solid, loose faces) are carried over as they are.
+    let shells = shells_of(m);
+    let mut hit = vec![false; shells.len()];
+    for (e, _) in edges {
+        let Some(edge) = m.edge(*e) else {
+            return Err(BevelError::Edge(
+                *e,
+                format!("e{} is not an edge of the solid", e.0),
+            ));
+        };
+        let [a, b] = edge.v;
+        let at = m
+            .faces_on_side(a, b)
+            .into_iter()
+            .chain(m.faces_on_side(b, a))
+            .next();
+        let shell = at.and_then(|f| shells.iter().position(|s| s.contains(&f)));
+        match shell {
+            Some(i) => hit[i] = true,
+            None => {
+                return Err(BevelError::Edge(
+                    *e,
+                    format!("edge e{} bounds no face", e.0),
+                ));
+            }
+        }
+    }
+    let faces_of = |want: bool| -> Vec<FaceId> {
+        (0..shells.len())
+            .filter(|i| hit[*i] == want)
+            .flat_map(|i| shells[i].iter().copied())
+            .collect()
+    };
+    let target = subset(m, &faces_of(true));
+    let mut rest = subset(m, &faces_of(false));
+    // Loose edges (no face) stay too.
+    for (_, e) in m.edges() {
+        let [a, b] = e.v;
+        if m.faces_on_side(a, b).is_empty() && m.faces_on_side(b, a).is_empty() {
+            let (pa, pb) = (m.pos(a), m.pos(b));
+            let va = rest.find_vertex(pa).unwrap_or_else(|| rest.insert_vertex(pa));
+            let vb = rest.find_vertex(pb).unwrap_or_else(|| rest.insert_vertex(pb));
+            rest.insert_edge_like(va, vb, e);
+        }
+    }
+    if let Some(why) = open_reason(&target) {
         return Err(BevelError::NotSolid(why));
     }
-    let volume = signed_volume(m);
+    let volume = signed_volume(&target);
     if volume.abs() <= 1e-12 {
         return Err(BevelError::NotSolid("it encloses no volume".into()));
     }
@@ -399,7 +447,7 @@ fn bevel_core(
         trimmed.push(cutter);
     }
 
-    let mut acc = placed_copy(m, DAffine3::IDENTITY, None);
+    let mut acc = placed_copy(&target, DAffine3::IDENTITY, None);
     for (op, tools) in [(BooleanOp::Union, fillers), (BooleanOp::Subtract, trimmed)] {
         for tool in apart(tools) {
             acc = combine(&acc, &tool, op)?.ok_or(BooleanError::NotClosed)?;
@@ -413,6 +461,8 @@ fn bevel_core(
         corner::soften(&mut acc, &corners, &done, step);
     }
     let patched = done.iter().map(|i| corners[*i].vertex).collect();
+    copy_into(&rest, &mut acc);
+    acc.take_changes();
     Ok((acc, patched))
 }
 
@@ -1044,6 +1094,49 @@ mod tests {
         assert!(v > 24.0 - all && v < 24.0 - apart, "{v}");
         // 6 shrunken faces and 12 chamfers; each corner is closed by a triangle.
         assert_eq!(r.faces().count(), 18 + 8);
+    }
+
+    fn moved(m: &Model, by: [f64; 3]) -> Model {
+        placed_copy(m, DAffine3::from_translation(DVec3::from(by)), None)
+    }
+
+    fn beside(a: &Model, b: &Model) -> Model {
+        let mut m = Model::new();
+        copy_into(a, &mut m);
+        copy_into(b, &mut m);
+        m.take_changes();
+        m
+    }
+
+    #[test]
+    fn a_part_on_the_face_is_not_cut_by_the_cutters() {
+        let base = cuboid([4.0, 4.0, 2.0]);
+        // A block resting on the top face, over the edge to be rounded.
+        let block = moved(&cuboid([1.0, 1.0, 1.0]), [0.0, 0.0, 2.0]);
+        let m = beside(&base, &block);
+        let e = edge_at(&m, [0.0, 0.0, 2.0], [4.0, 0.0, 2.0]);
+        let r = bevelled(&m, &[e], chamfer(0.5)).unwrap();
+        assert_eq!(open_reason(&r), None);
+        assert!((signed_volume(&r) - (32.0 - 0.125 * 4.0 + 1.0)).abs() < 1e-9);
+        assert!(has_vertex(&r, [0.0, 0.0, 3.0]) && has_vertex(&r, [0.0, 0.0, 2.0]));
+        // A round of the same size leaves the block alone too.
+        let round = Profile::Fillet { radius: 0.5, segments: 4 };
+        let r = bevelled(&m, &[e], round).unwrap();
+        assert_eq!(open_reason(&r), None);
+        assert!(has_vertex(&r, [0.0, 0.0, 3.0]) && has_vertex(&r, [0.0, 0.0, 2.0]));
+    }
+
+    #[test]
+    fn a_part_across_a_slot_is_not_cut_by_the_cutters() {
+        // Two blocks with a 0.2 m slot between them; the edge on the far side of the first.
+        let a = cuboid([2.0, 2.0, 2.0]);
+        let b = moved(&cuboid([2.0, 2.0, 2.0]), [2.2, 0.0, 0.0]);
+        let m = beside(&a, &b);
+        let e = edge_at(&m, [2.0, 0.0, 2.0], [2.0, 2.0, 2.0]);
+        let r = bevelled(&m, &[e], chamfer(0.5)).unwrap();
+        assert_eq!(open_reason(&r), None);
+        assert!((signed_volume(&r) - (16.0 - 0.125 * 2.0)).abs() < 1e-9);
+        assert!(has_vertex(&r, [2.2, 0.0, 2.0]) && has_vertex(&r, [2.2, 2.0, 0.0]));
     }
 
     fn l_shape() -> Model {
