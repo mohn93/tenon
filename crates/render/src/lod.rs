@@ -11,15 +11,18 @@
 //!
 //! Left as they are, in every level: triangles that glow or show a texture (an average would
 //! make lit windows vanish or the texture wrong), and triangles much longer than a cell (spires,
-//! masts, strips), which clustering would drop whole.
+//! masts, strips), which clustering would drop whole. These are the same in every level, so
+//! they are kept once per chunk as full vertices in a buffer of their own, drawn with the
+//! ordinary face pipeline (and a buffer of zero flags) beside the chunk's simplified level.
 //!
 //! Cracks: each chunk is simplified alone, so the cell averages of two neighbours differ and a
 //! surface running from one into the other would tear open. Vertices that must not move are
-//! therefore pinned, each its own cluster at its exact position: those at a place where vertices
-//! of two or more chunks lie (`Borders`), and those where a triangle kept whole has a corner. Every edge shared by two chunks, or by a kept and a simplified triangle,
-//! has pinned ends, so it is the same segment in a chunk at any level and in a full one.
+//! therefore pinned, each its own cluster at its exact position: those at a place where
+//! vertices of two or more chunks lie (`Borders`), and those where a triangle kept whole has a
+//! corner. Every edge shared by two chunks, or by a kept and a simplified triangle, has
+//! pinned ends, so it is the same segment in a chunk at any level and in a full one.
 //!
-//! The simplified chunks have their own small vertex (`LodVertex`): nothing in them is
+//! The simplified levels have their own small vertex (`LodVertex`): nothing in them is
 //! textured, glowing or see-through, and a chunk with something selected or hovered is drawn
 //! whole, so they carry no flags.
 
@@ -95,10 +98,18 @@ struct Level {
 /// The simplified solid chunks of a model, on the GPU, one vertex buffer a level.
 pub struct Lod {
     levels: Vec<Level>,
+    /// The triangles each chunk keeps whole, full vertices, in one buffer.
+    kept: Option<wgpu::Buffer>,
+    kept_ranges: Vec<Option<Range<u32>>>,
+    /// Zero flags for `kept`'s vertices (nothing in them is selected or hovered).
+    zeros: Option<wgpu::Buffer>,
 }
 
 /// What one chunk simplifies to at each level: the vertices, or None when it does not help.
 type ChunkLevels = Vec<Option<Vec<LodVertex>>>;
+
+/// A chunk's levels, and the triangles it keeps whole.
+type Simplified = (ChunkLevels, Vec<BaseFaceVertex>);
 
 impl Lod {
     /// Simplifies the solid chunks of `plan`, which orders `faces`, and uploads them, a level
@@ -117,8 +128,8 @@ impl Lod {
             .min(16);
         let borders = Borders::find(plan, faces, threads, cancel);
         let chunk_levels =
-            |k: usize| -> ChunkLevels { simplify_chunk(plan, faces, k, &borders, cancel) };
-        let mut results: Vec<ChunkLevels> = if threads < 2 || count < 16 {
+            |k: usize| -> Simplified { simplify_chunk(plan, faces, k, &borders, cancel) };
+        let mut results: Vec<Simplified> = if threads < 2 || count < 16 {
             (0..count).map(chunk_levels).collect()
         } else {
             let per = count.div_ceil(threads);
@@ -142,20 +153,60 @@ impl Lod {
         if cancel.load(Ordering::Relaxed) {
             return None;
         }
+        // The kept triangles go into one buffer, with the flags that go with them.
+        let full = std::mem::size_of::<BaseFaceVertex>();
+        let kept_total: usize = results.iter().map(|c| c.1.len()).sum();
+        if (kept_total * (full + std::mem::size_of::<f32>())) as u64 > limit {
+            return None;
+        }
+        let mut kept_ranges = vec![None; count];
+        let (mut kept, mut zeros) = (None, None);
+        if kept_total > 0 {
+            let b = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("lod kept faces"),
+                size: (kept_total * full) as u64,
+                usage: wgpu::BufferUsages::VERTEX,
+                mapped_at_creation: true,
+            });
+            {
+                let mut view = b
+                    .slice(..)
+                    .get_mapped_range_mut()
+                    .expect("the buffer was created mapped");
+                let mut at = 0;
+                for (k, chunk) in results.iter_mut().enumerate() {
+                    let v = std::mem::take(&mut chunk.1);
+                    if !v.is_empty() {
+                        view.slice(at * full..(at + v.len()) * full)
+                            .copy_from_slice(bytemuck::cast_slice(&v));
+                        kept_ranges[k] = Some(at as u32..(at + v.len()) as u32);
+                        at += v.len();
+                    }
+                }
+            }
+            b.unmap();
+            kept = Some(b);
+            zeros = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("lod flags"),
+                size: (kept_total * std::mem::size_of::<f32>()) as u64,
+                usage: wgpu::BufferUsages::VERTEX,
+                mapped_at_creation: false,
+            }));
+        }
         // One level at a time goes into its buffer, and its chunks' vertices are freed.
         let stride = std::mem::size_of::<LodVertex>();
         let mut levels = Vec::new();
         for (l, &cell) in CELLS.iter().enumerate() {
             let total: usize = results
                 .iter()
-                .map(|c| c[l].as_ref().map_or(0, Vec::len))
+                .map(|c| c.0[l].as_ref().map_or(0, Vec::len))
                 .sum();
             let mut ranges = vec![None; count];
             let mut buffer = None;
             // A level too big for a buffer is left out.
             let total = if (total * stride) as u64 > limit {
                 for chunk in &mut results {
-                    chunk[l] = None;
+                    chunk.0[l] = None;
                 }
                 0
             } else {
@@ -175,7 +226,7 @@ impl Lod {
                         .expect("the buffer was created mapped");
                     let mut at = 0;
                     for (k, chunk) in results.iter_mut().enumerate() {
-                        if let Some(v) = chunk[l].take() {
+                        if let Some(v) = chunk.0[l].take() {
                             view.slice(at * stride..(at + v.len()) * stride)
                                 .copy_from_slice(bytemuck::cast_slice(&v));
                             ranges[k] = Some(at as u32..(at + v.len()) as u32);
@@ -193,7 +244,12 @@ impl Lod {
                 vertices: total as u32,
             });
         }
-        Some(Lod { levels })
+        Some(Lod {
+            levels,
+            kept,
+            kept_ranges,
+            zeros,
+        })
     }
 
     /// The level to draw chunk `k` at, with its vertices, where a pixel is `per_pixel` meters
@@ -227,6 +283,16 @@ impl Lod {
         }
     }
 
+    /// The triangles chunk `k` keeps whole, drawn with its simplified level.
+    pub fn kept(&self, k: usize) -> Option<Range<u32>> {
+        self.kept_ranges.get(k)?.clone()
+    }
+
+    /// The buffer of kept triangles and the zero flags to draw it with.
+    pub fn kept_buffers(&self) -> Option<(&wgpu::Buffer, &wgpu::Buffer)> {
+        Some((self.kept.as_ref()?, self.zeros.as_ref()?))
+    }
+
     /// The vertex buffer of `level`.
     pub fn buffer(&self, level: usize) -> Option<&wgpu::Buffer> {
         self.levels.get(level)?.buffer.as_ref()
@@ -237,6 +303,8 @@ impl Lod {
         self.levels
             .iter()
             .filter_map(|l| l.buffer.as_ref())
+            .chain(self.kept.as_ref())
+            .chain(self.zeros.as_ref())
             .map(|b| b.size())
             .sum()
     }
@@ -258,8 +326,8 @@ fn simplify_chunk(
     k: usize,
     borders: &Borders,
     cancel: &AtomicBool,
-) -> ChunkLevels {
-    let none = || CELLS.iter().map(|_| None).collect();
+) -> Simplified {
+    let none = || (CELLS.iter().map(|_| None).collect(), Vec::new());
     if cancel.load(Ordering::Relaxed) {
         return none();
     }
@@ -279,7 +347,7 @@ fn simplify_chunk(
     let corners: Map<[u32; 3], ()> = kept.iter().map(|v| (bits(v.pos), ())).collect();
     let pinned = |v: &BaseFaceVertex| borders.contains(v.pos) || corners.contains_key(&bits(v.pos));
     let mut before = (plain.len() + kept.len()) / 3;
-    CELLS
+    let levels = CELLS
         .iter()
         .map(|&cell| {
             plain = cluster_pinned(&plain, cell, &pinned);
@@ -288,15 +356,11 @@ fn simplify_chunk(
             if worth {
                 before = now;
             }
-            worth.then(|| {
-                plain
-                    .iter()
-                    .chain(&kept)
-                    .map(LodVertex::pack)
-                    .collect::<Vec<_>>()
-            })
+            (worth && !plain.is_empty())
+                .then(|| plain.iter().map(LodVertex::pack).collect::<Vec<_>>())
         })
-        .collect()
+        .collect();
+    (levels, kept)
 }
 
 fn bits(p: [f32; 3]) -> [u32; 3] {
@@ -323,7 +387,7 @@ impl Borders {
     }
 
     /// The places shared by the chunks of `plan` (the solid ones and the others), found on
-    /// `threads` threads. Empty when `cancel` is set meanwhile.
+    /// `threads` threads. Partial when `cancel` is set meanwhile (the build is then dropped).
     fn find(
         plan: &ChunkPlan,
         faces: &[BaseFaceVertex],
@@ -762,17 +826,21 @@ mod tests {
         let plan = ChunkPlan::new(tris.len(), &[], 3, 100_000, &|i| tris[i].pos, &|_| true);
         assert_eq!(plan.chunks.len(), 1);
         let borders = Borders::new([]);
-        let levels = simplify_chunk(&plan, &tris, 0, &borders, &AtomicBool::new(false));
+        let (levels, kept) = simplify_chunk(&plan, &tris, 0, &borders, &AtomicBool::new(false));
         let level = levels[0].as_ref().expect("the first level helps");
         assert!(level.len() * 4 < tris.len());
+        // They are kept as they were, whole vertices, outside the levels.
+        assert_eq!(kept.len(), 6);
         let has = |positions: &[[f32; 3]]| {
-            level
-                .as_chunks::<3>()
+            kept.as_chunks::<3>()
                 .0
                 .iter()
                 .any(|t| t.iter().map(|v| v.pos).eq(positions.iter().copied()))
         };
         assert!(has(&lit) && has(&textured));
+        let lit_vertex = kept.iter().find(|v| v.glow[0] > 0.5).unwrap();
+        assert_eq!(lit_vertex.glow, [1.0, 0.0]);
+        assert!(kept.iter().any(|v| v.layer[0] == 2.0));
     }
 
     #[test]
@@ -870,10 +938,12 @@ mod tests {
         }
         tris.extend(lit);
         let plan = ChunkPlan::new(tris.len(), &[], 3, 100_000, &|i| tris[i].pos, &|_| true);
-        let level = simplify_chunk(&plan, &tris, 0, &Borders::new([]), &AtomicBool::new(false));
-        let level = level[0].as_ref().expect("the first level helps");
+        let (levels, kept) =
+            simplify_chunk(&plan, &tris, 0, &Borders::new([]), &AtomicBool::new(false));
+        let level = levels[0].as_ref().expect("the first level helps");
+        assert!(kept.iter().any(|v| v.pos == at));
         let there = level.iter().filter(|v| v.pos == at).count();
-        assert!(there >= 2, "{there} corners at the lit triangle's corner");
+        assert!(there >= 1, "the sheet's corner at the lit triangle's moved");
     }
 
     #[test]
@@ -901,6 +971,9 @@ mod tests {
         };
         Lod {
             levels: vec![level(1.0), level(3.0), level(9.0)],
+            kept: None,
+            kept_ranges: Vec::new(),
+            zeros: None,
         }
     }
 

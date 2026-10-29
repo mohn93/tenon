@@ -293,9 +293,9 @@ GLOWS = {
     "crown2": ("Glow, crown blue", ((170, 190, 215), 0, 1), ((130, 190, 255), 7, 1)),
     "spire": ("Glow, spire", ((222, 226, 232), 0, 1), ((255, 252, 240), 10, 1)),
     "led": ("Khalifa light fins", ((206, 214, 226), 0, 1), ((170, 212, 255), 6, 1)),
-    "jet2": ("Fountain mist", ((250, 252, 255), 0.4, 0.55), ((196, 226, 255), 1.6, 0.6)),
+    "jet2": ("Fountain mist", ((226, 241, 255), 0.3, 0.3), ((176, 214, 255), 1.4, 0.36)),
     "star": ("Star", ((200, 220, 255), 0, 0.0), ((235, 240, 255), 9, 1)),
-    "jet": ("Fountain jet", ((252, 253, 255), 0.55, 0.78), ((205, 232, 255), 2.2, 0.8)),
+    "jet": ("Fountain jet", ((214, 234, 255), 0.5, 0.5), ((170, 212, 255), 2.2, 0.56)),
     "tail": ("Glow, tail light", ((120, 20, 20), 0, 1), ((255, 40, 30), 5, 1)),
     "head": ("Glow, headlight", ((222, 222, 214), 0, 1), ((255, 248, 220), 8, 1)),
     "sail": ("Glow, sail", ((246, 244, 238), 0, 0.96), ((120, 150, 255), 3.6, 0.96)),
@@ -1279,7 +1279,7 @@ class Parts:
         # low ring of foam where a jet lands
         self.d["jetcol"] = b.comp("jetcol", lambda: [b.cone((0, 0, 0), 1.0, 1.0, M["jet"], "Water jet", top=0.5, seg=8)])
         self.d["jetseg"] = b.comp("jetseg", lambda: [b.cone((0, 0, 0), 1.0, 1.0, M["jet"], "Water arch", top=0.92, seg=6)])
-        self.d["puff"] = b.comp("puff", lambda: [b.sph((0, 0, 0), 1.0, M["jet2"], "Spray", seg=6)])
+        self.d["puff"] = b.comp("puff", lambda: [b.sph((0, 0, 0), 1.0, M["jet2"], "Spray", seg=14)])
         self.d["spray"] = b.comp("spray", lambda: [b.cone((0, 0, 0), 0.3, 1.0, M["jet2"], "Spray", top=1.0, seg=8)])
         self.d["splash"] = b.comp("splash", lambda: [b.cone((0, 0, 0), 1.0, 0.45, M["jet2"], "Splash", top=0.35, seg=10)])
 
@@ -1837,7 +1837,7 @@ class Dubai:
         def column(x, y, h, r, lean=(0.0, 0.0)):
             b.place(P.d["jetcol"], x, y, z0, s=r, sz=h, lean=lean)
             # the water breaks into a few puffs of spray over its top
-            rr = max(0.9, 0.05 * h)
+            rr = max(0.7, 0.04 * h)
             for j, (f, k, w) in enumerate(((0.80, 0.9, 1.0), (0.92, 0.8, -1.0), (1.0, 1.1, 0.6))):
                 q = h * f
                 b.place(P.d["puff"], x + lean[0] * q + 0.5 * rr * w, y + lean[1] * q - 0.3 * rr * w, z0 + q,
@@ -1870,21 +1870,26 @@ class Dubai:
                 mid = 1.0 - 0.5 * abs(2 * u - 1)
                 h = 9 + 24 * crest * mid + rng.uniform(-1.5, 1.5)
                 # the jet leaves one nozzle and lands at the next, so the rows read as chains of arches
-                arch(x0, y0, x1, y1, h, 0.55 + 0.012 * h)
+                if ri == 0:
+                    if k % 2:
+                        continue
+                    h *= 0.45
+                elif ri == 1:
+                    h *= 0.75
+                arch(x0, y0, x1, y1, h, 0.28 + 0.006 * h)
                 if (k + ri) % 3 == 0:
-                    column(x0, y0, 8 + 22 * crest * mid, 0.5 + 0.01 * h)
+                    column(x0, y0, (8 + 22 * crest * mid) * (0.5 if ri == 0 else 1.0), 0.28 + 0.007 * h)
         # the tall jets in the middle
         for k, hh in enumerate((58, 84, 70, 96, 66, 52)):
             x = lcx - 105 + k * 42
             y = lcy + 9 * math.sin(k * 1.3)
-            column(x, y, hh, 1.5 + 0.012 * hh)
+            column(x, y, hh, 0.8 + 0.008 * hh)
             for sgn in (-1, 1):
-                column(x + 3, y + sgn * 7, hh * 0.58, 1.0, lean=(0.0, sgn * 0.16))
+                column(x + 3, y + sgn * 7, hh * 0.58, 0.55, lean=(0.0, sgn * 0.16))
         # long arches across the middle of the lake
         for k in range(3 if not self.q else 1):
             x = lcx - 150 + k * 150
-            arch(x, lcy - 90, x + 30, lcy - 20, 40 + 10 * k, 1.1, n=10)
-            arch(x + 40, lcy + 90, x + 10, lcy + 20, 36 + 10 * k, 1.1, n=10)
+            arch(x + 40, lcy + 90, x + 10, lcy + 20, 36 + 10 * k, 0.55, n=10)
 
     def downtown(self):
         b, M, rng, P = self.b, self.M, self.rng, self.P

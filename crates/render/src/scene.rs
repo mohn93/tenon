@@ -871,6 +871,7 @@ fn base_walked(
         display: section,
         planes: Vec::new(),
         cuts: HashMap::new(),
+        cut_seen: HashSet::new(),
         cut_memo: CutMemo {
             last: &last_cuts,
             now: HashMap::new(),
@@ -1174,6 +1175,14 @@ pub struct PartsCache {
     cuts: HashMap<CutKey, Arc<Cut>>,
 }
 
+/// A plane's point and normal, bit for bit (not its tag, which cutting ignores).
+fn plane_bits(p: &SectionPlane) -> [u64; 6] {
+    [
+        p.point.x, p.point.y, p.point.z, p.normal.x, p.normal.y, p.normal.z,
+    ]
+    .map(f64::to_bits)
+}
+
 /// The surface, planes and fill `section_clip::cut_surface` was called with, bit for bit.
 /// Hashed by `hash`, a quick fingerprint of the rest (surfaces are large).
 struct CutKey {
@@ -1406,6 +1415,8 @@ struct Walk<'a> {
     cuts: HashMap<(MeshId, [u64; 6], bool), Cut>,
     /// The cuts of the last build and this one, by what was cut.
     cut_memo: CutMemo<'a>,
+    /// The planes in `base.cut_planes`, by their bits.
+    cut_seen: HashSet<[u64; 6]>,
     /// The side of the square each mesh's section planes are drawn with.
     sides: HashMap<MeshId, f64>,
     /// What each mesh's own faces glow with, by the material it inherits, once worked out: one
@@ -1460,7 +1471,7 @@ impl<'a> Walk<'a> {
             && let Some(plane) = model.active_section().and_then(|s| model.section(s))
         {
             let placed = plane.transformed(t);
-            if !self.base.cut_planes.contains(&placed) {
+            if self.cut_seen.insert(plane_bits(&placed)) {
                 self.base.cut_planes.push(placed);
             }
             self.planes.push(placed);
@@ -2091,6 +2102,7 @@ impl<'a> Walk<'a> {
             display: self.display,
             planes: self.planes.clone(),
             cuts: HashMap::new(),
+            cut_seen: HashSet::new(),
             cut_memo: CutMemo {
                 last: self.cut_memo.last,
                 now: HashMap::new(),
@@ -2160,7 +2172,7 @@ impl<'a> Walk<'a> {
         base.cut_fill.extend(o.cut_fill);
         base.cut_edges.extend(o.cut_edges);
         for plane in o.cut_planes {
-            if !base.cut_planes.contains(&plane) {
+            if self.cut_seen.insert(plane_bits(&plane)) {
                 base.cut_planes.push(plane);
             }
         }

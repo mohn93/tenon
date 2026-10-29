@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use glam::{DAffine3, Mat4, Vec3};
-use kernel::{EntityId, FogColor, InstanceId, Scene, SectionPlane, StyleSettings};
+use kernel::{EntityId, FogColor, InstanceId, Scene, StyleSettings};
 use session::{Camera, Lighting, SectionDisplay, world_drawing_axes};
 use wgpu::util::DeviceExt;
 
@@ -898,8 +898,9 @@ pub struct Renderer {
     face_lod_pipeline: wgpu::RenderPipeline,
     /// The same chunks' normals for the ambient occlusion, made with it.
     ao_lod_pipeline: Option<wgpu::RenderPipeline>,
-    /// The planes that cut the model, in root coordinates: chunks near one are drawn whole.
-    cut_planes: Vec<SectionPlane>,
+    /// Whether each face chunk is within reach of a plane that cuts the model, so it is drawn
+    /// whole (empty when no plane cuts).
+    cut_chunks: Vec<bool>,
     /// The opaque side of a triangle whose other side is see-through.
     solid_side_pipeline: wgpu::RenderPipeline,
     glass_pipeline: wgpu::RenderPipeline,
@@ -1710,7 +1711,7 @@ impl Renderer {
             face_pipeline,
             face_lod_pipeline,
             ao_lod_pipeline: None,
-            cut_planes: Vec::new(),
+            cut_chunks: Vec::new(),
             solid_side_pipeline,
             glass_pipeline,
             edge_pipeline,
@@ -1955,22 +1956,17 @@ impl Renderer {
             || self.hovered_chunks.get(k).copied().unwrap_or(false)
     }
 
-    /// True when the chunk with the box `lo` to `hi` is within reach of a plane that cuts the
-    /// model, so it is drawn whole: the cut's fill and outline are made from the whole surface.
-    fn chunk_cut(&self, lo: glam::Vec3, hi: glam::Vec3) -> bool {
-        crate::lod::near_planes(lo, hi, &self.cut_planes)
-    }
-
     /// The chunked lists' ranges in view of `camera`. With `remember`, the levels chosen are
     /// kept to choose the next ones by (see `Lod::pick`).
     fn visible(&self, camera: &Camera, remember: bool) -> Visible {
+        let kept = std::cell::RefCell::new(Vec::new());
         let faces = self.face_chunks.as_ref().map(|c| match &self.lod {
             LodState::Ready(lod) if self.lod_on => c.visible_by(camera, |k, per_pixel| {
                 let mut last = self.lod_last.borrow_mut();
                 if last.len() != c.chunks.len() {
                     *last = vec![0; c.chunks.len()];
                 }
-                if self.chunk_marked(k) || self.chunk_cut(c.chunks[k].lo, c.chunks[k].hi) {
+                if self.chunk_marked(k) || self.cut_chunks.get(k).copied().unwrap_or(false) {
                     if remember {
                         last[k] = 0;
                     }
@@ -1980,9 +1976,18 @@ impl Renderer {
                 if remember {
                     last[k] = next;
                 }
+                if pick.is_some()
+                    && let Some(range) = lod.kept(k)
+                {
+                    kept.borrow_mut().push(range);
+                }
                 pick
             }),
             _ => c.visible(camera),
+        });
+        let faces = faces.map(|mut runs| {
+            runs.lod_kept = kept.into_inner();
+            runs
         });
         Visible {
             faces,
@@ -2049,18 +2054,28 @@ impl Renderer {
     }
 
     /// Draws the vertices of the simplified levels in `runs` with `pipeline`, which takes
-    /// `LodVertex`es. True when it drew any (the pipeline and vertex buffers are then not the
-    /// ones set before).
+    /// `LodVertex`es, and the triangles those chunks keep whole with `full`, which takes the
+    /// ordinary face vertices and their flags. True when it drew any (the pipeline and vertex
+    /// buffers are then not the ones set before).
     fn draw_lod(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         runs: Option<&Runs>,
         pipeline: &wgpu::RenderPipeline,
+        full: &wgpu::RenderPipeline,
     ) -> bool {
         let (LodState::Ready(lod), Some(runs)) = (&self.lod, runs) else {
             return false;
         };
         let mut drew = false;
+        if let (Some((kept, zeros)), false) = (lod.kept_buffers(), runs.lod_kept.is_empty()) {
+            pass.set_pipeline(full);
+            pass.set_vertex_buffer(0, kept.slice(..));
+            pass.set_vertex_buffer(1, zeros.slice(..));
+            pass.set_vertex_buffer(2, zeros.slice(..));
+            draw_runs(pass, &runs.lod_kept, 1);
+            drew = true;
+        }
         for (level, list) in runs.lod.iter().enumerate() {
             if let (Some(buffer), false) = (lod.buffer(level), list.is_empty()) {
                 pass.set_pipeline(pipeline);
@@ -2161,7 +2176,14 @@ impl Renderer {
             &base.edge_extras,
             self.edge_chunks.as_ref(),
         );
-        self.cut_planes = base.cut_planes.clone();
+        self.cut_chunks = match &self.face_chunks {
+            Some(c) if !base.cut_planes.is_empty() => c
+                .chunks
+                .iter()
+                .map(|ch| crate::lod::near_planes(ch.lo, ch.hi, &base.cut_planes))
+                .collect(),
+            _ => Vec::new(),
+        };
         self.cut_fill = mesh(&self.device, "cut fill", &base.cut_fill);
         self.cut_edges = mesh(&self.device, "cut edges", &base.cut_edges);
         // The simplified copies are made later, from these vertices.
@@ -3061,7 +3083,12 @@ impl Renderer {
                             visible.faces.as_ref().map_or(&[][..], |r| &r.solid),
                             1,
                         );
-                        self.draw_lod(&mut pass, visible.faces.as_ref(), &self.face_lod_pipeline);
+                        self.draw_lod(
+                            &mut pass,
+                            visible.faces.as_ref(),
+                            &self.face_lod_pipeline,
+                            &self.face_pipeline,
+                        );
                         if let Some(glass) = glass {
                             bind(&mut pass, &self.solid_side_pipeline, faces);
                             pass.set_index_buffer(glass.order.slice(..), wgpu::IndexFormat::Uint32);
@@ -3261,7 +3288,12 @@ impl Renderer {
                         1,
                     );
                     if let Some(lod_normals) = &self.ao_lod_pipeline
-                        && self.draw_lod(&mut pass, visible.faces.as_ref(), lod_normals)
+                        && self.draw_lod(
+                            &mut pass,
+                            visible.faces.as_ref(),
+                            lod_normals,
+                            ssao.normal_pipeline(),
+                        )
                     {
                         // The glass below is drawn from the full vertices again.
                         pass.set_pipeline(ssao.normal_pipeline());

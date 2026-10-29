@@ -5,7 +5,9 @@
 The simplified copies hold flat-coloured, untextured, non-glowing, opaque triangles only
 (glowing and textured triangles stay whole at full detail; glass is never simplified), and
 a chunk with anything selected or hovered is already drawn at full detail (`chunk_marked`),
-so a copy needs no flags, uv, layer, glow or alpha. `LodVertex` (28 bytes, was 104 plus a
+so a simplified level needs no flags, uv, layer, glow or alpha. Triangles kept whole (glowing,
+textured, long) are the same in every level: they are uploaded once per chunk as full vertices
+and drawn with the ordinary face pipeline and a zero flag buffer beside the chunk's level. `LodVertex` (28 bytes, was 104 plus a
 4-byte flag buffer as long as the largest level):
 
 - position f32x3 (12)
@@ -15,7 +17,7 @@ so a copy needs no flags, uv, layer, glow or alpha. `LodVertex` (28 bytes, was 1
 
 A vertex entry `vs_face_lod` fills the same `FaceOut` with constants (opaque, no texture, no
 glow, not selected, not hovered), so `fs_face` and `fs_ao_normal` are reused. Two pipelines
-(`face_lod_pipeline`, `ao_normal_lod_pipeline`) differ from the full ones in the vertex
+(`face_lod_pipeline`, `ao_lod_pipeline`) differ from the full ones in the vertex
 layout only. Simplified chunks are drawn with one vertex buffer.
 
 `Renderer::lod_gpu_bytes` reports what the copies take; measured on Dubai before and after.

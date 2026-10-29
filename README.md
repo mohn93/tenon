@@ -176,7 +176,7 @@ all, in large batches, and the model builds in about a minute.
 | ![Dubai at night with lit towers, the glowing Burj Al Arab and Ain Dubai, the fountain lit and stars overhead](docs/images/dubai-night.jpg) | ![Looking down Sheikh Zayed Road between towers, with traffic, the metro train, gantry signs and palms](docs/images/dubai-szr.jpg) |
 | Night: glowing materials switched on with `change_material` | Sheikh Zayed Road |
 
-![Looking up the Burj Khalifa from the lake: rows of arched and straight water jets with spray, towers on both sides](docs/images/dubai-khalifa.jpg)
+![Looking up the Burj Khalifa from the lake: rows of thin, translucent arched and straight water jets with spray, towers on both sides](docs/images/dubai-khalifa.jpg)
 
 The fountain is rows of thin tapered tubes along curved arcs and straight columns, in a pale
 translucent water material that glows a little at night.
@@ -185,7 +185,7 @@ translucent water material that glows a little at night.
 
 The window keeps up with it. Large models are drawn by spatial chunk: chunks out of view are
 skipped, and distant ones are drawn from simplified copies built in the background, kept in a
-28-byte vertex (the copies take about 300 MB of GPU memory for the 5.4 million triangles). Orbiting the
+28-byte vertex (the copies take about 300 MB of GPU memory for the 5.4 million triangles, 360 MB with the night's lit windows). Orbiting the
 whole city runs at about 60 fps on an M1 Max.
 
 <table>
