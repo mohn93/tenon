@@ -12,7 +12,8 @@
 //! new faces take the first face's materials; the edges along a fillet (between its faces and
 //! where it meets the flat faces) are soft, so it is shaded as one smooth round. Where three
 //! fillets of convex edges meet at a vertex of three faces, `corner` trims the crossed rounds to
-//! a sphere patch. The result replaces the mesh's own geometry; faces and edges the cut did not touch keep their ids.
+//! a sphere patch. The result replaces the mesh's own geometry; faces and edges the cut did not
+//! touch keep their ids.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
@@ -1498,6 +1499,106 @@ mod tests {
         assert!(signed_volume(&out) < signed_volume(&m));
     }
 
+    /// The faces of `out` whose corners all lie on or in the ball about the tangent centre of
+    /// `v` (the patch; a crossed round has corners farther out).
+    fn patch_faces_at(m: &Model, out: &Model, v: VertexId, r: f64) -> Vec<FaceId> {
+        let corner = m.pos(v);
+        let normals: Vec<DVec3> = m.faces_at(v).map(|f| m.face(f).unwrap().normal).collect();
+        assert_eq!(normals.len(), 3);
+        let rows = glam::DMat3::from_cols(normals[0], normals[1], normals[2]).transpose();
+        let centre = corner + rows.inverse() * DVec3::splat(-r);
+        out.faces()
+            .filter(|(_, f)| {
+                f.outer
+                    .iter()
+                    .all(|w| out.pos(*w).distance(centre) < r + 1e-9)
+            })
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    #[test]
+    fn every_corner_of_prisms_and_sheared_boxes_gets_its_patch() {
+        let r = 0.05;
+        let mut shapes: Vec<(String, Model)> = Vec::new();
+        for sides in [3, 5, 6, 8] {
+            let p = Solid::prism(1.0, 2.0, sides, 0.0).unwrap().to_model();
+            shapes.push((format!("{sides}-sided prism"), p));
+        }
+        for shear in [0.1, 0.5, 2.0] {
+            shapes.push((format!("shear {shear}"), sheared_box(2.0, shear)));
+        }
+        for (name, m) in &shapes {
+            let edges: Vec<EdgeId> = m
+                .edges()
+                .filter(|(_, e)| !e.soft && e.curve.is_none_or(|_| e.polygon))
+                .map(|(id, _)| id)
+                .collect();
+            for segments in [2, 3, 8] {
+                let profile = Profile::Fillet {
+                    radius: r,
+                    segments,
+                };
+                let out = bevelled(m, &edges, profile)
+                    .unwrap_or_else(|e| panic!("{name} at {segments}: {e}"));
+                closed(&out);
+                for (v, _) in m.vertices() {
+                    let faces = patch_faces_at(m, &out, v, r).len();
+                    assert!(faces >= 3, "{name} at {segments}: corner {v:?} has {faces}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_fine_corner_of_a_hexagonal_prism_and_a_shear_gets_its_patch() {
+        // 24 segments, the three edges at one corner (all twelve are slow in a test build).
+        let r = 0.05;
+        for m in [
+            Solid::prism(1.0, 2.0, 6, 0.0).unwrap().to_model(),
+            sheared_box(2.0, 0.5),
+        ] {
+            let (v, _) = m
+                .vertices()
+                .find(|(_, v)| v.pos.z > 1.5 && v.pos.x > 0.1)
+                .unwrap();
+            let edges: Vec<EdgeId> = m
+                .edges_at(v)
+                .into_iter()
+                .filter(|e| !m.edge(*e).unwrap().soft)
+                .collect();
+            assert_eq!(edges.len(), 3);
+            let out = bevelled(
+                &m,
+                &edges,
+                Profile::Fillet {
+                    radius: r,
+                    segments: 24,
+                },
+            )
+            .unwrap();
+            closed(&out);
+            let patch = patch_faces_at(&m, &out, v, r);
+            assert!(patch.len() >= 3);
+            // No slivers: the smallest angle of any patch triangle.
+            let mut worst = 180.0f64;
+            for f in &patch {
+                let ps: Vec<DVec3> = out
+                    .face(*f)
+                    .unwrap()
+                    .outer
+                    .iter()
+                    .map(|w| out.pos(*w))
+                    .collect();
+                for i in 0..3 {
+                    let (a, b, c) = (ps[i], ps[(i + 1) % 3], ps[(i + 2) % 3]);
+                    worst = worst.min((b - a).angle_between(c - a).to_degrees());
+                }
+            }
+            assert!(worst > 10.0, "{worst} degrees");
+        }
+    }
+
     #[test]
     fn a_prism_corner_with_unequal_arcs_gets_a_ringed_patch() {
         // A triangular prism's top corner: two 90 degree edges and an upright of 120.
@@ -1540,15 +1641,9 @@ mod tests {
         // The ball sits r inside the top and both sides, here on the vertical bisector.
         let centre = DVec3::new(1.0 - r / 30f64.to_radians().sin(), 0.0, 2.0 - r);
         let on = on_ball(&out, centre, r);
-        // Arcs of 8, 8 and 11 steps: 27 boundary points, some inner rings of 27, the middle.
+        // Arcs of 8, 8 and 11 steps: 27 boundary points and inner rings with fewer.
         let faces = check_patch(&out, centre, r, 0.02);
-        assert!(
-            on.len() > 27 + 27 && (on.len() - 1).is_multiple_of(27),
-            "{}",
-            on.len()
-        );
-        let rings = (on.len() - 1) / 27;
-        assert_eq!(faces, 27 * (1 + 2 * (rings - 1)));
+        assert!(on.len() > 27 + 6 && faces > 27, "{} {faces}", on.len());
     }
 
     #[test]

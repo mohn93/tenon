@@ -265,114 +265,222 @@ fn cutter(
             }
         }
     }
-    // The sphere patch, facing the centre.
+    // The sphere patch, facing the centre. Every inner vertex must lie inside the faceted
+    // fillets it borders (a vertex outside would cut through their facets), so inner points are
+    // checked and pulled toward the middle until they are.
+    let inside = |p: DVec3| -> bool {
+        let margin = 1e-3 * radius;
+        (0..3).all(|k| {
+            let w = (p - centre) - away[k] * (p - centre).dot(away[k]);
+            arcs[k].windows(2).all(|pair| {
+                let (a, b) = (pair[0] - centre, pair[1] - centre);
+                let turn = a.cross(b);
+                let in_wedge = a.cross(w).dot(turn) >= 0.0 && w.cross(b).dot(turn) >= 0.0;
+                let Some(out) = (a + b).try_normalize() else {
+                    return true;
+                };
+                !in_wedge || w.dot(out) < a.dot(out) - margin
+            })
+        })
+    };
     let mut tris: Vec<[VertexId; 3]> = Vec::new();
-    let points;
+    let mut inward = false;
+    let mut points = 0;
+    let mut grid: HashMap<(usize, usize), VertexId> = HashMap::new();
     if steps[0] == steps[1] && steps[1] == steps[2] {
         let g = steps[0];
-        let mut grid: HashMap<(usize, usize), VertexId> = HashMap::new();
+        let mut inner: HashMap<(usize, usize), DVec3> = HashMap::new();
         // Corner 0 at i = g, corner 1 at j = g, corner 2 at k = g; the arcs run 0-1 (edge 2),
         // 1-2 (edge 0), 2-0 (edge 1).
         let omega = |a: usize, b: usize| n[a].dot(n[b]).clamp(-1.0, 1.0).acos();
-        for i in 0..=g {
-            for j in 0..=(g - i) {
+        for i in 1..g {
+            for j in 1..(g - i) {
                 let k = g - i - j;
-                let id = if k == 0 {
-                    arc_ids[2][j]
-                } else if i == 0 {
-                    arc_ids[0][k]
-                } else if j == 0 {
-                    arc_ids[1][i]
-                } else {
-                    let lam = [
-                        i as f64 / g as f64,
-                        j as f64 / g as f64,
-                        k as f64 / g as f64,
-                    ];
-                    let mut dir = DVec3::ZERO;
-                    for a in 0..3 {
-                        let (b, c) = ((a + 1) % 3, (a + 2) % 3);
-                        let span = lam[b] + lam[c];
-                        let w = if span < 1e-12 {
-                            omega(a, b)
-                        } else {
-                            (lam[b] * omega(a, b) + lam[c] * omega(a, c)) / span
-                        };
-                        dir += n[a] * (lam[a] * w).sin();
-                    }
-                    m.insert_vertex(centre + dir.normalize() * radius)
-                };
-                grid.insert((i, j), id);
+                let lam = [
+                    i as f64 / g as f64,
+                    j as f64 / g as f64,
+                    k as f64 / g as f64,
+                ];
+                let mut dir = DVec3::ZERO;
+                for a in 0..3 {
+                    let (b, c) = ((a + 1) % 3, (a + 2) % 3);
+                    let span = lam[b] + lam[c];
+                    let w = if span < 1e-12 {
+                        omega(a, b)
+                    } else {
+                        (lam[b] * omega(a, b) + lam[c] * omega(a, c)) / span
+                    };
+                    dir += n[a] * (lam[a] * w).sin();
+                }
+                inner.insert((i, j), centre + dir.normalize() * radius);
             }
         }
-        points = grid.len();
-        for i in 0..g {
-            for j in 0..(g - i) {
-                tris.push([grid[&(i, j)], grid[&(i + 1, j)], grid[&(i, j + 1)]]);
-                if i + j + 2 <= g {
-                    tris.push([grid[&(i + 1, j)], grid[&(i + 1, j + 1)], grid[&(i, j + 1)]]);
+        if inner.values().all(|p| inside(*p)) {
+            for i in 0..=g {
+                for j in 0..=(g - i) {
+                    let k = g - i - j;
+                    let id = if k == 0 {
+                        arc_ids[2][j]
+                    } else if i == 0 {
+                        arc_ids[0][k]
+                    } else if j == 0 {
+                        arc_ids[1][i]
+                    } else {
+                        m.insert_vertex(inner[&(i, j)])
+                    };
+                    grid.insert((i, j), id);
+                }
+            }
+            points = grid.len();
+            for i in 0..g {
+                for j in 0..(g - i) {
+                    tris.push([grid[&(i, j)], grid[&(i + 1, j)], grid[&(i, j + 1)]]);
+                    if i + j + 2 <= g {
+                        tris.push([grid[&(i + 1, j)], grid[&(i + 1, j + 1)], grid[&(i, j + 1)]]);
+                    }
                 }
             }
         }
-    } else {
-        // Unequal arcs: concentric rings from the middle point out to the boundary, each ring
-        // slerped from the middle to every boundary point; neighbouring rings are joined by
-        // quads cut in two, the innermost ring by a fan.
+    }
+    if grid.is_empty() {
+        // Concentric rings from the middle point out to the boundary, each ring slerped from
+        // the middle to every boundary point; neighbouring rings are joined by quads cut on
+        // their shorter diagonal, the innermost ring by a fan.
         let mut ring: Vec<VertexId> = Vec::new();
         for k in [2, 0, 1] {
             ring.extend(&arc_ids[k][..arc_ids[k].len() - 1]);
         }
         let count = ring.len();
         let middle = (n[0] + n[1] + n[2]).try_normalize()?;
-        // Rings about one and a quarter arc steps apart: a ring closer to the boundary would
-        // poke through the faceted fillets there.
+        let to: Vec<DVec3> = ring
+            .iter()
+            .map(|id| (m.pos(*id) - centre) / radius)
+            .collect();
         let step = arcs
             .iter()
             .map(|a| (a[0] - centre).angle_between(a[a.len() - 1] - centre) / (a.len() - 1) as f64)
             .fold(f64::INFINITY, f64::min);
-        let reach = ring
+        let reach = to
             .iter()
-            .map(|id| middle.angle_between(m.pos(*id) - centre))
+            .map(|d| middle.angle_between(*d))
             .fold(0.0, f64::max);
-        let rings = ((reach / (1.25 * step)).ceil() as usize).max(1);
-        let q = m.insert_vertex(centre + middle * radius);
-        let mut layers: Vec<Vec<VertexId>> = Vec::new();
-        for j in 1..rings {
-            let t = j as f64 / rings as f64;
-            let mut layer = Vec::with_capacity(count);
-            for id in &ring {
-                let to = (m.pos(*id) - centre) / radius;
-                layer.push(m.insert_vertex(centre + slerp(middle, to, t) * radius));
+        let at = |i: usize, t: f64| centre + slerp(middle, to[i], t) * radius;
+        // The finest ring count whose inner points all lie inside the fillets: along each spoke
+        // the first ring sits as far out as it may (at most R - 1 of R), the rest evenly spaced.
+        let mut layers_at: Vec<Vec<DVec3>> = Vec::new();
+        for rings in (1..=((reach / step).ceil() as usize).max(1)).rev() {
+            if rings == 1 {
+                layers_at.clear();
+                break;
             }
-            layers.push(layer);
+            let nominal = (rings - 1) as f64 / rings as f64;
+            let mut first: Vec<f64> = (0..count)
+                .map(|i| {
+                    let mut t = nominal;
+                    while t > 0.05 && !inside(at(i, t)) {
+                        t -= 0.5 / rings as f64 / 4.0;
+                    }
+                    t
+                })
+                .collect();
+            for _ in 0..3 {
+                let before = first.clone();
+                for i in 0..count {
+                    let near = before[(i + 1) % count].min(before[(i + count - 1) % count]);
+                    first[i] = first[i].min(near + 0.15);
+                }
+            }
+            // Inner rings have fewer points (about in proportion to their distance from the
+            // middle, at least 6), each on a spoke between two boundary points.
+            let layers: Vec<Vec<DVec3>> = (1..rings)
+                .map(|j| {
+                    let along = j as f64 / (rings - 1) as f64;
+                    let points = ((count as f64 * j as f64 / rings as f64).round() as usize)
+                        .clamp(6.min(count), count);
+                    (0..points)
+                        .map(|k| {
+                            let spoke = k as f64 * count as f64 / points as f64;
+                            let (i0, f) = (spoke.floor() as usize % count, spoke.fract());
+                            let i1 = (i0 + 1) % count;
+                            let dir = slerp(to[i0], to[i1], f);
+                            let t = (first[i0] + (first[i1] - first[i0]) * f) * along;
+                            centre + slerp(middle, dir, t) * radius
+                        })
+                        .collect()
+                })
+                .collect();
+            if first.iter().all(|t| *t > 0.05) && layers.iter().flatten().all(|p| inside(*p)) {
+                layers_at = layers;
+                break;
+            }
         }
+        // The middle point, sunk into the ball where a coarse fillet's facets would cut it.
+        let mut depth = 1.0;
+        while depth > 0.5 && !inside(centre + middle * radius * depth) {
+            depth -= 0.02;
+        }
+        let q = m.insert_vertex(centre + middle * radius * depth);
+        let mut layers: Vec<Vec<VertexId>> = layers_at
+            .iter()
+            .map(|l| l.iter().map(|p| m.insert_vertex(*p)).collect())
+            .collect();
         layers.push(ring);
-        points = 1 + layers.iter().map(Vec::len).sum::<usize>();
-        for i in 0..count {
-            let j = (i + 1) % count;
-            tris.push([q, layers[0][i], layers[0][j]]);
-            for w in layers.windows(2) {
-                // Cut the quad along its shorter diagonal.
-                let d = |a: VertexId, b: VertexId| m.pos(a).distance(m.pos(b));
-                if d(w[0][i], w[1][j]) <= d(w[0][j], w[1][i]) {
-                    tris.push([w[0][i], w[1][i], w[1][j]]);
-                    tris.push([w[0][i], w[1][j], w[0][j]]);
+        points = usize::from(depth == 1.0) + layers.iter().map(Vec::len).sum::<usize>();
+        let first = &layers[0];
+        for i in 0..first.len() {
+            tris.push([q, first[i], first[(i + 1) % first.len()]]);
+        }
+        for w in layers.windows(2) {
+            // Walk both rings round together, each time advancing the side that makes the
+            // shorter new edge.
+            let (inner, outer) = (&w[0], &w[1]);
+            let d = |a: VertexId, b: VertexId| m.pos(a).distance(m.pos(b));
+            let (mut i, mut j) = (0, 0);
+            while i < inner.len() || j < outer.len() {
+                let (a, b) = (inner[i % inner.len()], outer[j % outer.len()]);
+                let next_inner = inner[(i + 1) % inner.len()];
+                let next_outer = outer[(j + 1) % outer.len()];
+                let advance_inner = if i >= inner.len() {
+                    false
+                } else if j >= outer.len() {
+                    true
                 } else {
-                    tris.push([w[0][i], w[1][i], w[0][j]]);
-                    tris.push([w[1][i], w[1][j], w[0][j]]);
+                    d(next_inner, b) <= d(a, next_outer)
+                };
+                if advance_inner {
+                    tris.push([a, b, next_inner]);
+                    i += 1;
+                } else {
+                    tris.push([a, b, next_outer]);
+                    j += 1;
                 }
             }
         }
+        // The triangles run counter-clockwise round the ring: turned over if the ring seen from
+        // outside is counter-clockwise, they face the centre.
+        let turn: f64 = (0..count)
+            .map(|i| {
+                let (a, b) = (to[i], to[(i + 1) % count]);
+                a.cross(b).dot(n[0] + n[1] + n[2])
+            })
+            .sum();
+        for t in &mut tris {
+            if turn > 0.0 {
+                t.swap(1, 2);
+            }
+        }
+        inward = true;
     }
     let mut painted = Vec::new();
     for t in tris {
         let ps = t.map(|v| m.pos(v));
         let normal = (ps[1] - ps[0]).cross(ps[2] - ps[0]).try_normalize()?;
+        // Ring triangles already face the centre; a grid triangle is turned toward it.
         let toward = centre - (ps[0] + ps[1] + ps[2]) / 3.0;
-        let normal = if normal.dot(toward) < 0.0 {
-            -normal
-        } else {
+        let normal = if inward || normal.dot(toward) >= 0.0 {
             normal
+        } else {
+            -normal
         };
         painted.push(add(&mut m, t.to_vec(), normal));
     }
@@ -424,7 +532,8 @@ pub(super) fn apply(m: Model, patches: &[Patch]) -> (Model, Vec<usize>) {
     let mut acc = m;
     let mut done = Vec::new();
     for (i, p) in patches.iter().enumerate() {
-        if let Ok(Some(next)) = combine(&acc, &p.cutter, BooleanOp::Subtract)
+        let r = combine(&acc, &p.cutter, BooleanOp::Subtract);
+        if let Ok(Some(next)) = r
             && took(&next, p)
         {
             acc = next;

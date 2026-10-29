@@ -13,7 +13,10 @@ tangent to the three faces (centre = intersection of the faces offset inward by 
 all three fillet cylinders, so only the crossed leftovers are removed. The patch triangles are built
 from the fillets' own profile points on the planes `P_k`, so the boundary arcs coincide with the
 cylinder facets exactly. Equal arc step counts give a barycentric grid (octant: n^2 triangles),
-unequal counts concentric rings from the patch middle (rings about 1.25 arc steps apart, quads cut on the shorter diagonal).
+unequal counts (or a grid point that would poke through a faceted fillet) concentric rings from the
+patch middle: rings about one arc step apart, every inner point checked against the three faceted
+fillets and pulled toward the middle until inside, inner rings with fewer points, rings joined by
+advancing along the shorter edge. A middle point a coarse fillet would cut sinks into the ball.
 
 Chosen over stopping the edge cutters at the planes: that leaves a pinched face (the corner square
 touches the rest of the face at one point) between boolean steps. A corner cutter on top of the
