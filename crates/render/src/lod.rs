@@ -432,7 +432,7 @@ impl Borders {
         threads: usize,
         cancel: &AtomicBool,
     ) {
-        for p in t_junctions(count, corners, threads, cancel) {
+        for p in t_junctions(count, corners, threads, cancel, WORK_LIMIT) {
             self.places.insert(p, ());
         }
     }
@@ -477,6 +477,9 @@ const LEVELS: usize = 13;
 
 /// The most points tested against edges before the search is given up.
 const WORK_LIMIT: u64 = 400_000_000;
+
+/// How many tests are made between looks at the bound and at `cancel`.
+const CHECK_EVERY: u64 = 65_536;
 
 /// The grid for an edge with a box of `extent` m at most: `LEVELS` for one too long for any.
 fn level_of(extent: f32) -> usize {
@@ -554,6 +557,7 @@ fn t_junctions(
     corners: &(dyn Fn(usize) -> Vec<[f32; 3]> + Sync),
     threads: usize,
     cancel: &AtomicBool,
+    limit: u64,
 ) -> Vec<[u32; 3]> {
     let found = par_map(count, threads, &|k| {
         if cancel.load(Ordering::Relaxed) {
@@ -585,26 +589,39 @@ fn t_junctions(
     let work = AtomicU64::new(0);
     let pins = par_map(count, threads, &|k| {
         let mut pins = Vec::new();
-        if work.load(Ordering::Relaxed) > WORK_LIMIT || cancel.load(Ordering::Relaxed) {
+        if work.load(Ordering::Relaxed) > limit || cancel.load(Ordering::Relaxed) {
             return pins;
         }
         let corners = corners(k);
         let tested = std::cell::Cell::new(0u64);
+        let stop = std::cell::Cell::new(false);
+        // Adds the tests since the last call to the total; true when the bound or cancel
+        // says to stop.
+        let flush = || {
+            let done = tested.replace(0);
+            if work.fetch_add(done, Ordering::Relaxed) + done > limit
+                || cancel.load(Ordering::Relaxed)
+            {
+                stop.set(true);
+            }
+            stop.get()
+        };
         let test = |n: u32, a: [f32; 3], b: [f32; 3], pins: &mut Vec<[u32; 3]>| {
+            if stop.get() {
+                return;
+            }
             let (c, p) = points[n as usize];
             tested.set(tested.get() + 1);
+            if tested.get() >= CHECK_EVERY && flush() {
+                return;
+            }
             if c as usize != k && p != a && p != b && distance_to_segment(p, [a, b]) <= ON_EDGE {
                 pins.extend([bits(p), bits(a), bits(b)]);
             }
         };
         for (i, t) in corners.as_chunks::<3>().0.iter().enumerate() {
-            if i % 4096 == 0 {
-                let done = tested.replace(0);
-                if work.fetch_add(done, Ordering::Relaxed) + done > WORK_LIMIT
-                    || cancel.load(Ordering::Relaxed)
-                {
-                    return pins;
-                }
+            if i % 4096 == 0 && flush() {
+                return pins;
             }
             for j in 0..3 {
                 let (a, b) = (t[j], t[(j + 1) % 3]);
@@ -617,6 +634,9 @@ fn t_junctions(
                     // Longer than any grid: every point is looked at.
                     for n in 0..points.len() as u32 {
                         test(n, a, b, &mut pins);
+                        if stop.get() {
+                            return pins;
+                        }
                     }
                     continue;
                 }
@@ -631,17 +651,20 @@ fn t_junctions(
                                 for &n in list {
                                     test(n, a, b, &mut pins);
                                 }
+                                if stop.get() {
+                                    return pins;
+                                }
                             }
                         }
                     }
                 }
             }
         }
-        work.fetch_add(tested.get(), Ordering::Relaxed);
+        flush();
         pins
     });
-    if work.load(Ordering::Relaxed) > WORK_LIMIT {
-        eprintln!("lod: T-junction search given up after {WORK_LIMIT} tests (dense geometry)");
+    if work.load(Ordering::Relaxed) > limit {
+        eprintln!("lod: T-junction search given up after {limit} tests (dense geometry)");
     }
     pins.into_iter().flatten().collect()
 }
@@ -1210,6 +1233,7 @@ mod tests {
             &|k| chunks[k].clone(),
             2,
             &AtomicBool::new(false),
+            WORK_LIMIT,
         )
     }
 
@@ -1246,40 +1270,96 @@ mod tests {
         for y in [1.0, 2.5] {
             assert!(pins.contains(&bits([20.0, y, 0.0])), "y = {y}");
         }
+        // And the ends of the wall's edge the vertices lie on.
+        for p in [[20.0, 0.0, 0.0], [20.0, 5.0, 0.0]] {
+            assert!(pins.contains(&bits(p)), "{p:?}");
+        }
     }
 
-    #[test]
-    fn dense_tiny_triangles_in_a_small_box_are_searched_in_a_moment() {
-        // Two chunks of 20,000 single-sided triangles of a few mm inside one cube.
+    /// Two chunks of `n` single-sided triangles of 1 mm packed in a cube of 5 mm.
+    fn dense(n: usize) -> [Vec<[f32; 3]>; 2] {
         let mut seed = 12345u64;
         let mut next = || {
             seed = seed
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
-            (seed >> 40) as f32 / (1u64 << 24) as f32
+            (seed >> 40) as f32 / (1u64 << 24) as f32 * 0.005
         };
         let mut chunk = || {
             let mut out = Vec::new();
-            for _ in 0..20_000 {
+            for _ in 0..n {
                 let c = [next(), next(), next()];
-                for d in [[0.0, 0.0, 0.0], [0.004, 0.0, 0.0], [0.0, 0.004, 0.0]] {
+                for d in [[0.0, 0.0, 0.0], [0.001, 0.0, 0.0], [0.0, 0.001, 0.0]] {
                     out.push([c[0] + d[0], c[1] + d[1], c[2] + d[2]]);
                 }
             }
             out
         };
-        let chunks = [chunk(), chunk()];
-        let started = std::time::Instant::now();
-        let _ = pins_of(&chunks);
-        assert!(started.elapsed().as_secs() < 20, "{:?}", started.elapsed());
+        [chunk(), chunk()]
     }
 
     #[test]
-    fn a_set_cancel_ends_the_search() {
+    fn dense_geometry_hits_the_bound_and_returns_a_safe_partial_result() {
+        // Every edge is near every point: without a bound this is 20,000 x 3 x 40,000 tests.
+        let chunks = dense(20_000);
+        let all: BTreeSet<[u32; 3]> = chunks.iter().flatten().map(|p| bits(*p)).collect();
+        let started = std::time::Instant::now();
+        let pins = t_junctions(
+            2,
+            &|k| chunks[k].clone(),
+            1,
+            &AtomicBool::new(false),
+            3_000_000,
+        );
+        assert!(started.elapsed().as_secs() < 10, "{:?}", started.elapsed());
+        // What it found is positions of the input.
+        assert!(pins.iter().all(|p| all.contains(p)));
+    }
+
+    #[test]
+    fn a_cancel_set_mid_search_ends_it_within_an_edge() {
+        let chunks = dense(20_000);
+        let cancel = AtomicBool::new(false);
+        let started = std::time::Instant::now();
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                cancel.store(true, Ordering::Relaxed);
+            });
+            // The bound is out of reach, so only the cancel can end it.
+            let _ = t_junctions(2, &|k| chunks[k].clone(), 1, &cancel, u64::MAX);
+        });
+        assert!(started.elapsed().as_secs() < 10, "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_cancel_set_before_the_search_finds_nothing() {
         let a = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
         let b = vec![[0.5, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 2.0, 0.0]];
         let cancel = AtomicBool::new(true);
-        assert!(t_junctions(2, &|k| [a.clone(), b.clone()][k].clone(), 1, &cancel).is_empty());
+        let pins = t_junctions(
+            2,
+            &|k| [a.clone(), b.clone()][k].clone(),
+            1,
+            &cancel,
+            WORK_LIMIT,
+        );
+        assert!(pins.is_empty());
+    }
+
+    #[test]
+    fn a_vertex_on_an_edge_longer_than_the_largest_grid_is_pinned() {
+        // A 100 km edge (beyond the 17 km cells) with another chunk's open end in its middle.
+        let a = vec![[0.0, 0.0, 0.0], [100_000.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let b = vec![
+            [50_000.0, 0.0, 0.0],
+            [50_000.0, 5.0, 0.0],
+            [50_001.0, 5.0, 0.0],
+        ];
+        let pins = pins_of(&[a, b]);
+        for p in [[50_000.0, 0.0, 0.0], [0.0, 0.0, 0.0], [100_000.0, 0.0, 0.0]] {
+            assert!(pins.contains(&bits(p)), "{p:?}");
+        }
     }
 
     #[test]
