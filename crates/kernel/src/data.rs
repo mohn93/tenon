@@ -16,7 +16,7 @@ use crate::location::Location;
 use crate::material::Material;
 use crate::model::{Edge, Face, Guide, Instance, Model, Vertex};
 use crate::page::{Page, PageView};
-use crate::scene::{Definition, DefinitionKind, Scene};
+use crate::scene::{Definition, DefinitionKind, MeshId, Scene};
 use crate::section::SectionPlane;
 use crate::style::{AmbientOcclusion, Style, StyleSettings};
 use crate::tag::Tag;
@@ -182,6 +182,36 @@ pub struct PageData {
     /// The joints whose values the page stores (absent: none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub joints: Option<Vec<PageJoint>>,
+    /// The section planes the page makes active and how they are shown (absent: not stored).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sections: Option<PageSectionsData>,
+}
+
+/// What a page stores of section planes: the active plane of each context (`mesh` absent: the
+/// root, else a definition's id) and the display settings, the first three written only when
+/// off.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PageSectionsData {
+    #[serde(default)]
+    pub active: Vec<PageActiveSection>,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub planes: bool,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub cuts: bool,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub fill: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub material_fill: bool,
+}
+
+/// The plane active in one context of a page.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PageActiveSection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh: Option<u64>,
+    pub plane: u64,
 }
 
 /// A joint's stored value in a page: radians or meters, and the slide (meters) of a
@@ -614,6 +644,23 @@ impl Scene {
                             })
                             .collect()
                     }),
+                    sections: p.sections.as_ref().map(|s| PageSectionsData {
+                        active: s
+                            .active
+                            .iter()
+                            .map(|(m, id)| PageActiveSection {
+                                mesh: match m {
+                                    MeshId::Root => None,
+                                    MeshId::Definition(d) => Some(d.0),
+                                },
+                                plane: id.0,
+                            })
+                            .collect(),
+                        planes: s.planes,
+                        cuts: s.cuts,
+                        fill: s.fill,
+                        material_fill: s.material_fill,
+                    }),
                 })
                 .collect(),
             styles: self
@@ -784,6 +831,23 @@ impl Scene {
                     m.iter()
                         .map(|q| (crate::JointId(q.id), (q.value, q.slide)))
                         .collect()
+                }),
+                sections: p.sections.as_ref().map(|s| crate::PageSections {
+                    active: s
+                        .active
+                        .iter()
+                        .map(|a| {
+                            (
+                                a.mesh
+                                    .map_or(MeshId::Root, |d| MeshId::Definition(DefinitionId(d))),
+                                SectionId(a.plane),
+                            )
+                        })
+                        .collect(),
+                    planes: s.planes,
+                    cuts: s.cuts,
+                    fill: s.fill,
+                    material_fill: s.material_fill,
                 }),
             };
             pages.push((PageId(p.id), page));

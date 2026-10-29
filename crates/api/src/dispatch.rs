@@ -615,6 +615,24 @@ fn render_view(host: &mut dyn Host, params: Value) -> Result<Value, RpcError> {
         (None, None) => (doc.camera.clone(), None),
     };
     let invalid = |why: String| command_failed(CommandError::new(ErrorKind::InvalidInput, why));
+    // A scene's section planes and display apply once the frame has arrived at the scene.
+    let mut scene_section = None;
+    let frame = match (p.scene, frame) {
+        (Some(scene), Some(base))
+            if t >= 1.0
+                && doc
+                    .scene()
+                    .page(scene)
+                    .is_some_and(|p| p.sections.is_some()) =>
+        {
+            let (framed, display) = doc
+                .frame_with_scene_sections(base, scene)
+                .expect("the scene stores sections");
+            scene_section = Some(display);
+            Some(framed)
+        }
+        (_, frame) => frame,
+    };
     let frame = match p.joints.as_ref().filter(|j| !j.is_empty()) {
         Some(joints) => {
             let mut values = Vec::with_capacity(joints.len());
@@ -648,6 +666,9 @@ fn render_view(host: &mut dyn Host, params: Value) -> Result<Value, RpcError> {
             .style(id)
             .ok_or_else(|| invalid(format!("no style {id}")))?;
         options.style = Some(style.settings);
+    }
+    if let Some(display) = scene_section {
+        options.section = display;
     }
     if let Some(o) = p.section {
         let s = &mut options.section;
@@ -737,7 +758,7 @@ pub fn describe() -> Value {
             "render_view": {
                 "params": "{width, height, camera?: {eye, target, fov_y_deg?, up?, projection?}, lighting?: \"day\" | \"night\" | \"studio\", style?: StyleId, projection?: \"perspective\" | \"parallel\", section?: {planes?, cuts?, fill?, fill_color?: \"dark\" | \"material\"}, shadows?: bool, supersample?: 1..4 (width and height times it at most 8192), background?: \"style\" | \"transparent\", ground?: bool (default true), scene?: PageId, t?: 0 to 1 (default 1), from?: PageId, joints?: {JointId: degrees or meters}}",
                 "result": "{width, height, png_base64}",
-                "notes": "does not move the document camera or change its lighting; with scene it renders the frame t of the way (linear) from `from` (default the current view and positions) to the scene's camera and stored positions, without changing the document (not with camera; t and from need scene); joints renders with those joint values solved on a copy of the model (couplings and cam followers too; after the scene frame when scene is given), without changing the document, and is refused with invalid_input when they cannot be met; the document's tags, lighting and style are kept unless lighting or style override them, and projection overrides the frame camera's projection",
+                "notes": "does not move the document camera or change its lighting; with scene it renders the frame t of the way (linear) from `from` (default the current view and positions) to the scene's camera and stored positions (at t 1 also the section planes and section display the scene stores), without changing the document (not with camera; t and from need scene); joints renders with those joint values solved on a copy of the model (couplings and cam followers too; after the scene frame when scene is given), without changing the document, and is refused with invalid_input when they cannot be met; the document's tags, lighting and style are kept unless lighting or style override them, and projection overrides the frame camera's projection",
                 "params_schema": schema::<RenderParams>(),
                 "result_schema": {
                     "type": "object",

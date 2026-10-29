@@ -845,13 +845,18 @@ impl<'a> Scenery<'a> {
     /// What each plane cutting the `k`th part fills of its shown faces.
     fn fills_of(&self, k: usize) -> Vec<PlaneFill> {
         let part = self.part_uncut(k);
+        let mirrored = part.place.matrix3.determinant() < 0.0;
         let triangles: Vec<[DVec3; 3]> = part
             .model
             .faces()
             .filter(|(f, _)| part.shows_face(*f))
             .filter_map(|(f, _)| part.model.triangulate(f))
             .flatten()
-            .map(|t| t.map(|p| part.place.transform_point3(p)))
+            .map(|t| {
+                let w = t.map(|p| part.place.transform_point3(p));
+                // A mirrored placement turns the winding round; put it back.
+                if mirrored { [w[0], w[2], w[1]] } else { w }
+            })
             .collect();
         self.layout.cuts[k]
             .iter()
