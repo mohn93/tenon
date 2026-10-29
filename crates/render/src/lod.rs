@@ -11,20 +11,60 @@
 //!
 //! Left as they are, in every level: triangles that glow or show a texture (an average would
 //! make lit windows vanish or the texture wrong), and triangles much longer than a cell (spires,
-//! masts, strips), which clustering would drop whole.
+//! masts, strips), which clustering would drop whole. These are the same in every level, so
+//! they are kept once per chunk as full vertices in a buffer of their own, drawn with the
+//! ordinary face pipeline (and a buffer of zero flags) beside the chunk's simplified level.
 //!
-//! The cells of neighbouring chunks of different levels are not stitched: a gap up to the cell
-//! size may open between them, which the choice of level keeps to about a pixel.
+//! Cracks: each chunk is simplified alone, so the cell averages of two neighbours differ and a
+//! surface running from one into the other would tear open. Vertices that must not move are
+//! therefore pinned, each its own cluster at its exact position: those at a place where
+//! vertices of two or more chunks lie (`Borders`), and those where a triangle kept whole has a
+//! corner. Every edge shared by two chunks, or by a kept and a simplified triangle, has
+//! pinned ends, so it is the same segment in a chunk at any level and in a full one.
+//!
+//! The simplified levels have their own small vertex (`LodVertex`): nothing in them is
+//! textured, glowing or see-through, and a chunk with something selected or hovered is drawn
+//! whole, so they carry no flags.
 
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 
 use crate::chunks::ChunkPlan;
 use crate::scene::BaseFaceVertex;
+
+/// A corner of a simplified chunk, 28 bytes: where it is, which way the surface faces, the
+/// colors of its two sides and their finishes (metalness and roughness, front then back).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
+pub struct LodVertex {
+    pub pos: [f32; 3],
+    /// Signed bytes, a unit vector scaled by 127 (the fourth is 0).
+    pub normal: [i8; 4],
+    /// Bytes, 255 for 1 (the fourth is 0).
+    pub front: [u8; 4],
+    pub back: [u8; 4],
+    pub finish: [u8; 4],
+}
+
+impl LodVertex {
+    /// `v` as a simplified chunk keeps it.
+    pub fn pack(v: &BaseFaceVertex) -> LodVertex {
+        let unit = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let n = Vec3::from(v.normal).normalize_or_zero() * 127.0;
+        LodVertex {
+            pos: v.pos,
+            normal: [n.x.round() as i8, n.y.round() as i8, n.z.round() as i8, 0],
+            front: [unit(v.front[0]), unit(v.front[1]), unit(v.front[2]), 0],
+            back: [unit(v.back[0]), unit(v.back[1]), unit(v.back[2]), 0],
+            finish: v.finish.map(unit),
+        }
+    }
+}
 
 /// The cell size of each level in meters, finest first. Each is a whole multiple of the one
 /// before, so the cells nest.
@@ -58,12 +98,18 @@ struct Level {
 /// The simplified solid chunks of a model, on the GPU, one vertex buffer a level.
 pub struct Lod {
     levels: Vec<Level>,
-    /// Zero flags for every level's vertices (nothing in them is selected or hovered).
+    /// The triangles each chunk keeps whole, full vertices, in one buffer.
+    kept: Option<wgpu::Buffer>,
+    kept_ranges: Vec<Option<Range<u32>>>,
+    /// Zero flags for `kept`'s vertices (nothing in them is selected or hovered).
     zeros: Option<wgpu::Buffer>,
 }
 
 /// What one chunk simplifies to at each level: the vertices, or None when it does not help.
-type ChunkLevels = Vec<Option<Vec<BaseFaceVertex>>>;
+type ChunkLevels = Vec<Option<Vec<LodVertex>>>;
+
+/// A chunk's levels, and the triangles it keeps whole.
+type Simplified = (ChunkLevels, Vec<BaseFaceVertex>);
 
 impl Lod {
     /// Simplifies the solid chunks of `plan`, which orders `faces`, and uploads them, a level
@@ -80,8 +126,10 @@ impl Lod {
         let threads = std::thread::available_parallelism()
             .map_or(1, |n| n.get())
             .min(16);
-        let chunk_levels = |k: usize| -> ChunkLevels { simplify_chunk(plan, faces, k, cancel) };
-        let mut results: Vec<ChunkLevels> = if threads < 2 || count < 16 {
+        let borders = Borders::find(plan, faces, threads, cancel);
+        let chunk_levels =
+            |k: usize| -> Simplified { simplify_chunk(plan, faces, k, &borders, cancel) };
+        let mut results: Vec<Simplified> = if threads < 2 || count < 16 {
             (0..count).map(chunk_levels).collect()
         } else {
             let per = count.div_ceil(threads);
@@ -105,20 +153,60 @@ impl Lod {
         if cancel.load(Ordering::Relaxed) {
             return None;
         }
+        // The kept triangles go into one buffer, with the flags that go with them.
+        let full = std::mem::size_of::<BaseFaceVertex>();
+        let kept_total: usize = results.iter().map(|c| c.1.len()).sum();
+        if (kept_total * (full + std::mem::size_of::<f32>())) as u64 > limit {
+            return None;
+        }
+        let mut kept_ranges = vec![None; count];
+        let (mut kept, mut zeros) = (None, None);
+        if kept_total > 0 {
+            let b = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("lod kept faces"),
+                size: (kept_total * full) as u64,
+                usage: wgpu::BufferUsages::VERTEX,
+                mapped_at_creation: true,
+            });
+            {
+                let mut view = b
+                    .slice(..)
+                    .get_mapped_range_mut()
+                    .expect("the buffer was created mapped");
+                let mut at = 0;
+                for (k, chunk) in results.iter_mut().enumerate() {
+                    let v = std::mem::take(&mut chunk.1);
+                    if !v.is_empty() {
+                        view.slice(at * full..(at + v.len()) * full)
+                            .copy_from_slice(bytemuck::cast_slice(&v));
+                        kept_ranges[k] = Some(at as u32..(at + v.len()) as u32);
+                        at += v.len();
+                    }
+                }
+            }
+            b.unmap();
+            kept = Some(b);
+            zeros = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("lod flags"),
+                size: (kept_total * std::mem::size_of::<f32>()) as u64,
+                usage: wgpu::BufferUsages::VERTEX,
+                mapped_at_creation: false,
+            }));
+        }
         // One level at a time goes into its buffer, and its chunks' vertices are freed.
-        let stride = std::mem::size_of::<BaseFaceVertex>();
+        let stride = std::mem::size_of::<LodVertex>();
         let mut levels = Vec::new();
         for (l, &cell) in CELLS.iter().enumerate() {
             let total: usize = results
                 .iter()
-                .map(|c| c[l].as_ref().map_or(0, Vec::len))
+                .map(|c| c.0[l].as_ref().map_or(0, Vec::len))
                 .sum();
             let mut ranges = vec![None; count];
             let mut buffer = None;
             // A level too big for a buffer is left out.
             let total = if (total * stride) as u64 > limit {
                 for chunk in &mut results {
-                    chunk[l] = None;
+                    chunk.0[l] = None;
                 }
                 0
             } else {
@@ -138,7 +226,7 @@ impl Lod {
                         .expect("the buffer was created mapped");
                     let mut at = 0;
                     for (k, chunk) in results.iter_mut().enumerate() {
-                        if let Some(v) = chunk[l].take() {
+                        if let Some(v) = chunk.0[l].take() {
                             view.slice(at * stride..(at + v.len()) * stride)
                                 .copy_from_slice(bytemuck::cast_slice(&v));
                             ranges[k] = Some(at as u32..(at + v.len()) as u32);
@@ -156,16 +244,12 @@ impl Lod {
                 vertices: total as u32,
             });
         }
-        let most = levels.iter().map(|l| l.vertices).max().unwrap_or(0);
-        let zeros = (most > 0 && u64::from(most) * 4 <= limit).then(|| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("lod flags"),
-                size: u64::from(most) * std::mem::size_of::<f32>() as u64,
-                usage: wgpu::BufferUsages::VERTEX,
-                mapped_at_creation: false,
-            })
-        });
-        Some(Lod { levels, zeros })
+        Some(Lod {
+            levels,
+            kept,
+            kept_ranges,
+            zeros,
+        })
     }
 
     /// The level to draw chunk `k` at, with its vertices, where a pixel is `per_pixel` meters
@@ -199,17 +283,35 @@ impl Lod {
         }
     }
 
-    /// The vertex buffer of `level` and the zero flag buffer to draw it with.
-    pub fn buffers(&self, level: usize) -> Option<(&wgpu::Buffer, &wgpu::Buffer)> {
-        Some((
-            self.levels.get(level)?.buffer.as_ref()?,
-            self.zeros.as_ref()?,
-        ))
+    /// The triangles chunk `k` keeps whole, drawn with its simplified level.
+    pub fn kept(&self, k: usize) -> Option<Range<u32>> {
+        self.kept_ranges.get(k)?.clone()
+    }
+
+    /// The buffer of kept triangles and the zero flags to draw it with.
+    pub fn kept_buffers(&self) -> Option<(&wgpu::Buffer, &wgpu::Buffer)> {
+        Some((self.kept.as_ref()?, self.zeros.as_ref()?))
+    }
+
+    /// The vertex buffer of `level`.
+    pub fn buffer(&self, level: usize) -> Option<&wgpu::Buffer> {
+        self.levels.get(level)?.buffer.as_ref()
+    }
+
+    /// The bytes the copies take on the GPU.
+    pub fn gpu_bytes(&self) -> u64 {
+        self.levels
+            .iter()
+            .filter_map(|l| l.buffer.as_ref())
+            .chain(self.kept.as_ref())
+            .chain(self.zeros.as_ref())
+            .map(|b| b.size())
+            .sum()
     }
 
     /// The bytes of vertices each level holds.
     pub fn level_bytes(&self) -> Vec<u64> {
-        let stride = std::mem::size_of::<BaseFaceVertex>() as u64;
+        let stride = std::mem::size_of::<LodVertex>() as u64;
         self.levels
             .iter()
             .map(|l| u64::from(l.vertices) * stride)
@@ -222,9 +324,10 @@ fn simplify_chunk(
     plan: &ChunkPlan,
     faces: &[BaseFaceVertex],
     k: usize,
+    borders: &Borders,
     cancel: &AtomicBool,
-) -> ChunkLevels {
-    let none = || CELLS.iter().map(|_| None).collect();
+) -> Simplified {
+    let none = || (CELLS.iter().map(|_| None).collect(), Vec::new());
     if cancel.load(Ordering::Relaxed) {
         return none();
     }
@@ -240,23 +343,116 @@ fn simplify_chunk(
             list.extend_from_slice(tri);
         }
     }
+    // Where the kept triangles have corners, and where the chunk meets others, nothing moves.
+    let corners: Map<[u32; 3], ()> = kept.iter().map(|v| (bits(v.pos), ())).collect();
+    let pinned = |v: &BaseFaceVertex| borders.contains(v.pos) || corners.contains_key(&bits(v.pos));
     let mut before = (plain.len() + kept.len()) / 3;
-    CELLS
+    let levels = CELLS
         .iter()
         .map(|&cell| {
-            plain = cluster(&plain, cell);
+            plain = cluster_pinned(&plain, cell, &pinned);
             let now = (plain.len() + kept.len()) / 3;
             let worth = now as f32 <= WORTH * before as f32;
             if worth {
                 before = now;
             }
-            worth.then(|| {
-                let mut all = plain.clone();
-                all.extend_from_slice(&kept);
-                all
-            })
+            (worth && !plain.is_empty())
+                .then(|| plain.iter().map(LodVertex::pack).collect::<Vec<_>>())
         })
-        .collect()
+        .collect();
+    (levels, kept)
+}
+
+fn bits(p: [f32; 3]) -> [u32; 3] {
+    p.map(f32::to_bits)
+}
+
+/// The places where vertices of more than one chunk lie.
+pub struct Borders {
+    places: Map<[u32; 3], ()>,
+}
+
+impl Borders {
+    /// The places shared by the chunks whose vertex places are `chunks` (see `places`).
+    pub fn new(chunks: impl IntoIterator<Item = Vec<[u32; 3]>>) -> Borders {
+        let mut all: Vec<[u32; 3]> = chunks.into_iter().flatten().collect();
+        all.sort_unstable();
+        let mut places = Map::default();
+        for pair in all.windows(2) {
+            if pair[0] == pair[1] {
+                places.insert(pair[0], ());
+            }
+        }
+        Borders { places }
+    }
+
+    /// The places shared by the chunks of `plan` (the solid ones and the others), found on
+    /// `threads` threads. Partial when `cancel` is set meanwhile (the build is then dropped).
+    fn find(
+        plan: &ChunkPlan,
+        faces: &[BaseFaceVertex],
+        threads: usize,
+        cancel: &AtomicBool,
+    ) -> Borders {
+        let found = |k: usize| -> Vec<[u32; 3]> {
+            if cancel.load(Ordering::Relaxed) {
+                return Vec::new();
+            }
+            let c = &plan.chunks[k];
+            let mut at: Vec<[f32; 3]> = Vec::new();
+            for run in plan.sources(c.vertices.start as usize..c.vertices.end as usize) {
+                at.extend(faces[run].iter().map(|v| v.pos));
+            }
+            places(at.into_iter())
+        };
+        let count = plan.chunks.len();
+        if threads < 2 || count < 16 {
+            return Borders::new((0..count).map(found));
+        }
+        let per = count.div_ceil(threads);
+        let parts: Vec<Vec<[u32; 3]>> = std::thread::scope(|s| {
+            let jobs: Vec<_> = (0..count)
+                .step_by(per)
+                .map(|from| {
+                    let found = &found;
+                    s.spawn(move || {
+                        (from..(from + per).min(count))
+                            .flat_map(found)
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            jobs.into_iter()
+                .map(|j| j.join().expect("a border finding thread panicked"))
+                .collect()
+        });
+        Borders::new(parts)
+    }
+
+    /// True when vertices of more than one chunk lie at `p`.
+    fn contains(&self, p: [f32; 3]) -> bool {
+        !self.places.is_empty() && self.places.contains_key(&bits(p))
+    }
+}
+
+/// The places `positions` are at, each once, sorted.
+pub fn places(positions: impl Iterator<Item = [f32; 3]>) -> Vec<[u32; 3]> {
+    let mut keys: Vec<[u32; 3]> = positions.map(bits).collect();
+    keys.sort_unstable();
+    keys.dedup();
+    keys
+}
+
+/// True when the box `lo` to `hi` lies within the largest cell of one of `planes`, or crosses it:
+/// where the simplified surface could part from what is built from the whole one.
+pub fn near_planes(lo: Vec3, hi: Vec3, planes: &[kernel::SectionPlane]) -> bool {
+    let reach = f64::from(CELLS[CELLS.len() - 1]);
+    let (mid, half) = ((lo + hi).as_dvec3() * 0.5, (hi - lo).as_dvec3() * 0.5);
+    planes.iter().any(|p| {
+        let n = p.normal;
+        let spread = half.x * n.x.abs() + half.y * n.y.abs() + half.z * n.z.abs();
+        (n.dot(mid - p.point)).abs() <= spread + reach
+    })
 }
 
 /// True for a triangle that glows or shows a texture on either side.
@@ -281,6 +477,10 @@ impl Hasher for Mix {
         }
     }
 
+    fn write_u32(&mut self, v: u32) {
+        self.write_u64(u64::from(v));
+    }
+
     fn write_u64(&mut self, v: u64) {
         self.0 = (self.0.rotate_left(5) ^ v).wrapping_mul(0x9E37_79B9_7F4A_7C15);
         self.0 ^= self.0 >> 29;
@@ -295,6 +495,8 @@ struct Cell {
     /// The sum of the positions and how many there are.
     pos: Vec3,
     corners: u32,
+    /// Where the cell's one vertex is, when it is pinned there.
+    exact: Option<Vec3>,
     /// The looks of the surfaces facing each of the six ways.
     looks: [Look; 6],
 }
@@ -322,7 +524,7 @@ impl Cell {
     }
 
     fn position(&self) -> Vec3 {
-        self.pos / self.corners as f32
+        self.exact.unwrap_or(self.pos / self.corners as f32)
     }
 
     /// `v` with the cell's position and the look of the surfaces facing `side`.
@@ -353,17 +555,44 @@ fn side_of(n: Vec3) -> usize {
 
 /// The triangles `tris` (three vertices each) clustered on the grid of `cell`-sized cells
 /// that has a corner at the origin.
-pub fn cluster(tris: &[BaseFaceVertex], cell: f32) -> Vec<BaseFaceVertex> {
+#[cfg(test)]
+fn cluster(tris: &[BaseFaceVertex], cell: f32) -> Vec<BaseFaceVertex> {
+    cluster_pinned(tris, cell, &|_| false)
+}
+
+/// Like `cluster`, but a vertex for which `pinned` is true stays where it is, as its own
+/// cluster with the others at the same place.
+pub fn cluster_pinned(
+    tris: &[BaseFaceVertex],
+    cell: f32,
+    pinned: &impl Fn(&BaseFaceVertex) -> bool,
+) -> Vec<BaseFaceVertex> {
     let inv = 1.0 / cell;
     let low = tris
         .iter()
         .fold(Vec3::splat(f32::MAX), |m, v| m.min(Vec3::from(v.pos)));
     let base = (low * inv).floor();
     let mut index: Map<u64, u32> = Map::default();
+    let mut fixed: Map<[u32; 3], u32> = Map::default();
     let mut cells: Vec<Cell> = Vec::new();
     let mut cell_of: Vec<u32> = Vec::with_capacity(tris.len());
     for v in tris {
         let p = Vec3::from(v.pos);
+        if pinned(v) {
+            let next = cells.len() as u32;
+            let i = *fixed.entry(bits(v.pos)).or_insert(next);
+            if i == next {
+                cells.push(Cell {
+                    exact: Some(p),
+                    ..Cell::default()
+                });
+            }
+            let c = &mut cells[i as usize];
+            c.pos += p;
+            c.corners += 1;
+            cell_of.push(i);
+            continue;
+        }
         let q = (p * inv).floor() - base;
         let key = (q.x as i64 as u64 & 0x1F_FFFF)
             | (q.y as i64 as u64 & 0x1F_FFFF) << 21
@@ -478,7 +707,7 @@ fn two_sided(tri: &mut [BaseFaceVertex]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytemuck::Zeroable;
+    use std::collections::BTreeSet;
 
     fn corner(p: [f32; 3], front: [f32; 3]) -> BaseFaceVertex {
         BaseFaceVertex {
@@ -596,19 +825,141 @@ mod tests {
         let textured: Vec<_> = tris[600..603].iter().map(|v| v.pos).collect();
         let plan = ChunkPlan::new(tris.len(), &[], 3, 100_000, &|i| tris[i].pos, &|_| true);
         assert_eq!(plan.chunks.len(), 1);
-        let levels = simplify_chunk(&plan, &tris, 0, &AtomicBool::new(false));
+        let borders = Borders::new([]);
+        let (levels, kept) = simplify_chunk(&plan, &tris, 0, &borders, &AtomicBool::new(false));
         let level = levels[0].as_ref().expect("the first level helps");
         assert!(level.len() * 4 < tris.len());
+        // They are kept as they were, whole vertices, outside the levels.
+        assert_eq!(kept.len(), 6);
         let has = |positions: &[[f32; 3]]| {
-            level
-                .as_chunks::<3>()
+            kept.as_chunks::<3>()
                 .0
                 .iter()
                 .any(|t| t.iter().map(|v| v.pos).eq(positions.iter().copied()))
         };
         assert!(has(&lit) && has(&textured));
-        let lit_vertex = level.iter().find(|v| v.glow[0] > 0.5).unwrap();
+        let lit_vertex = kept.iter().find(|v| v.glow[0] > 0.5).unwrap();
         assert_eq!(lit_vertex.glow, [1.0, 0.0]);
+        assert!(kept.iter().any(|v| v.layer[0] == 2.0));
+    }
+
+    #[test]
+    fn a_simplified_vertex_is_28_bytes_and_keeps_what_the_shader_shows() {
+        assert_eq!(std::mem::size_of::<LodVertex>(), 28);
+        let mut v = corner([1.0, 2.0, 3.0], [1.0, 0.5, 0.0]);
+        v.normal = [0.0, 0.6, -0.8];
+        v.finish = [0.0, 1.0, 1.0, 0.25];
+        let p = LodVertex::pack(&v);
+        assert_eq!(p.pos, [1.0, 2.0, 3.0]);
+        assert_eq!(p.front, [255, 128, 0, 0]);
+        assert_eq!(p.back, [128, 128, 128, 0]);
+        assert_eq!(p.finish, [0, 255, 255, 64]);
+        let n = p.normal.map(|b| f32::from(b) / 127.0);
+        assert!((n[1] - 0.6).abs() < 0.01 && (n[2] + 0.8).abs() < 0.01);
+    }
+
+    /// A bumpy sheet, `n` x `n` squares of `step` m from `x0`, two triangles each; the bumps
+    /// make the average of a cell differ from its neighbours' by chunk.
+    fn sheet(x0: f32, n: usize, step: f32) -> Vec<BaseFaceVertex> {
+        let z = |x: f32, y: f32| 0.9 * (x * 1.3).sin() * (y * 0.7).cos();
+        let mut out = Vec::new();
+        for i in 0..n {
+            for j in 0..n {
+                let (x, y) = (x0 + i as f32 * step, j as f32 * step);
+                let c = |x: f32, y: f32| corner([x, y, z(x, y)], [0.8, 0.8, 0.8]);
+                let (a, b, d, e) = (
+                    c(x, y),
+                    c(x + step, y),
+                    c(x + step, y + step),
+                    c(x, y + step),
+                );
+                out.extend([a, b, d, a, d, e]);
+            }
+        }
+        out
+    }
+
+    /// The edges of `tris` that lie on the plane x = `x`, as pairs of positions.
+    fn edges_on(tris: &[BaseFaceVertex], x: f32) -> BTreeSet<([u32; 3], [u32; 3])> {
+        let mut out = BTreeSet::new();
+        for t in tris.as_chunks::<3>().0 {
+            for i in 0..3 {
+                let (a, b) = (t[i].pos, t[(i + 1) % 3].pos);
+                if a[0] == x && b[0] == x {
+                    out.insert(if bits(a) < bits(b) {
+                        (bits(a), bits(b))
+                    } else {
+                        (bits(b), bits(a))
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn chunks_simplified_to_different_levels_meet_along_their_border_without_a_gap() {
+        // Two sheets side by side, meeting along x = 20, each its own chunk.
+        let (left, right) = (sheet(0.0, 40, 0.5), sheet(20.0, 40, 0.5));
+        let shared = edges_on(&left, 20.0);
+        assert_eq!(shared.len(), 40);
+        assert_eq!(shared, edges_on(&right, 20.0));
+        let borders = Borders::new([
+            places(left.iter().map(|v| v.pos)),
+            places(right.iter().map(|v| v.pos)),
+        ]);
+        let pinned = |v: &BaseFaceVertex| borders.contains(v.pos);
+        for (a, b) in [(2.0, 8.0), (8.0, 2.0), (4.0, 4.0)] {
+            let l = cluster_pinned(&left, a, &pinned);
+            let r = cluster_pinned(&right, b, &pinned);
+            assert!(l.len() * 3 < left.len() && r.len() * 3 < right.len());
+            assert_eq!(edges_on(&l, 20.0), shared, "left at {a}, right at {b}");
+            assert_eq!(edges_on(&r, 20.0), shared, "left at {a}, right at {b}");
+        }
+        // Without pins the borders do not agree (the cell averages differ).
+        let l = cluster(&left, 2.0);
+        let r = cluster(&right, 8.0);
+        assert_ne!(edges_on(&l, 20.0), edges_on(&r, 20.0));
+    }
+
+    #[test]
+    fn the_corners_of_a_triangle_kept_whole_stay_where_they_are_in_the_simplified_ones() {
+        // A glowing triangle (kept whole) standing on a corner of a fine sheet: the sheet's
+        // vertex there must not move, or a crack opens between them.
+        let mut tris = sheet(0.0, 40, 0.5);
+        let at = tris[0].pos;
+        let mut lit = [
+            corner(at, [0.8; 3]),
+            corner([at[0] + 0.5, at[1], tris[1].pos[2]], [0.8; 3]),
+            corner([at[0], at[1], at[2] + 5.0], [0.8; 3]),
+        ];
+        for v in &mut lit {
+            v.glow = [1.0, 0.0];
+        }
+        tris.extend(lit);
+        let plan = ChunkPlan::new(tris.len(), &[], 3, 100_000, &|i| tris[i].pos, &|_| true);
+        let (levels, kept) =
+            simplify_chunk(&plan, &tris, 0, &Borders::new([]), &AtomicBool::new(false));
+        let level = levels[0].as_ref().expect("the first level helps");
+        assert!(kept.iter().any(|v| v.pos == at));
+        let there = level.iter().filter(|v| v.pos == at).count();
+        assert!(there >= 1, "the sheet's corner at the lit triangle's moved");
+    }
+
+    #[test]
+    fn a_box_crossing_a_cutting_plane_or_within_a_cell_of_it_is_near() {
+        let plane = kernel::SectionPlane::new(glam::DVec3::new(100.0, 0.0, 0.0), glam::DVec3::X);
+        let near = |lo: [f32; 3], hi: [f32; 3]| near_planes(lo.into(), hi.into(), &[plane]);
+        assert!(near([90.0, 0.0, 0.0], [110.0, 5.0, 5.0]), "across it");
+        assert!(
+            near([93.0, 0.0, 0.0], [95.0, 5.0, 5.0]),
+            "within the largest cell"
+        );
+        assert!(
+            !near([80.0, 0.0, 0.0], [90.0, 5.0, 5.0]),
+            "farther than that"
+        );
+        assert!(!near([0.0; 3], [5.0; 3]) && !near_planes(Vec3::ZERO, Vec3::ONE, &[]));
     }
 
     fn levels_of_chunk_zero() -> Lod {
@@ -620,6 +971,8 @@ mod tests {
         };
         Lod {
             levels: vec![level(1.0), level(3.0), level(9.0)],
+            kept: None,
+            kept_ranges: Vec::new(),
             zeros: None,
         }
     }

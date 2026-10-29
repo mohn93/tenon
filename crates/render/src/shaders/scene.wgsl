@@ -625,6 +625,32 @@ fn vs_face(
     return out;
 }
 
+// A corner of a simplified chunk (see lod.rs): flat opaque color, no texture or glow, never selected
+// or hovered (a chunk with either is drawn whole). Fills what `vs_face` does with constants.
+@vertex
+fn vs_face_lod(
+    @location(0) pos: vec3<f32>,
+    @location(1) normal: vec4<f32>,
+    @location(3) front_color: vec4<f32>,
+    @location(4) back_color: vec4<f32>,
+    @location(10) finish: vec4<f32>,
+) -> FaceOut {
+    var out: FaceOut;
+    out.pos = u.view_proj * vec4<f32>(pos, 1.0);
+    out.world = pos;
+    out.normal = normal.xyz;
+    out.selected = 0.0;
+    out.front_color = front_color.rgb;
+    out.back_color = back_color.rgb;
+    out.alpha = vec2<f32>(1.0);
+    out.uv = vec4<f32>(0.0);
+    out.layer = vec2<f32>(-1.0);
+    out.glow = vec2<f32>(0.0);
+    out.hovered = 0.0;
+    out.finish = finish;
+    return out;
+}
+
 // The light glowing faces cast on a point `p` facing `n`: each light's color by Lambert's
 // cosine, falling off with distance (like 1 / (1 + d^2) over a quarter of the range) and
 // smoothly to zero at its range, and stopped by casters where the light has a shadow map

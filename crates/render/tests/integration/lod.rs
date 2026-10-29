@@ -4,21 +4,41 @@
 use std::collections::BTreeSet;
 
 use glam::{DVec2, DVec3};
-use kernel::{EdgeStyle, EntityId, Model, Scene, StyleSettings};
+use kernel::{EdgeStyle, EntityId, Model, Scene, SectionPlane, StyleSettings};
 use render::{HoverLook, Renderer, Viewport};
-use session::Camera;
+use session::{Camera, SectionDisplay};
 
 use crate::headless::{H, Offscreen, W};
 
 /// Squares along a side of the plane, and how long a square is: a fine mesh of one flat color.
 const SIDE: usize = 30;
 const STEP: f64 = 1.0;
+/// The faces are made block by block, a block a chunk's piece (see `CHUNK`), so a chunk is a
+/// compact patch and not a strip.
+const BLOCK: usize = 15;
+/// Triangles to a chunk: two blocks.
+const CHUNK: usize = 900;
 
 /// A flat plane of `SIDE` x `SIDE` squares of `STEP` m, the faces' ids.
 fn plane() -> (Scene, Vec<EntityId>) {
+    plane_cut(None)
+}
+
+/// The same, with `cut` as its active section plane.
+fn plane_cut(cut: Option<SectionPlane>) -> (Scene, Vec<EntityId>) {
     let mut m = Model::new();
+    if let Some(cut) = cut {
+        m.add_section(cut, true).unwrap();
+    }
+    let mut order: Vec<(usize, usize)> = Vec::new();
     for i in 0..SIDE {
         for j in 0..SIDE {
+            order.push((i, j));
+        }
+    }
+    order.sort_by_key(|&(i, j)| (i / BLOCK, j / BLOCK, i, j));
+    {
+        for (i, j) in order {
             let (x, y) = (i as f64 * STEP, j as f64 * STEP);
             let p = |x: f64, y: f64| DVec3::new(x, y, 0.0);
             m.add_polygon(&[
@@ -50,7 +70,7 @@ fn style() -> StyleSettings {
 fn renderer(screen: &Offscreen, scene: &Scene, lod: bool) -> Renderer {
     let mut r = screen.renderer();
     // Small chunks, so a model this size has many.
-    r.set_culling_from(100);
+    r.set_culling_from(CHUNK);
     r.set_model_style(Some(&style()));
     r.set_lod(lod);
     r.set_scene(scene, &[], &BTreeSet::new());
@@ -197,7 +217,7 @@ fn an_idle_renderer_makes_the_copies_once_the_model_has_settled() {
     };
     let (scene, _) = plane();
     let mut r = screen.renderer();
-    r.set_culling_from(100);
+    r.set_culling_from(CHUNK);
     r.set_model_style(Some(&style()));
     r.set_lod(true);
     r.set_scene(&scene, &[], &BTreeSet::new());
@@ -237,7 +257,7 @@ fn a_level_over_the_buffer_limit_is_left_out() {
     assert!(all.len() > 1 && all.iter().all(|&b| b > 0), "{all:?}");
     let largest = *all.iter().max().unwrap();
     let mut r = screen.renderer();
-    r.set_culling_from(100);
+    r.set_culling_from(CHUNK);
     r.set_model_style(Some(&style()));
     r.set_lod(true);
     r.set_lod_buffer_limit(largest - 1);
@@ -292,4 +312,169 @@ fn the_pixel_limit_is_kept_finite_and_positive() {
     }
     r.set_lod_pixels(f32::NAN);
     assert_eq!(r.drawn_triangles(&cam).unwrap().0, drawn);
+}
+
+#[test]
+fn chunks_near_an_active_section_plane_stay_whole_in_a_far_view() {
+    let Some(screen) = Offscreen::new() else {
+        return;
+    };
+    // The plane through the middle keeps the half with x >= 15. The cut's fill and outline are
+    // made from the whole surface, so chunks within the largest cell (8 m) of it are not
+    // simplified.
+    let mid = SIDE as f64 * STEP / 2.0;
+    let cut = SectionPlane::new(DVec3::new(mid, 0.0, 0.0), DVec3::X);
+    let (scene, _) = plane_cut(Some(cut));
+    let cam = camera(FAR);
+    let on = renderer(&screen, &scene, true);
+    let (kept, all) = on.visible_triangles(&cam).unwrap();
+    let (drawn, _) = on.drawn_triangles(&cam).unwrap();
+    assert_eq!(
+        all,
+        (SIDE * SIDE) as u32,
+        "the plane keeps half the triangles"
+    );
+    assert_eq!(drawn, kept, "the chunks at the plane are drawn whole");
+    // With the cuts off the same far view is simplified all over (nothing to protect).
+    let mut r = screen.renderer();
+    r.set_culling_from(CHUNK);
+    r.set_model_style(Some(&style()));
+    r.set_lod(true);
+    r.set_section_display(SectionDisplay {
+        cuts: false,
+        ..SectionDisplay::default()
+    });
+    r.set_scene(&scene, &[], &BTreeSet::new());
+    r.wait_for_lod();
+    let (kept_off, _) = r.visible_triangles(&cam).unwrap();
+    let (drawn_off, _) = r.drawn_triangles(&cam).unwrap();
+    assert!(drawn_off * 3 < kept_off, "drew {drawn_off} of {kept_off}");
+    assert!(drawn > drawn_off);
+}
+
+/// A patch of 1 m squares (made block by block, so chunks are compact) with one big square
+/// beside it painted `paint` (a material of the document), seen from far above.
+fn patch_with_feature(
+    paint: impl FnOnce(&mut session::Document) -> session::MaterialId,
+) -> session::Document {
+    use crate::golden::{created_face, doc, run};
+    use session::{Command, Side};
+    let mut d = doc();
+    // The big square first, so it shares a chunk with simplifiable squares.
+    let big = run(
+        &mut d,
+        Command::AddRectangle {
+            corner: [20.0, 0.0, 0.0],
+            opposite: [44.0, 24.0, 0.0],
+            normal: None,
+        },
+    );
+    let mut order: Vec<(i32, i32)> = Vec::new();
+    for i in 0..16 {
+        for j in 0..16 {
+            order.push((i, j));
+        }
+    }
+    order.sort_by_key(|&(i, j)| (i / 8, j / 8, i, j));
+    for (i, j) in order {
+        let (x, y) = (f64::from(i), f64::from(j));
+        run(
+            &mut d,
+            Command::AddRectangle {
+                corner: [x, y, 0.0],
+                opposite: [x + 1.0, y + 1.0, 0.0],
+                normal: None,
+            },
+        );
+    }
+    let material = paint(&mut d);
+    run(
+        &mut d,
+        Command::Paint {
+            ids: vec![created_face(&big)],
+            material: Some(material),
+            side: Side::Both,
+        },
+    );
+    d
+}
+
+/// How many pixels of a far view of `d` satisfy `colored`, drawn simplified and whole.
+fn colored_pixels(d: &session::Document, colored: impl Fn(&[u8]) -> bool) -> (usize, usize) {
+    let Some(screen) = Offscreen::new() else {
+        return (0, 0);
+    };
+    let mut r = screen.renderer();
+    r.set_culling_from(256);
+    r.set_model_style(Some(&style()));
+    r.set_lod(true);
+    r.set_scene(d.scene(), &[], &BTreeSet::new());
+    r.wait_for_lod();
+    let mut cam = Camera::new(DVec2::new(W as f64, H as f64));
+    cam.eye = DVec3::new(22.0, 12.0 - 140.0, 700.0);
+    cam.target = DVec3::new(22.0, 12.0, 0.0);
+    let full = Viewport::full((W, H));
+    let simple = screen.draw(&mut r, &cam, full, &[]);
+    let (kept, _) = r.visible_triangles(&cam).unwrap();
+    let (drawn, _) = r.drawn_triangles(&cam).unwrap();
+    assert!(drawn < kept, "the view is simplified: {drawn} of {kept}");
+    r.set_lod(false);
+    let whole = screen.draw(&mut r, &cam, full, &[]);
+    let count = |p: &[u8]| p.chunks(4).filter(|c| colored(c)).count();
+    (count(&simple), count(&whole))
+}
+
+#[test]
+fn a_glowing_face_in_a_simplified_view_glows_as_it_does_in_full_detail() {
+    let d = patch_with_feature(|d| crate::golden::add_lamp_material(d, "Lamp", [255, 0, 0], 1.0));
+    let red = |c: &[u8]| c[0] > 200 && c[1] < 80 && c[2] < 80;
+    let (simple, whole) = colored_pixels(&d, red);
+    if whole == 0 {
+        return; // no GPU
+    }
+    assert!(whole > 10, "the lamp shows: {whole} pixels");
+    assert!(
+        simple * 10 >= whole * 8,
+        "{simple} glowing pixels of {whole}"
+    );
+}
+
+#[test]
+fn a_textured_face_in_a_simplified_view_shows_its_texture() {
+    let d = patch_with_feature(|d| {
+        crate::golden::run(
+            d,
+            session::Command::AddMaterial {
+                name: Some("Tiles".into()),
+                color: None,
+                opacity: None,
+                texture: Some(session::TextureSource {
+                    path: Some(crate::golden::quadrants_png().display().to_string()),
+                    width: Some(24.0),
+                    height: Some(24.0),
+                }),
+                emission: None,
+                metalness: None,
+                roughness: None,
+                density: None,
+                existing: Default::default(),
+            },
+        )
+        .changes
+        .materials[0]
+    });
+    // The picture's colors are far from the cream of the patch and the blue of the background.
+    let saturated = |c: &[u8]| {
+        let (hi, lo) = (c[0].max(c[1]).max(c[2]), c[0].min(c[1]).min(c[2]));
+        hi - lo > 125 && !(c[2] > c[1] && c[1] > c[0] && c[2] > 180)
+    };
+    let (simple, whole) = colored_pixels(&d, saturated);
+    if whole == 0 {
+        return;
+    }
+    assert!(whole > 10, "the texture shows: {whole} pixels");
+    assert!(
+        simple * 10 >= whole * 8,
+        "{simple} textured pixels of {whole}"
+    );
 }

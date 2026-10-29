@@ -12,7 +12,7 @@ use crate::grid::{
 };
 use crate::guides::{GuideShape, guide_lines};
 use crate::lights::{Light, MAX_LIGHTS, strongest};
-use crate::lod::{CELL_PIXELS, Lod};
+use crate::lod::{CELL_PIXELS, Lod, LodVertex};
 use crate::scene::{
     BaseFaceVertex, CasterChunk, EdgeColors, EdgeExtra, GlassView, PartsCache, Ranges, Spans,
     scene_base_cached, shown_annotations, shown_guides, shown_sections,
@@ -33,6 +33,11 @@ const LINE_ATTRIBS: [wgpu::VertexAttribute; 2] =
 const FACE_ATTRIBS: [wgpu::VertexAttribute; 9] = wgpu::vertex_attr_array![
     0 => Float32x3, 1 => Float32x3, 3 => Float32x3, 4 => Float32x3, 5 => Float32x2,
     6 => Float32x4, 7 => Float32x2, 8 => Float32x2, 10 => Float32x4
+];
+/// A corner of a simplified chunk (see `lod::LodVertex`): position, normal, the colors of the two
+/// sides and their finishes, from the one vertex buffer such a chunk is drawn with.
+const LOD_ATTRIBS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+    0 => Float32x3, 1 => Snorm8x4, 3 => Unorm8x4, 4 => Unorm8x4, 10 => Unorm8x4
 ];
 /// The selection flag of a face or edge vertex, from a second vertex buffer (see
 /// `scene::Flags`).
@@ -889,6 +894,13 @@ pub struct Renderer {
     wide_flat_axes_pipeline: wgpu::RenderPipeline,
     wide_vertical_axis_pipeline: wgpu::RenderPipeline,
     face_pipeline: wgpu::RenderPipeline,
+    /// The faces of the simplified chunks (see `lod`): the same shading from a compact vertex.
+    face_lod_pipeline: wgpu::RenderPipeline,
+    /// The same chunks' normals for the ambient occlusion, made with it.
+    ao_lod_pipeline: Option<wgpu::RenderPipeline>,
+    /// Whether each face chunk is within reach of a plane that cuts the model, so it is drawn
+    /// whole (empty when no plane cuts).
+    cut_chunks: Vec<bool>,
     /// The opaque side of a triangle whose other side is see-through.
     solid_side_pipeline: wgpu::RenderPipeline,
     glass_pipeline: wgpu::RenderPipeline,
@@ -1224,6 +1236,11 @@ impl Renderer {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes,
         };
+        let lod_faces = [Some(wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<LodVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &LOD_ATTRIBS,
+        })];
         let lines_only = [Some(line_layout.clone())];
         let flagged_faces = [
             Some(face_layout),
@@ -1348,6 +1365,18 @@ impl Renderer {
             "vs_face",
             "fs_face",
             &flagged_faces,
+            wgpu::PrimitiveTopology::TriangleList,
+            DepthUse {
+                write: true,
+                compare: wgpu::CompareFunction::Greater,
+            },
+            None,
+        );
+        let face_lod_pipeline = pipeline(
+            "simplified faces",
+            "vs_face_lod",
+            "fs_face",
+            &lod_faces,
             wgpu::PrimitiveTopology::TriangleList,
             DepthUse {
                 write: true,
@@ -1680,6 +1709,9 @@ impl Renderer {
             wide_flat_axes_pipeline,
             wide_vertical_axis_pipeline,
             face_pipeline,
+            face_lod_pipeline,
+            ao_lod_pipeline: None,
+            cut_chunks: Vec::new(),
             solid_side_pipeline,
             glass_pipeline,
             edge_pipeline,
@@ -1891,6 +1923,14 @@ impl Renderer {
         }
     }
 
+    /// The bytes the simplified copies take on the GPU; 0 before they are made.
+    pub fn lod_gpu_bytes(&self) -> u64 {
+        match &self.lod {
+            LodState::Ready(lod) => lod.gpu_bytes(),
+            _ => 0,
+        }
+    }
+
     /// Waits until the GPU has taken what `set_model` and the like uploaded, and frees what it
     /// replaced; for offscreen use, which draws no frames in between.
     pub fn settle(&self) {
@@ -1919,13 +1959,14 @@ impl Renderer {
     /// The chunked lists' ranges in view of `camera`. With `remember`, the levels chosen are
     /// kept to choose the next ones by (see `Lod::pick`).
     fn visible(&self, camera: &Camera, remember: bool) -> Visible {
+        let kept = std::cell::RefCell::new(Vec::new());
         let faces = self.face_chunks.as_ref().map(|c| match &self.lod {
             LodState::Ready(lod) if self.lod_on => c.visible_by(camera, |k, per_pixel| {
                 let mut last = self.lod_last.borrow_mut();
                 if last.len() != c.chunks.len() {
                     *last = vec![0; c.chunks.len()];
                 }
-                if self.chunk_marked(k) {
+                if self.chunk_marked(k) || self.cut_chunks.get(k).copied().unwrap_or(false) {
                     if remember {
                         last[k] = 0;
                     }
@@ -1935,9 +1976,18 @@ impl Renderer {
                 if remember {
                     last[k] = next;
                 }
+                if pick.is_some()
+                    && let Some(range) = lod.kept(k)
+                {
+                    kept.borrow_mut().push(range);
+                }
                 pick
             }),
             _ => c.visible(camera),
+        });
+        let faces = faces.map(|mut runs| {
+            runs.lod_kept = kept.into_inner();
+            runs
         });
         Visible {
             faces,
@@ -2003,26 +2053,33 @@ impl Renderer {
         false
     }
 
-    /// Draws the vertices of the simplified levels in `runs`, with `pipeline` if given (else
-    /// the one set). True when it drew any.
+    /// Draws the vertices of the simplified levels in `runs` with `pipeline`, which takes
+    /// `LodVertex`es, and the triangles those chunks keep whole with `full`, which takes the
+    /// ordinary face vertices and their flags. True when it drew any (the pipeline and vertex
+    /// buffers are then not the ones set before).
     fn draw_lod(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         runs: Option<&Runs>,
-        pipeline: Option<&wgpu::RenderPipeline>,
+        pipeline: &wgpu::RenderPipeline,
+        full: &wgpu::RenderPipeline,
     ) -> bool {
         let (LodState::Ready(lod), Some(runs)) = (&self.lod, runs) else {
             return false;
         };
         let mut drew = false;
+        if let (Some((kept, zeros)), false) = (lod.kept_buffers(), runs.lod_kept.is_empty()) {
+            pass.set_pipeline(full);
+            pass.set_vertex_buffer(0, kept.slice(..));
+            pass.set_vertex_buffer(1, zeros.slice(..));
+            pass.set_vertex_buffer(2, zeros.slice(..));
+            draw_runs(pass, &runs.lod_kept, 1);
+            drew = true;
+        }
         for (level, list) in runs.lod.iter().enumerate() {
-            if let (Some((buffer, zeros)), false) = (lod.buffers(level), list.is_empty()) {
-                if let Some(pipeline) = pipeline {
-                    pass.set_pipeline(pipeline);
-                }
+            if let (Some(buffer), false) = (lod.buffer(level), list.is_empty()) {
+                pass.set_pipeline(pipeline);
                 pass.set_vertex_buffer(0, buffer.slice(..));
-                pass.set_vertex_buffer(1, zeros.slice(..));
-                pass.set_vertex_buffer(2, zeros.slice(..));
                 draw_runs(pass, list, 1);
                 drew = true;
             }
@@ -2119,6 +2176,14 @@ impl Renderer {
             &base.edge_extras,
             self.edge_chunks.as_ref(),
         );
+        self.cut_chunks = match &self.face_chunks {
+            Some(c) if !base.cut_planes.is_empty() => c
+                .chunks
+                .iter()
+                .map(|ch| crate::lod::near_planes(ch.lo, ch.hi, &base.cut_planes))
+                .collect(),
+            _ => Vec::new(),
+        };
         self.cut_fill = mesh(&self.device, "cut fill", &base.cut_fill);
         self.cut_edges = mesh(&self.device, "cut edges", &base.cut_edges);
         // The simplified copies are made later, from these vertices.
@@ -3018,7 +3083,12 @@ impl Renderer {
                             visible.faces.as_ref().map_or(&[][..], |r| &r.solid),
                             1,
                         );
-                        self.draw_lod(&mut pass, visible.faces.as_ref(), Some(&self.face_pipeline));
+                        self.draw_lod(
+                            &mut pass,
+                            visible.faces.as_ref(),
+                            &self.face_lod_pipeline,
+                            &self.face_pipeline,
+                        );
                         if let Some(glass) = glass {
                             bind(&mut pass, &self.solid_side_pipeline, faces);
                             pass.set_index_buffer(glass.order.slice(..), wgpu::IndexFormat::Uint32);
@@ -3137,9 +3207,11 @@ impl Renderer {
     fn prepare_ao(&mut self, on: bool, size: (u32, u32)) {
         let changed = if on {
             let (device, shader, layout) = (&self.device, &self.scene_shader, &self.scene_layout);
+            self.ao_lod_pipeline
+                .get_or_insert_with(|| ao_normal_pipeline(device, shader, layout, true));
             self.ssao
                 .get_or_insert_with(|| {
-                    Ssao::new(device, ao_normal_pipeline(device, shader, layout))
+                    Ssao::new(device, ao_normal_pipeline(device, shader, layout, false))
                 })
                 .resize(size)
         } else {
@@ -3215,8 +3287,16 @@ impl Renderer {
                         visible.faces.as_ref().map_or(&[][..], |r| &r.solid),
                         1,
                     );
-                    if self.draw_lod(&mut pass, visible.faces.as_ref(), None) {
+                    if let Some(lod_normals) = &self.ao_lod_pipeline
+                        && self.draw_lod(
+                            &mut pass,
+                            visible.faces.as_ref(),
+                            lod_normals,
+                            ssao.normal_pipeline(),
+                        )
+                    {
                         // The glass below is drawn from the full vertices again.
+                        pass.set_pipeline(ssao.normal_pipeline());
                         pass.set_vertex_buffer(0, faces.buffer.slice(..));
                         if let Some(flags) = &faces.flags {
                             pass.set_vertex_buffer(1, flags.slice(..));
@@ -3285,6 +3365,7 @@ fn ao_normal_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
+    simplified: bool,
 ) -> wgpu::RenderPipeline {
     let vector = |stride, attributes| wgpu::VertexBufferLayout {
         array_stride: stride,
@@ -3292,7 +3373,7 @@ fn ao_normal_pipeline(
         attributes,
     };
     let float = std::mem::size_of::<f32>() as u64;
-    let buffers = [
+    let full = [
         Some(vector(
             std::mem::size_of::<BaseFaceVertex>() as u64,
             &FACE_ATTRIBS,
@@ -3300,14 +3381,19 @@ fn ao_normal_pipeline(
         Some(vector(float, &FLAG_ATTRIBS)),
         Some(vector(float, &FACE_HOVER_ATTRIBS)),
     ];
+    let lod = [Some(vector(
+        std::mem::size_of::<LodVertex>() as u64,
+        &LOD_ATTRIBS,
+    ))];
+    let buffers = if simplified { &lod[..] } else { &full[..] };
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("ao normals"),
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some("vs_face"),
+            entry_point: Some(if simplified { "vs_face_lod" } else { "vs_face" }),
             compilation_options: Default::default(),
-            buffers: &buffers,
+            buffers,
         },
         primitive: wgpu::PrimitiveState::default(),
         depth_stencil: Some(wgpu::DepthStencilState {
