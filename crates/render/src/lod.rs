@@ -22,6 +22,14 @@
 //! corner. Every edge shared by two chunks, or by a kept and a simplified triangle, has
 //! pinned ends, so it is the same segment in a chunk at any level and in a full one.
 //!
+//! T-junctions: a vertex of one chunk can lie in the middle of an edge of another (a long wall
+//! edge beside a subdivided neighbour), so the position is not shared. The ends of each chunk's
+//! open edges (those one of its triangles uses alone: where its surface goes on in another chunk)
+//! are put in grids, every edge of every chunk is looked up among them, and a point of another
+//! chunk lying on the edge is pinned with the edge's ends. The tolerance is 0.5 mm and positions
+//! are f32, so it stops working a few km from the origin. A dense model is searched up to a bound
+//! of work and then left as it is (with a line on stderr).
+//!
 //! The simplified levels have their own small vertex (`LodVertex`): nothing in them is
 //! textured, glowing or see-through, and a chunk with something selected or hovered is drawn
 //! whole, so they carry no flags.
@@ -29,7 +37,7 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::ops::Range;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
@@ -394,45 +402,285 @@ impl Borders {
         threads: usize,
         cancel: &AtomicBool,
     ) -> Borders {
-        let found = |k: usize| -> Vec<[u32; 3]> {
-            if cancel.load(Ordering::Relaxed) {
-                return Vec::new();
-            }
+        let corners = |k: usize| -> Vec<[f32; 3]> {
             let c = &plan.chunks[k];
             let mut at: Vec<[f32; 3]> = Vec::new();
             for run in plan.sources(c.vertices.start as usize..c.vertices.end as usize) {
                 at.extend(faces[run].iter().map(|v| v.pos));
             }
-            places(at.into_iter())
+            at
         };
         let count = plan.chunks.len();
-        if threads < 2 || count < 16 {
-            return Borders::new((0..count).map(found));
-        }
-        let per = count.div_ceil(threads);
-        let parts: Vec<Vec<[u32; 3]>> = std::thread::scope(|s| {
-            let jobs: Vec<_> = (0..count)
-                .step_by(per)
-                .map(|from| {
-                    let found = &found;
-                    s.spawn(move || {
-                        (from..(from + per).min(count))
-                            .flat_map(found)
-                            .collect::<Vec<_>>()
-                    })
-                })
-                .collect();
-            jobs.into_iter()
-                .map(|j| j.join().expect("a border finding thread panicked"))
-                .collect()
+        let shared = par_map(count, threads, &|k| {
+            if cancel.load(Ordering::Relaxed) {
+                return Vec::new();
+            }
+            places(corners(k).into_iter())
         });
-        Borders::new(parts)
+        let mut borders = Borders::new(shared);
+        borders.pin_t_junctions(count, &corners, threads, cancel);
+        borders
+    }
+
+    /// Pins the T-junctions between chunks (see the module doc): `corners(k)` gives the
+    /// triangle corners of chunk `k` of `count`, three to a triangle. Gives up, leaving the
+    /// pins found so far, when `cancel` is set or the work passes a bound.
+    pub fn pin_t_junctions(
+        &mut self,
+        count: usize,
+        corners: &(dyn Fn(usize) -> Vec<[f32; 3]> + Sync),
+        threads: usize,
+        cancel: &AtomicBool,
+    ) {
+        for p in t_junctions(count, corners, threads, cancel, WORK_LIMIT) {
+            self.places.insert(p, ());
+        }
     }
 
     /// True when vertices of more than one chunk lie at `p`.
     fn contains(&self, p: [f32; 3]) -> bool {
         !self.places.is_empty() && self.places.contains_key(&bits(p))
     }
+}
+
+/// `f(0)` to `f(count - 1)`, in order, computed on `threads` threads.
+fn par_map<T: Send>(count: usize, threads: usize, f: &(dyn Fn(usize) -> T + Sync)) -> Vec<T> {
+    if threads < 2 || count < 16 {
+        return (0..count).map(f).collect();
+    }
+    let per = count.div_ceil(threads);
+    std::thread::scope(|s| {
+        let jobs: Vec<_> = (0..count)
+            .step_by(per)
+            .map(|from| s.spawn(move || (from..(from + per).min(count)).map(f).collect::<Vec<_>>()))
+            .collect();
+        jobs.into_iter()
+            .flat_map(|j| j.join().expect("a border finding thread panicked"))
+            .collect()
+    })
+}
+
+/// A straight edge, its two ends.
+pub type Seg = [[f32; 3]; 2];
+
+/// How far from an edge a vertex may be and still count as on it, in meters. Positions are
+/// f32, so this stops working a few km from the origin (a step of the last bit is then
+/// 0.5 mm and more): vertices there are not found on edges.
+const ON_EDGE: f64 = 5e-4;
+
+/// The smallest cell of the grids T-junctions are looked up in, in meters, and how many
+/// grids there are (each cell four times the one before: the last is about 17 km). An edge is
+/// looked up in the finest grid whose cell is at least its size plus the tolerance on both
+/// sides, so a few cells hold it, and the points in them are about as dense as the edges.
+const FINEST: f32 = 1e-3;
+const LEVELS: usize = 13;
+
+/// The most points tested against edges before the search is given up.
+const WORK_LIMIT: u64 = 400_000_000;
+
+/// How many tests are made between looks at the bound and at `cancel`.
+const CHECK_EVERY: u64 = 65_536;
+
+/// The grid for an edge with a box of `extent` m at most: `LEVELS` for one too long for any.
+fn level_of(extent: f32) -> usize {
+    let need = extent + 2.0 * ON_EDGE as f32;
+    let mut cell = FINEST;
+    for level in 0..LEVELS {
+        if cell >= need {
+            return level;
+        }
+        cell *= 4.0;
+    }
+    LEVELS
+}
+
+fn cell_size(level: usize) -> f32 {
+    FINEST * 4f32.powi(level as i32)
+}
+
+fn cell_at(p: f32, size: f32) -> i32 {
+    (p / size).floor() as i32
+}
+
+/// The edges of the triangles whose corners are `corners` that only one triangle uses (by
+/// position): where a chunk's surface ends, or the other side is in another chunk.
+pub fn open_edges(corners: &[[f32; 3]]) -> Vec<Seg> {
+    let mut all: Vec<([u32; 3], [u32; 3])> = Vec::with_capacity(corners.len());
+    for t in corners.as_chunks::<3>().0 {
+        for i in 0..3 {
+            let (a, b) = (bits(t[i]), bits(t[(i + 1) % 3]));
+            if a != b {
+                all.push(if a < b { (a, b) } else { (b, a) });
+            }
+        }
+    }
+    all.sort_unstable();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < all.len() {
+        let mut j = i + 1;
+        while j < all.len() && all[j] == all[i] {
+            j += 1;
+        }
+        if j == i + 1 {
+            let unbits = |b: [u32; 3]| b.map(f32::from_bits);
+            out.push([unbits(all[i].0), unbits(all[i].1)]);
+        }
+        i = j;
+    }
+    out
+}
+
+/// What a chunk contributes to the search: the ends of its open edges (each once), and the
+/// grids its edges would be looked up in.
+fn ends_and_levels(corners: &[[f32; 3]]) -> (Vec<[f32; 3]>, u32) {
+    let mut ends: Vec<[f32; 3]> = open_edges(corners).into_iter().flatten().collect();
+    ends.sort_unstable_by_key(|p| bits(*p));
+    ends.dedup_by_key(|p| bits(*p));
+    let mut levels = 0u32;
+    for t in corners.as_chunks::<3>().0 {
+        for i in 0..3 {
+            let (a, b) = (t[i], t[(i + 1) % 3]);
+            let extent = (0..3).map(|k| (a[k] - b[k]).abs()).fold(0.0f32, f32::max);
+            levels |= 1 << level_of(extent);
+        }
+    }
+    (ends, levels)
+}
+
+/// The places to pin so that chunks stay together where a vertex of one lies on an edge of
+/// another: such a vertex ends an open edge of its chunk (the surface goes on in the other
+/// chunk), and the edge it lies on is any edge of the other chunk (it may be used by two
+/// triangles there, a wall standing on a seam). Pinned are the vertex and that edge's ends.
+fn t_junctions(
+    count: usize,
+    corners: &(dyn Fn(usize) -> Vec<[f32; 3]> + Sync),
+    threads: usize,
+    cancel: &AtomicBool,
+    limit: u64,
+) -> Vec<[u32; 3]> {
+    let found = par_map(count, threads, &|k| {
+        if cancel.load(Ordering::Relaxed) {
+            (Vec::new(), 0)
+        } else {
+            ends_and_levels(&corners(k))
+        }
+    });
+    let mut levels = 0u32;
+    let mut points: Vec<(u32, [f32; 3])> = Vec::new();
+    for (k, (ends, l)) in found.into_iter().enumerate() {
+        levels |= l;
+        points.extend(ends.into_iter().map(|p| (k as u32, p)));
+    }
+    if points.is_empty() || cancel.load(Ordering::Relaxed) {
+        return Vec::new();
+    }
+    // Every point in each grid some edge is looked up in.
+    let mut grids: Vec<Map<[i32; 3], Vec<u32>>> = (0..LEVELS).map(|_| Map::default()).collect();
+    for (level, grid) in grids.iter_mut().enumerate() {
+        if levels & (1 << level) != 0 {
+            let size = cell_size(level);
+            for (n, (_, p)) in points.iter().enumerate() {
+                let key = [0, 1, 2].map(|i| cell_at(p[i], size));
+                grid.entry(key).or_default().push(n as u32);
+            }
+        }
+    }
+    let work = AtomicU64::new(0);
+    let pins = par_map(count, threads, &|k| {
+        let mut pins = Vec::new();
+        if work.load(Ordering::Relaxed) > limit || cancel.load(Ordering::Relaxed) {
+            return pins;
+        }
+        let corners = corners(k);
+        let tested = std::cell::Cell::new(0u64);
+        let stop = std::cell::Cell::new(false);
+        // Adds the tests since the last call to the total; true when the bound or cancel
+        // says to stop.
+        let flush = || {
+            let done = tested.replace(0);
+            if work.fetch_add(done, Ordering::Relaxed) + done > limit
+                || cancel.load(Ordering::Relaxed)
+            {
+                stop.set(true);
+            }
+            stop.get()
+        };
+        let test = |n: u32, a: [f32; 3], b: [f32; 3], pins: &mut Vec<[u32; 3]>| {
+            if stop.get() {
+                return;
+            }
+            let (c, p) = points[n as usize];
+            tested.set(tested.get() + 1);
+            if tested.get() >= CHECK_EVERY && flush() {
+                return;
+            }
+            if c as usize != k && p != a && p != b && distance_to_segment(p, [a, b]) <= ON_EDGE {
+                pins.extend([bits(p), bits(a), bits(b)]);
+            }
+        };
+        for (i, t) in corners.as_chunks::<3>().0.iter().enumerate() {
+            if i % 4096 == 0 && flush() {
+                return pins;
+            }
+            for j in 0..3 {
+                let (a, b) = (t[j], t[(j + 1) % 3]);
+                if a == b {
+                    continue;
+                }
+                let extent = (0..3).map(|k| (a[k] - b[k]).abs()).fold(0.0f32, f32::max);
+                let level = level_of(extent);
+                if level == LEVELS {
+                    // Longer than any grid: every point is looked at.
+                    for n in 0..points.len() as u32 {
+                        test(n, a, b, &mut pins);
+                        if stop.get() {
+                            return pins;
+                        }
+                    }
+                    continue;
+                }
+                let size = cell_size(level);
+                let reach = ON_EDGE as f32;
+                let lo = [0, 1, 2].map(|i| cell_at(a[i].min(b[i]) - reach, size));
+                let hi = [0, 1, 2].map(|i| cell_at(a[i].max(b[i]) + reach, size));
+                for x in lo[0]..=hi[0] {
+                    for y in lo[1]..=hi[1] {
+                        for z in lo[2]..=hi[2] {
+                            if let Some(list) = grids[level].get(&[x, y, z]) {
+                                for &n in list {
+                                    test(n, a, b, &mut pins);
+                                }
+                                if stop.get() {
+                                    return pins;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        flush();
+        pins
+    });
+    if work.load(Ordering::Relaxed) > limit {
+        eprintln!("lod: T-junction search given up after {limit} tests (dense geometry)");
+    }
+    pins.into_iter().flatten().collect()
+}
+
+/// How far `p` is from the segment `e`.
+fn distance_to_segment(p: [f32; 3], e: Seg) -> f64 {
+    let d = |v: [f32; 3]| glam::DVec3::new(f64::from(v[0]), f64::from(v[1]), f64::from(v[2]));
+    let (a, b, p) = (d(e[0]), d(e[1]), d(p));
+    let ab = b - a;
+    let len2 = ab.length_squared();
+    let t = if len2 > 0.0 {
+        ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (p - (a + ab * t)).length()
 }
 
 /// The places `positions` are at, each once, sorted.
@@ -920,6 +1168,198 @@ mod tests {
         let l = cluster(&left, 2.0);
         let r = cluster(&right, 8.0);
         assert_ne!(edges_on(&l, 20.0), edges_on(&r, 20.0));
+    }
+
+    /// A sheet of `nx` x `ny` squares of `step` m from `x0`, flat (z = 0) along x = 20.
+    fn flat_edged_sheet(x0: f32, nx: usize, ny: usize, step: f32) -> Vec<BaseFaceVertex> {
+        let z = |x: f32, y: f32| 0.9 * (1.3 * (x - 20.0)).sin() * (y * 0.7).cos();
+        let mut out = Vec::new();
+        for i in 0..nx {
+            for j in 0..ny {
+                let (x, y) = (x0 + i as f32 * step, j as f32 * step);
+                let c = |x: f32, y: f32| corner([x, y, z(x, y)], [0.8, 0.8, 0.8]);
+                let (a, b, d, e) = (
+                    c(x, y),
+                    c(x + step, y),
+                    c(x + step, y + step),
+                    c(x, y + step),
+                );
+                out.extend([a, b, d, a, d, e]);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_vertex_in_the_middle_of_a_neighbours_edge_stays_on_it_at_every_level() {
+        // The left sheet's border along x = 20 has a vertex every half meter, the right
+        // sheet's a vertex every meter: half of the left's lie inside the right's edges.
+        let (left, right) = (
+            flat_edged_sheet(0.0, 40, 40, 0.5),
+            flat_edged_sheet(20.0, 20, 20, 1.0),
+        );
+        let (shared_left, shared_right) = (edges_on(&left, 20.0), edges_on(&right, 20.0));
+        assert_eq!((shared_left.len(), shared_right.len()), (40, 20));
+        let at = |t: &[BaseFaceVertex]| places(t.iter().map(|v| v.pos));
+        let corners = |t: &[BaseFaceVertex]| t.iter().map(|v| v.pos).collect::<Vec<_>>();
+        let mut borders = Borders::new([at(&left), at(&right)]);
+        // With only the exactly shared places pinned, the half-meter vertices drift off.
+        {
+            let pinned = |v: &BaseFaceVertex| borders.contains(v.pos);
+            let l = cluster_pinned(&left, 8.0, &pinned);
+            assert_ne!(edges_on(&l, 20.0), shared_left);
+        }
+        let both = [corners(&left), corners(&right)];
+        borders.pin_t_junctions(2, &|k| both[k].clone(), 1, &AtomicBool::new(false));
+        let pinned = |v: &BaseFaceVertex| borders.contains(v.pos);
+        for (a, b) in [(2.0, 8.0), (8.0, 2.0), (4.0, 4.0)] {
+            let l = cluster_pinned(&left, a, &pinned);
+            let r = cluster_pinned(&right, b, &pinned);
+            assert!(l.len() * 2 < left.len() && r.len() < right.len());
+            // Every piece of both borders is still there, so the left's pieces end where they
+            // did, on the right's edges.
+            assert_eq!(edges_on(&l, 20.0), shared_left, "left at {a}, right at {b}");
+            assert_eq!(
+                edges_on(&r, 20.0),
+                shared_right,
+                "left at {a}, right at {b}"
+            );
+        }
+    }
+
+    fn pins_of(chunks: &[Vec<[f32; 3]>]) -> Vec<[u32; 3]> {
+        t_junctions(
+            chunks.len(),
+            &|k| chunks[k].clone(),
+            2,
+            &AtomicBool::new(false),
+            WORK_LIMIT,
+        )
+    }
+
+    #[test]
+    fn a_vertex_on_an_edge_used_by_two_triangles_of_the_other_chunk_is_pinned() {
+        // Chunk A: a floor with its edge on x = 20, and a wall standing on that edge, so the
+        // edge has two triangles. Chunk B continues the floor, with vertices at y = 1, 2.5.
+        let a = vec![
+            [10.0, 0.0, 0.0],
+            [20.0, 0.0, 0.0],
+            [20.0, 5.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [20.0, 5.0, 0.0],
+            [10.0, 5.0, 0.0],
+            [20.0, 0.0, 0.0],
+            [20.0, 0.0, 3.0],
+            [20.0, 5.0, 3.0],
+            [20.0, 0.0, 0.0],
+            [20.0, 5.0, 3.0],
+            [20.0, 5.0, 0.0],
+        ];
+        let b = vec![
+            [20.0, 0.0, 0.0],
+            [30.0, 0.0, 0.0],
+            [20.0, 1.0, 0.0],
+            [20.0, 1.0, 0.0],
+            [30.0, 0.0, 0.0],
+            [20.0, 2.5, 0.0],
+            [20.0, 2.5, 0.0],
+            [30.0, 0.0, 0.0],
+            [20.0, 5.0, 0.0],
+        ];
+        let pins = pins_of(&[a, b]);
+        for y in [1.0, 2.5] {
+            assert!(pins.contains(&bits([20.0, y, 0.0])), "y = {y}");
+        }
+        // And the ends of the wall's edge the vertices lie on.
+        for p in [[20.0, 0.0, 0.0], [20.0, 5.0, 0.0]] {
+            assert!(pins.contains(&bits(p)), "{p:?}");
+        }
+    }
+
+    /// Two chunks of `n` single-sided triangles of 1 mm packed in a cube of 5 mm.
+    fn dense(n: usize) -> [Vec<[f32; 3]>; 2] {
+        let mut seed = 12345u64;
+        let mut next = || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 40) as f32 / (1u64 << 24) as f32 * 0.005
+        };
+        let mut chunk = || {
+            let mut out = Vec::new();
+            for _ in 0..n {
+                let c = [next(), next(), next()];
+                for d in [[0.0, 0.0, 0.0], [0.001, 0.0, 0.0], [0.0, 0.001, 0.0]] {
+                    out.push([c[0] + d[0], c[1] + d[1], c[2] + d[2]]);
+                }
+            }
+            out
+        };
+        [chunk(), chunk()]
+    }
+
+    #[test]
+    fn dense_geometry_hits_the_bound_and_returns_a_safe_partial_result() {
+        // Every edge is near every point: without a bound this is 20,000 x 3 x 40,000 tests.
+        let chunks = dense(20_000);
+        let all: BTreeSet<[u32; 3]> = chunks.iter().flatten().map(|p| bits(*p)).collect();
+        let started = std::time::Instant::now();
+        let pins = t_junctions(
+            2,
+            &|k| chunks[k].clone(),
+            1,
+            &AtomicBool::new(false),
+            3_000_000,
+        );
+        assert!(started.elapsed().as_secs() < 10, "{:?}", started.elapsed());
+        // What it found is positions of the input.
+        assert!(pins.iter().all(|p| all.contains(p)));
+    }
+
+    #[test]
+    fn a_cancel_set_mid_search_ends_it_within_an_edge() {
+        let chunks = dense(20_000);
+        let cancel = AtomicBool::new(false);
+        let started = std::time::Instant::now();
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                cancel.store(true, Ordering::Relaxed);
+            });
+            // The bound is out of reach, so only the cancel can end it.
+            let _ = t_junctions(2, &|k| chunks[k].clone(), 1, &cancel, u64::MAX);
+        });
+        assert!(started.elapsed().as_secs() < 10, "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_cancel_set_before_the_search_finds_nothing() {
+        let a = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let b = vec![[0.5, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 2.0, 0.0]];
+        let cancel = AtomicBool::new(true);
+        let pins = t_junctions(
+            2,
+            &|k| [a.clone(), b.clone()][k].clone(),
+            1,
+            &cancel,
+            WORK_LIMIT,
+        );
+        assert!(pins.is_empty());
+    }
+
+    #[test]
+    fn a_vertex_on_an_edge_longer_than_the_largest_grid_is_pinned() {
+        // A 100 km edge (beyond the 17 km cells) with another chunk's open end in its middle.
+        let a = vec![[0.0, 0.0, 0.0], [100_000.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let b = vec![
+            [50_000.0, 0.0, 0.0],
+            [50_000.0, 5.0, 0.0],
+            [50_001.0, 5.0, 0.0],
+        ];
+        let pins = pins_of(&[a, b]);
+        for p in [[50_000.0, 0.0, 0.0], [0.0, 0.0, 0.0], [100_000.0, 0.0, 0.0]] {
+            assert!(pins.contains(&bits(p)), "{p:?}");
+        }
     }
 
     #[test]
