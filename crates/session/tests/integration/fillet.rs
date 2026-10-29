@@ -350,3 +350,56 @@ fn a_batch_names_the_instance_and_edges_by_reference() {
     let sharp = 1.0 - quarter_loss(r, 2) * 4.0 * (3.0 - 6.0 * r);
     assert!(v < sharp && v > sharp - 8.0 * r.powi(3), "{v}");
 }
+
+#[test]
+fn per_edge_radii_round_each_edge_by_its_own_radius() {
+    let mut d = doc();
+    let b = add_box(&mut d, [2.0, 3.0, 4.0], "group");
+    let m = mesh(&d, &b).clone();
+    let front = edge(&m, TOP_FRONT.0, TOP_FRONT.1);
+    let back = edge(&m, [0.0, 3.0, 4.0], [2.0, 3.0, 4.0]);
+    run(
+        &mut d,
+        json!({"type": "fillet_edges", "instance": b, "edges": [front, back],
+               "radius": 0.1, "radii": [0.5, 0.25]}),
+    );
+    let loss = quarter_loss(0.5, 8) * 2.0 + quarter_loss(0.25, 8) * 2.0;
+    assert!((volume(&d, &b) - (24.0 - loss)).abs() < 1e-9);
+    d.scene().validate().unwrap();
+    // One radius per edge, each more than the minimum.
+    for radii in [json!([0.5]), json!([0.5, 0.0])] {
+        let before = volume(&d, &b);
+        let e = edge(mesh(&d, &b), [0.0, 0.0, 0.0], [2.0, 0.0, 0.0]);
+        let f = edge(mesh(&d, &b), [0.0, 0.0, 0.0], [0.0, 3.0, 0.0]);
+        let err = try_run(
+            &mut d,
+            json!({"type": "fillet_edges", "instance": b, "edges": [e, f],
+                   "radius": 0.1, "radii": radii}),
+        )
+        .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::InvalidInput, "{err:?}");
+        assert_eq!(volume(&d, &b), before);
+    }
+}
+
+#[test]
+fn per_edge_distances_chamfer_each_edge_by_its_own_distance() {
+    let mut d = doc();
+    let b = add_box(&mut d, [2.0, 3.0, 4.0], "group");
+    let m = mesh(&d, &b).clone();
+    let edges = [
+        edge(&m, [0.0, 0.0, 4.0], [2.0, 0.0, 4.0]),
+        edge(&m, [0.0, 0.0, 4.0], [0.0, 3.0, 4.0]),
+        edge(&m, [0.0, 0.0, 0.0], [0.0, 0.0, 4.0]),
+    ];
+    run(
+        &mut d,
+        json!({"type": "chamfer_edges", "instance": b, "edges": edges,
+               "distance": 0.1, "distances": [0.3, 0.5, 0.4]}),
+    );
+    let m = mesh(&d, &b);
+    // The three chamfers close with a flat triangle.
+    assert!(m.faces().any(|(_, f)| f.outer.len() == 3));
+    assert!(volume(&d, &b) < 24.0 - 0.3 * 0.3 / 2.0);
+    d.scene().validate().unwrap();
+}

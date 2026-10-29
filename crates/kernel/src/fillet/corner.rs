@@ -53,9 +53,9 @@ pub(super) fn patches(m: &Model, cuts: &[(EdgeId, EdgeCut)], profile: Profile) -
         .filter_map(|((v, concave), list)| {
             let three = [list[0], list[1], list[2]].map(|i| &cuts[i]);
             match profile {
-                Profile::Fillet { .. } => patch(m, v, three, profile, concave),
+                Profile::Fillet { .. } => patch(m, v, three, concave),
                 // Three concave chamfers meet in a point of their own: a cone of empty space.
-                Profile::Chamfer { distance } if !concave => flat(m, v, three, distance),
+                Profile::Chamfer { .. } if !concave => flat(m, v, three),
                 Profile::Chamfer { .. } => None,
             }
         })
@@ -86,12 +86,19 @@ fn patch(
     m: &Model,
     v: VertexId,
     cuts: [&(EdgeId, EdgeCut); 3],
-    profile: Profile,
     concave: bool,
 ) -> Option<Patch> {
-    let Profile::Fillet { radius, .. } = profile else {
+    let Profile::Fillet { radius, .. } = cuts[0].1.profile else {
         return None;
     };
+    // One ball touches the three faces only when the three rounds have one radius: with
+    // different radii the crossed rounds stay.
+    if cuts
+        .iter()
+        .any(|(_, c)| (c.profile.size() - radius).abs() > 1e-9 * radius)
+    {
+        return None;
+    }
     let faces: Vec<FaceId> = m.faces_at(v).collect();
     if faces.len() != 3 || m.edges_at(v).len() != 3 {
         return None;
@@ -129,7 +136,7 @@ fn patch(
             .map(|(e, c)| (*e, c))?;
         let along = if cut.va == v { cut.u } else { -cut.u };
         let foot = cut.a + cut.u * (centre - cut.a).dot(cut.u);
-        let mut points: Vec<DVec3> = profile.profile(cut).into_iter().map(|o| foot + o).collect();
+        let mut points: Vec<DVec3> = cut.profile.profile(cut).into_iter().map(|o| foot + o).collect();
         if cut.f1 != faces[k1] {
             points.reverse();
         }
@@ -163,7 +170,8 @@ fn patch(
 
 /// The flat closure of three chamfers of `distance` at `v`, or None when the corner is not a
 /// plain trihedral one.
-fn flat(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3], distance: f64) -> Option<Patch> {
+fn flat(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<Patch> {
+    let distance = cuts.iter().map(|(_, c)| c.setback).fold(0.0, f64::max);
     let faces: Vec<FaceId> = m.faces_at(v).collect();
     if faces.len() != 3 || m.edges_at(v).len() != 3 {
         return None;
@@ -190,7 +198,8 @@ fn flat(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3], distance: f64) ->
         if ca.abs() < 1e-3 || cb.abs() < 1e-3 {
             return None;
         }
-        let (s, t) = (distance / ca, distance / cb);
+        // Along edge a the strip of b reaches b's distance, and along b that of a.
+        let (s, t) = (b.setback / ca, a.setback / cb);
         if s <= 0.0 || t <= 0.0 {
             return None;
         }

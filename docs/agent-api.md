@@ -716,6 +716,17 @@ at an end (the inside corner of an L with the edges around it chamfered too) sta
 from that end. The new face takes the front and back materials of the first face beside the edge
 (the outer and inner sides).
 
+Where exactly three chosen convex edges meet at a vertex with exactly three faces (a box's
+corner, a prism's, a sheared box's), the corner closes with a flat triangle instead of the three
+chamfer planes meeting in a point: the plane through the three points where the chamfer strips of
+each face meet cuts the tip off, and its corners are those points (a box corner with distance d:
+`d` in from two faces and on the third). Three concave chamfers meeting at an inside corner keep
+the three planes meeting in a point (a cone of empty space), as do corners of one or two chosen
+edges and non-trihedral vertices. `distances`, when given, is a list with one distance per entry
+of `edges` (same order, each more than 0.000001 m) in place of `distance`, which stays required
+and is the default for the schema; the triangle's corners then follow each edge's own strip
+width. A list of another length is `invalid_input`.
+
 The geometry chamfered (the open context's faces, nested groups and components aside, or the
 instance's definition, which must have no nested ones) must be a solid (see the `solid` query);
 otherwise `invalid_input` ("the open context is not a solid: edge e12 bounds 1 face", "i4 is not a
@@ -770,9 +781,20 @@ toward the middle, and the middle point sinks into the ball when a coarse round,
 segments, would cut it). A corner whose edges are too short to hold both patches, whose faces or edges are not just those three,
 or whose patch the boolean cannot cut, keeps the crossed rounds (the three cylinders intersect in
 a sharp pinch); so do corners with one or two chosen edges. A chamfer corner (`chamfer_edges`)
-closes with the three chamfers meeting in a point. One call has one profile: unequal radii or a
-mix of chamfers and rounds at a corner come from separate calls, which stay closed solids (the
-second call's edges run into the first's rounds without a patch). The flat faces
+closes with a flat triangle (see above). Where exactly three chosen concave edges (an inside
+corner, such as a notch cut from a cube's corner) meet at a vertex of three faces and have one
+radius, the corner is a concave sphere piece: the same patch built as a filler, a ball of
+`radius` in the empty corner tangent to the three faces. A corner of concave and convex rounds
+(an L's inside corner where the cove meets the rounded edges beside it) keeps the crossed cuts:
+a closed solid, but no patch. `radii`, when given, is a list with one radius per entry of
+`edges` (same order, each more than 0.000001 m) in place of `radius`: the rounds have their own
+radii, and a corner whose three rounds differ in radius has no common ball, so it keeps the
+crossed rounds (closed, with a pinch where the cylinders cross, no patch); a corner whose radii
+are all equal still gets its sphere. A mix of chamfers and rounds at a corner comes from
+separate calls, which stay closed solids (the second call's edges run into the first's rounds
+without a patch), and a second call whose edge ends at faces that are not flat and coplanar
+(beside an earlier round) is refused ("ends at v12, where the other faces do not lie in one
+plane"). The flat faces
 beside a round can still be bevelled later: round a box's four upright edges, then the loop
 around its top (the straight sides and the rounds' top edges) in a second command, with another
 radius if wanted, or chamfer an edge next to a round. Edges facing each other across a face whose

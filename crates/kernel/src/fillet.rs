@@ -51,15 +51,26 @@ pub enum Profile {
 
 impl Profile {
     /// The distance or radius.
-    fn size(self) -> f64 {
+    pub fn size(self) -> f64 {
         match self {
             Profile::Chamfer { distance } => distance,
             Profile::Fillet { radius, .. } => radius,
         }
     }
 
+    /// The same shape with another distance or radius.
+    fn sized(self, size: f64) -> Profile {
+        match self {
+            Profile::Chamfer { .. } => Profile::Chamfer { distance: size },
+            Profile::Fillet { segments, .. } => Profile::Fillet {
+                radius: size,
+                segments,
+            },
+        }
+    }
+
     /// The parameter's name in messages.
-    fn noun(self) -> &'static str {
+    pub fn noun(self) -> &'static str {
         match self {
             Profile::Chamfer { .. } => "distance",
             Profile::Fillet { .. } => "radius",
@@ -178,10 +189,22 @@ impl Scene {
         edges: &[EdgeId],
         profile: Profile,
     ) -> Result<SceneChange, BevelError> {
+        let each: Vec<(EdgeId, f64)> = edges.iter().map(|e| (*e, profile.size())).collect();
+        self.bevel_edges_each(mesh, &each, profile)
+    }
+
+    /// As [`Scene::bevel_edges`], each edge with its own distance or radius, see
+    /// [`bevelled_each`].
+    pub fn bevel_edges_each(
+        &mut self,
+        mesh: MeshId,
+        edges: &[(EdgeId, f64)],
+        profile: Profile,
+    ) -> Result<SceneChange, BevelError> {
         let m = self
             .mesh(mesh)
             .ok_or_else(|| BevelError::NotSolid("it is missing".into()))?;
-        let result = bevelled(m, edges, profile)?;
+        let result = bevelled_each(m, edges, profile)?;
         Ok(self
             .edit(mesh, |m| {
                 replace_geometry(m, &result);
@@ -224,18 +247,34 @@ struct EdgeCut {
     /// How far the cut reaches into each face.
     setback: f64,
     ends: [End; 2],
+    /// The profile of this edge: the call's, with this edge's own distance or radius.
+    profile: Profile,
 }
 
 /// The solid `m` (its own vertices, edges and faces) with `edges` bevelled by `profile`: the
 /// cutters of convex edges subtracted and the fillers of concave edges added, all from the
 /// original faces. The result faces outward.
 pub fn bevelled(m: &Model, edges: &[EdgeId], profile: Profile) -> Result<Model, BevelError> {
-    let size = profile.size();
+    let sized: Vec<(EdgeId, f64)> = edges.iter().map(|e| (*e, profile.size())).collect();
+    bevelled_each(m, &sized, profile)
+}
+
+/// As [`bevelled`], with the distance or radius of each edge given (the profile's own size is
+/// not used). Rounds of different radii meeting at a vertex keep their crossed cuts there (no
+/// sphere patch), which is still a closed solid; chamfers at a trihedral corner close with a
+/// flat triangle whatever their distances.
+pub fn bevelled_each(
+    m: &Model,
+    edges: &[(EdgeId, f64)],
+    profile: Profile,
+) -> Result<Model, BevelError> {
     let noun = profile.noun();
-    if !(size.is_finite() && size > MIN_SIZE) {
-        return Err(BevelError::Invalid(format!(
-            "{noun} must be more than {MIN_SIZE} m"
-        )));
+    for (_, size) in edges {
+        if !(size.is_finite() && *size > MIN_SIZE) {
+            return Err(BevelError::Invalid(format!(
+                "{noun} must be more than {MIN_SIZE} m"
+            )));
+        }
     }
     if let Profile::Fillet { segments, .. } = profile
         && !(1..=MAX_SEGMENTS).contains(&segments)
@@ -257,12 +296,12 @@ pub fn bevelled(m: &Model, edges: &[EdgeId], profile: Profile) -> Result<Model, 
         return Err(BevelError::NotSolid("it encloses no volume".into()));
     }
     let outward = volume.signum();
-    let edges: Vec<EdgeId> = edges
-        .iter()
-        .copied()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
+    // Each edge once; a repeated one keeps its first size.
+    let mut by_edge: BTreeMap<EdgeId, f64> = BTreeMap::new();
+    for (e, size) in edges {
+        by_edge.entry(*e).or_insert(*size);
+    }
+    let edges: Vec<EdgeId> = by_edge.keys().copied().collect();
     let mut cuts = Vec::new();
     // How many chosen convex edges end at each vertex, and the faces beside them.
     let mut convex_ends: HashMap<VertexId, usize> = HashMap::new();
@@ -274,7 +313,8 @@ pub fn bevelled(m: &Model, edges: &[EdgeId], profile: Profile) -> Result<Model, 
                 format!("e{} is not an edge of the solid", e.0),
             ));
         }
-        let cut = analyze(m, *e, outward, profile).map_err(|why| BevelError::Edge(*e, why))?;
+        let cut = analyze(m, *e, outward, profile.sized(by_edge[e]))
+            .map_err(|why| BevelError::Edge(*e, why))?;
         if cut.convex {
             for v in [cut.va, cut.vb] {
                 *convex_ends.entry(v).or_default() += 1;
@@ -302,15 +342,16 @@ pub fn bevelled(m: &Model, edges: &[EdgeId], profile: Profile) -> Result<Model, 
         close_ends(m, &mut cut, e, outward, &at).map_err(|why| BevelError::Edge(e, why))?;
         let too_large = || BevelError::Edge(e, format!("{noun} too large for edge e{}", e.0));
         closed_cuts.push((e, cut.clone()));
-        let sides = profile.profile(&cut).len() - 1;
-        let tool = prism(&cut, &profile.section(&cut), 0..sides).ok_or_else(too_large)?;
-        if let Profile::Fillet { .. } = profile {
-            rounds.push(Round::of(&cut, &tool, &profile.profile(&cut)));
+        let own = cut.profile;
+        let sides = own.profile(&cut).len() - 1;
+        let tool = prism(&cut, &own.section(&cut), 0..sides).ok_or_else(too_large)?;
+        if let Profile::Fillet { .. } = own {
+            rounds.push(Round::of(&cut, &tool, &own.profile(&cut)));
         }
         if cut.convex {
             cutters.push(tool);
         } else {
-            cores.push(prism(&cut, &profile.core(&cut), 0..0).ok_or_else(too_large)?);
+            cores.push(prism(&cut, &own.core(&cut), 0..0).ok_or_else(too_large)?);
             fillers.push(tool);
         }
     }
@@ -521,6 +562,7 @@ fn analyze(m: &Model, id: EdgeId, outward: f64, profile: Profile) -> Result<Edge
         convex,
         setback: size,
         ends: [End::Extend(reach); 2],
+        profile,
     })
 }
 
@@ -2105,6 +2147,43 @@ mod tests {
             closed(&out);
             assert!(signed_volume(&out) < signed_volume(&notch));
         }
+    }
+
+    #[test]
+    fn edges_of_different_sizes_in_one_call_stay_closed() {
+        let m = cuboid([2.0, 3.0, 4.0]);
+        let edges = [
+            edge_at(&m, [0.0, 0.0, 4.0], [2.0, 0.0, 4.0]),
+            edge_at(&m, [0.0, 0.0, 4.0], [0.0, 3.0, 4.0]),
+            edge_at(&m, [0.0, 0.0, 0.0], [0.0, 0.0, 4.0]),
+        ];
+        // Chamfers of 0.3, 0.5 and 0.4: the triangle's corners are where the strips of each face
+        // meet (the x edge's strip 0.3 wide, the y edge's 0.5, the z edge's 0.4).
+        let sized: Vec<(EdgeId, f64)> = edges.iter().copied().zip([0.3, 0.5, 0.4]).collect();
+        let r = bevelled_each(&m, &sized, chamfer(0.1)).unwrap();
+        closed(&r);
+        for p in [[0.5, 0.3, 4.0], [0.4, 0.0, 3.7], [0.0, 0.4, 3.5]] {
+            assert!(has_vertex(&r, p), "{p:?}");
+        }
+        assert!(r.faces().any(|(_, f)| f.outer.len() == 3));
+        // Rounds of 0.3, 0.3 and 0.5 have no common ball: crossed rounds, closed, no patch.
+        let sized: Vec<(EdgeId, f64)> = edges.iter().copied().zip([0.3, 0.3, 0.5]).collect();
+        let r = bevelled_each(&m, &sized, fillet(0.1)).unwrap();
+        closed(&r);
+        assert!(on_ball(&r, DVec3::new(0.3, 0.3, 3.7), 0.3).len() < 45);
+        assert!(signed_volume(&r) < signed_volume(&m));
+        // The edges along each round are still soft.
+        assert!(r.edges().filter(|(_, e)| e.soft).count() >= 3 * 9);
+        // Equal sizes given per edge are the same as one size: the sphere patch is made.
+        let same: Vec<(EdgeId, f64)> = edges.iter().map(|e| (*e, 0.4)).collect();
+        let r = bevelled_each(&m, &same, fillet(0.1)).unwrap();
+        closed(&r);
+        assert_eq!(on_ball(&r, DVec3::new(0.4, 0.4, 3.6), 0.4).len(), 45);
+        // A bad size is refused.
+        assert!(matches!(
+            bevelled_each(&m, &[(edges[0], 0.3), (edges[1], 0.0)], fillet(0.1)),
+            Err(BevelError::Invalid(_))
+        ));
     }
 
 }

@@ -159,17 +159,23 @@ class Instance:
             return [e["id"] for e in es]
         return [e["id"] for e in es if where(t.apply(e["start"]), t.apply(e["end"]))]
 
-    def fillet(self, edges, radius, segments=None):
-        """Round ``edges`` (ids from ``edges()``, or ``"$N:e*"``-style references in a batch)."""
+    def fillet(self, edges, radius, segments=None, radii=None):
+        """Round ``edges`` (ids from ``edges()``, or ``"$N:e*"``-style references in a batch).
+        ``radii`` optionally gives one radius per edge in place of ``radius``."""
         cmd = {"type": "fillet_edges", "instance": self.id, "edges": list(edges), "radius": radius}
         if segments is not None:
             cmd["segments"] = segments
+        if radii is not None:
+            cmd["radii"] = list(radii)
         self.model.client.execute(cmd)
         return self
 
-    def chamfer(self, edges, distance):
-        """Bevel ``edges`` by ``distance``."""
-        self.model.client.execute({"type": "chamfer_edges", "instance": self.id, "edges": list(edges), "distance": distance})
+    def chamfer(self, edges, distance, distances=None):
+        """Bevel ``edges`` by ``distance`` (or ``distances``, one per edge)."""
+        cmd = {"type": "chamfer_edges", "instance": self.id, "edges": list(edges), "distance": distance}
+        if distances is not None:
+            cmd["distances"] = list(distances)
+        self.model.client.execute(cmd)
         return self
 
     def section(self, point, normal):
