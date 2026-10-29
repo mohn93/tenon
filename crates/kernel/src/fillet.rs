@@ -1458,7 +1458,8 @@ mod tests {
         let patch: Vec<FaceId> = m.faces().filter(|(_, f)| on(f)).map(|(id, _)| id).collect();
         for id in &patch {
             let f = m.face(*id).unwrap();
-            let depth = (m.pos(f.outer[0]) - centre).dot(f.normal);
+            // Away from the centre for a convex corner, toward it for a concave one.
+            let depth = (m.pos(f.outer[0]) - centre).dot(f.normal).abs();
             assert!(r - depth < sag * r, "sag {} of r", (r - depth) / r);
             for i in 0..f.outer.len() {
                 let (a, b) = (f.outer[i], f.outer[(i + 1) % f.outer.len()]);
@@ -2043,4 +2044,67 @@ mod tests {
             }
         }
     }
+
+    /// A 3 m cube with the cube [1.5, 3]^3 cut from one corner: three concave edges meet at
+    /// (1.5, 1.5, 1.5).
+    fn notched() -> Model {
+        let a = cuboid([3.0, 3.0, 3.0]);
+        let b = placed_copy(
+            &cuboid([1.5, 1.5, 1.5]),
+            DAffine3::from_translation(DVec3::splat(1.5)),
+            None,
+        );
+        combine(&a, &b, BooleanOp::Subtract).unwrap().unwrap()
+    }
+
+    #[test]
+    fn three_concave_fillets_at_a_corner_get_a_concave_sphere() {
+        let (m, r) = (notched(), 0.3);
+        closed(&m);
+        let c = [1.5, 1.5, 1.5];
+        let edges = [
+            edge_at(&m, c, [3.0, 1.5, 1.5]),
+            edge_at(&m, c, [1.5, 3.0, 1.5]),
+            edge_at(&m, c, [1.5, 1.5, 3.0]),
+        ];
+        let out = bevelled(&m, &edges, fillet(r)).unwrap();
+        closed(&out);
+        // The ball sits in the empty corner, r from each of the three walls.
+        let centre = DVec3::splat(1.5 + r);
+        assert_eq!(on_ball(&out, centre, r).len(), 45);
+        assert_eq!(check_patch(&out, centre, r, 0.02), 64);
+        assert!(!has_vertex(&out, c));
+        // Three coves between the corner cube and the far ends; the cube keeps all but an
+        // octant of the ball (faceted a little less).
+        let octant = std::f64::consts::PI * r * r * r / 6.0;
+        let coves = quarter_loss(r, 8) * 3.0 * (1.5 - r);
+        let faceted = signed_volume(&m) + coves + (r * r * r - octant);
+        let v = signed_volume(&out);
+        assert!(v > faceted && v - faceted < octant * 0.03, "{v} {faceted}");
+    }
+
+    #[test]
+    fn mixed_concave_and_convex_corners_stay_closed() {
+        // Ruling: a corner of one or two concave fillets with convex ones keeps the crossed
+        // result (a closed solid, no patch); only three of a kind get a sphere.
+        let r = 0.1;
+        let l = l_shape();
+        let c = [1.0, 0.0, 1.0];
+        let corner = [
+            edge_at(&l, c, [1.0, 2.0, 1.0]),
+            edge_at(&l, c, [4.0, 0.0, 1.0]),
+            edge_at(&l, c, [1.0, 0.0, 3.0]),
+        ];
+        let notch = notched();
+        let all: Vec<EdgeId> = notch.edges().map(|(id, _)| id).collect();
+        for profile in [fillet(r), chamfer(r)] {
+            let out = bevelled(&l, &corner, profile).unwrap();
+            closed(&out);
+            local(&l, &out, &corner, r * 1.6);
+            let out = bevelled(&notch, &all, profile).unwrap();
+            closed(&out);
+            assert!(signed_volume(&out) < signed_volume(&notch));
+        }
+    }
+
 }

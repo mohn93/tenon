@@ -32,29 +32,31 @@ pub(super) struct Patch {
     /// For a chamfer corner, the corners of the flat triangle it makes (`centre` and `radius`
     /// are then unused).
     pub flat: Option<[DVec3; 3]>,
+    /// Three concave fillets meet here: the cutter is a filler, added instead of subtracted.
+    pub concave: bool,
 }
 
 /// The patches for the fillets `cuts` (already closed at their ends) of `m`.
 pub(super) fn patches(m: &Model, cuts: &[(EdgeId, EdgeCut)], profile: Profile) -> Vec<Patch> {
-    let mut at: BTreeMap<VertexId, Vec<usize>> = BTreeMap::new();
+    // Convex edges running on past the vertex; concave edges (which stop in the third face).
+    let mut at: BTreeMap<(VertexId, bool), Vec<usize>> = BTreeMap::new();
     for (i, (_, cut)) in cuts.iter().enumerate() {
-        if !cut.convex {
-            continue;
-        }
         for (k, v) in [cut.va, cut.vb].into_iter().enumerate() {
-            if matches!(cut.ends[k], End::Extend(_)) {
-                at.entry(v).or_default().push(i);
+            if !cut.convex || matches!(cut.ends[k], End::Extend(_)) {
+                at.entry((v, !cut.convex)).or_default().push(i);
             }
         }
     }
     let mut found: Vec<Patch> = at
         .into_iter()
         .filter(|(_, list)| list.len() == 3)
-        .filter_map(|(v, list)| {
+        .filter_map(|((v, concave), list)| {
             let three = [list[0], list[1], list[2]].map(|i| &cuts[i]);
             match profile {
-                Profile::Fillet { .. } => patch(m, v, three, profile),
-                Profile::Chamfer { distance } => flat(m, v, three, distance),
+                Profile::Fillet { .. } => patch(m, v, three, profile, concave),
+                // Three concave chamfers meet in a point of their own: a cone of empty space.
+                Profile::Chamfer { distance } if !concave => flat(m, v, three, distance),
+                Profile::Chamfer { .. } => None,
             }
         })
         .collect();
@@ -80,7 +82,13 @@ pub(super) fn patches(m: &Model, cuts: &[(EdgeId, EdgeCut)], profile: Profile) -
 }
 
 /// The patch at `v` for three fillet cuts, or None when the corner is not a plain trihedral one.
-fn patch(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3], profile: Profile) -> Option<Patch> {
+fn patch(
+    m: &Model,
+    v: VertexId,
+    cuts: [&(EdgeId, EdgeCut); 3],
+    profile: Profile,
+    concave: bool,
+) -> Option<Patch> {
     let Profile::Fillet { radius, .. } = profile else {
         return None;
     };
@@ -95,7 +103,10 @@ fn patch(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3], profile: Profile
             normal[faces.iter().position(|g| *g == f)?] = Some(n);
         }
     }
-    let n = [normal[0]?, normal[1]?, normal[2]?];
+    // Concave: the ball sits in the empty corner, on the other side of each face, so the faces'
+    // normals are turned to point from the centre to the tangent points.
+    let flip = if concave { -1.0 } else { 1.0 };
+    let n = [normal[0]?, normal[1]?, normal[2]?].map(|x| x * flip);
     let vertex = m.pos(v);
     let rows = DMat3::from_cols(n[0], n[1], n[2]).transpose();
     if rows.determinant().abs() < 1e-6 {
@@ -146,6 +157,7 @@ fn patch(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3], profile: Profile
         points,
         edges: [(ids[0], depth[0]), (ids[1], depth[1]), (ids[2], depth[2])],
         flat: None,
+        concave,
     })
 }
 
@@ -260,6 +272,7 @@ fn flat(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3], distance: f64) ->
             (cuts[2].0, reach_on(2)),
         ],
         flat: Some(meet),
+        concave: false,
     })
 }
 
@@ -625,18 +638,38 @@ fn slerp(a: DVec3, b: DVec3, t: f64) -> DVec3 {
     ((a * ((1.0 - t) * omega).sin() + b * (t * omega).sin()) / omega.sin()).normalize()
 }
 
-/// Subtracts the patches' cutters from `m`: all at once where they allow, else one at a time,
-/// leaving a corner crossed when its cutter fails. Gives the result and the patches that took.
+/// Subtracts the convex patches' cutters from `m` and adds the concave ones' fillers: all at
+/// once where they allow, else one at a time, leaving a corner crossed when its cutter fails.
+/// Gives the result and the patches that took.
 pub(super) fn apply(m: Model, patches: &[Patch]) -> (Model, Vec<usize>) {
-    if patches.is_empty() {
-        return (m, Vec::new());
+    let mut acc = m;
+    let mut done = Vec::new();
+    for (op, concave) in [(BooleanOp::Union, true), (BooleanOp::Subtract, false)] {
+        let some: Vec<usize> = (0..patches.len())
+            .filter(|i| patches[*i].concave == concave)
+            .collect();
+        if some.is_empty() {
+            continue;
+        }
+        let (next, took) = apply_all(acc, patches, &some, op);
+        acc = next;
+        done.extend(took);
     }
-    let all: Vec<usize> = (0..patches.len()).collect();
-    let tools: Vec<Model> = patches.iter().map(|p| p.cutter.clone()).collect();
+    done.sort();
+    (acc, done)
+}
+
+fn apply_all(
+    m: Model,
+    patches: &[Patch],
+    some: &[usize],
+    op: BooleanOp,
+) -> (Model, Vec<usize>) {
+    let tools: Vec<Model> = some.iter().map(|i| patches[*i].cutter.clone()).collect();
     let mut acc = m.clone();
     let mut ok = true;
     for tool in apart(tools) {
-        match combine(&acc, &tool, BooleanOp::Subtract) {
+        match combine(&acc, &tool, op) {
             Ok(Some(next)) => acc = next,
             _ => {
                 ok = false;
@@ -644,15 +677,15 @@ pub(super) fn apply(m: Model, patches: &[Patch]) -> (Model, Vec<usize>) {
             }
         }
     }
-    if ok && all.iter().all(|i| took(&acc, &patches[*i])) {
-        return (acc, all);
+    if ok && some.iter().all(|i| took(&acc, &patches[*i])) {
+        return (acc, some.to_vec());
     }
     let mut acc = m;
     let mut done = Vec::new();
-    for (i, p) in patches.iter().enumerate() {
-        let r = combine(&acc, &p.cutter, BooleanOp::Subtract);
+    for &i in some {
+        let r = combine(&acc, &patches[i].cutter, op);
         if let Ok(Some(next)) = r
-            && took(&next, p)
+            && took(&next, &patches[i])
         {
             acc = next;
             done.push(i);
