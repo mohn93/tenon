@@ -464,6 +464,10 @@ pub struct SceneBase {
     pub cut_fill: Vec<LineVertex>,
     /// The cuts' outlines as line pairs in the edge color, drawn wide.
     pub cut_edges: Vec<LineVertex>,
+    /// The active section planes that cut the model, in root coordinates, each once. Faces are
+    /// clipped to them; the fill and the outlines are made from the whole surface, so the
+    /// renderer keeps the chunks near a plane at full detail.
+    pub cut_planes: Vec<SectionPlane>,
     /// Where the open context's entities lie in the lists above.
     pub spans: Spans,
     /// A light for each placement of a mesh whose own faces glow, in root coordinates. They do
@@ -1455,7 +1459,11 @@ impl<'a> Walk<'a> {
         if display.cuts
             && let Some(plane) = model.active_section().and_then(|s| model.section(s))
         {
-            self.planes.push(plane.transformed(t));
+            let placed = plane.transformed(t);
+            if !self.base.cut_planes.contains(&placed) {
+                self.base.cut_planes.push(placed);
+            }
+            self.planes.push(placed);
             pushed_plane = true;
             own_plane = Some(*plane);
         }
@@ -2151,6 +2159,11 @@ impl<'a> Walk<'a> {
         base.sections.extend(o.sections);
         base.cut_fill.extend(o.cut_fill);
         base.cut_edges.extend(o.cut_edges);
+        for plane in o.cut_planes {
+            if !base.cut_planes.contains(&plane) {
+                base.cut_planes.push(plane);
+            }
+        }
         base.lights.extend(o.lights);
         base.casters.extend(o.casters);
         base.sun_casters.extend(o.sun_casters);

@@ -4,21 +4,41 @@
 use std::collections::BTreeSet;
 
 use glam::{DVec2, DVec3};
-use kernel::{EdgeStyle, EntityId, Model, Scene, StyleSettings};
+use kernel::{EdgeStyle, EntityId, Model, Scene, SectionPlane, StyleSettings};
 use render::{HoverLook, Renderer, Viewport};
-use session::Camera;
+use session::{Camera, SectionDisplay};
 
 use crate::headless::{H, Offscreen, W};
 
 /// Squares along a side of the plane, and how long a square is: a fine mesh of one flat color.
 const SIDE: usize = 30;
 const STEP: f64 = 1.0;
+/// The faces are made block by block, a block a chunk's piece (see `CHUNK`), so a chunk is a
+/// compact patch and not a strip.
+const BLOCK: usize = 15;
+/// Triangles to a chunk: two blocks.
+const CHUNK: usize = 900;
 
 /// A flat plane of `SIDE` x `SIDE` squares of `STEP` m, the faces' ids.
 fn plane() -> (Scene, Vec<EntityId>) {
+    plane_cut(None)
+}
+
+/// The same, with `cut` as its active section plane.
+fn plane_cut(cut: Option<SectionPlane>) -> (Scene, Vec<EntityId>) {
     let mut m = Model::new();
+    if let Some(cut) = cut {
+        m.add_section(cut, true).unwrap();
+    }
+    let mut order: Vec<(usize, usize)> = Vec::new();
     for i in 0..SIDE {
         for j in 0..SIDE {
+            order.push((i, j));
+        }
+    }
+    order.sort_by_key(|&(i, j)| (i / BLOCK, j / BLOCK, i, j));
+    {
+        for (i, j) in order {
             let (x, y) = (i as f64 * STEP, j as f64 * STEP);
             let p = |x: f64, y: f64| DVec3::new(x, y, 0.0);
             m.add_polygon(&[
@@ -50,7 +70,7 @@ fn style() -> StyleSettings {
 fn renderer(screen: &Offscreen, scene: &Scene, lod: bool) -> Renderer {
     let mut r = screen.renderer();
     // Small chunks, so a model this size has many.
-    r.set_culling_from(100);
+    r.set_culling_from(CHUNK);
     r.set_model_style(Some(&style()));
     r.set_lod(lod);
     r.set_scene(scene, &[], &BTreeSet::new());
@@ -197,7 +217,7 @@ fn an_idle_renderer_makes_the_copies_once_the_model_has_settled() {
     };
     let (scene, _) = plane();
     let mut r = screen.renderer();
-    r.set_culling_from(100);
+    r.set_culling_from(CHUNK);
     r.set_model_style(Some(&style()));
     r.set_lod(true);
     r.set_scene(&scene, &[], &BTreeSet::new());
@@ -237,7 +257,7 @@ fn a_level_over_the_buffer_limit_is_left_out() {
     assert!(all.len() > 1 && all.iter().all(|&b| b > 0), "{all:?}");
     let largest = *all.iter().max().unwrap();
     let mut r = screen.renderer();
-    r.set_culling_from(100);
+    r.set_culling_from(CHUNK);
     r.set_model_style(Some(&style()));
     r.set_lod(true);
     r.set_lod_buffer_limit(largest - 1);
@@ -292,4 +312,42 @@ fn the_pixel_limit_is_kept_finite_and_positive() {
     }
     r.set_lod_pixels(f32::NAN);
     assert_eq!(r.drawn_triangles(&cam).unwrap().0, drawn);
+}
+
+#[test]
+fn chunks_near_an_active_section_plane_stay_whole_in_a_far_view() {
+    let Some(screen) = Offscreen::new() else {
+        return;
+    };
+    // The plane through the middle keeps the half with x >= 15. The cut's fill and outline are
+    // made from the whole surface, so chunks within the largest cell (8 m) of it are not
+    // simplified.
+    let mid = SIDE as f64 * STEP / 2.0;
+    let cut = SectionPlane::new(DVec3::new(mid, 0.0, 0.0), DVec3::X);
+    let (scene, _) = plane_cut(Some(cut));
+    let cam = camera(FAR);
+    let on = renderer(&screen, &scene, true);
+    let (kept, all) = on.visible_triangles(&cam).unwrap();
+    let (drawn, _) = on.drawn_triangles(&cam).unwrap();
+    assert_eq!(
+        all,
+        (SIDE * SIDE) as u32,
+        "the plane keeps half the triangles"
+    );
+    assert_eq!(drawn, kept, "the chunks at the plane are drawn whole");
+    // With the cuts off the same far view is simplified all over (nothing to protect).
+    let mut r = screen.renderer();
+    r.set_culling_from(CHUNK);
+    r.set_model_style(Some(&style()));
+    r.set_lod(true);
+    r.set_section_display(SectionDisplay {
+        cuts: false,
+        ..SectionDisplay::default()
+    });
+    r.set_scene(&scene, &[], &BTreeSet::new());
+    r.wait_for_lod();
+    let (kept_off, _) = r.visible_triangles(&cam).unwrap();
+    let (drawn_off, _) = r.drawn_triangles(&cam).unwrap();
+    assert!(drawn_off * 3 < kept_off, "drew {drawn_off} of {kept_off}");
+    assert!(drawn > drawn_off);
 }
