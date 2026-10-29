@@ -101,7 +101,24 @@ sequence"); the C++ and TypeScript ports restart them per section.
     (`skp::geom::uv_axes`) uses 1e-9 and takes +X and -Y for a face looking down, so the
     two disagree on downward horizontal faces and on normals within 1e-3 of vertical; the
     round-trip tests pin faces both agree on.
-16. **Not ported:** tag folders, attribute dictionaries, curves (`CArcCurve`,
+16. **Scenes.** Not in openskp (its writer has no pages); the layout is read off SketchUp's
+    own 2017 file with twelve scenes (the corpus's `tutorial01_v2017.skp`): `Doc::pages` are
+    written as `CViewPage` records after the page manager's count (which they set), each: entity
+    preamble, name, empty description, capture flags `0x1ff` (less the camera bit for a scene
+    with no view), the camera (the `CCamera` body, with the scene's eye, target, up, 1 and
+    1000 inch near and far, a perspective byte, the field of view in degrees and the
+    parallel view's height), the scaffold's rendering-options block (209 bytes), a `CSkpStyle`
+    (a new object per page; the first declares the class), the scaffold's geographic block and
+    thumbnail size, eight zero bytes, the scaffold's three axes matrices, then `01`, a zero
+    word, the hidden-tag count and the tags' layer slots (`u16`), a zero word, `01`, two
+    -1.0 doubles, `00 00 01 01 01`, the thumbnail's length and a flat grey 256 by 125 PNG.
+    The page manager's current-scene pointer, a back-reference to the first page, follows
+    the last page, and the tail's own `CSkpStyle` declaration becomes a class reference to
+    the one the first page declared (as in SketchUp's files), which moves the tail's later
+    slots by one less. Compared byte for byte with a SketchUp-written page, only values
+    differ (colours, guids, ids, the model's own style and place); not yet opened in
+    SketchUp itself. A hidden tag whose layer slot is past 0x7fff is `TooLarge`.
+17. **Not ported:** tag folders, attribute dictionaries, curves (`CArcCurve`,
     `CCurve`), images, dimensions, text, section planes,
     component behaviours, opening and editing an existing file. Hidden edges, faces and
     instances are written (the `CDrawingElement` hidden byte, as edges already were; checked

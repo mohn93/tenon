@@ -2337,7 +2337,7 @@ fn opening_a_file_with_scenes_keeps_them() {
 }
 
 /// The tutorial's twelve scenes each show their own tags (a tag named "Scene 02" is shown
-/// only on the second scene); its 2017-2020 copies keep the warning. `SKP_CORPUS` must be an
+/// only on the second scene); its 2017-2020 copies give the same scenes. `SKP_CORPUS` must be an
 /// absolute path (the files are opened by path, not from the test's directory).
 #[test]
 #[ignore = "needs a local corpus in SKP_CORPUS (an absolute path)"]
@@ -2386,6 +2386,11 @@ fn corpus_tutorial_scenes() {
     assert_eq!(shown("Scene 7"), ["Scene 04-12", "Scene 07"]);
     assert_eq!(shown("Scene 12"), ["Scene 04-12"]);
 
+    let want: Vec<(String, Vec<String>)> = (1..=12)
+        .map(|n| (format!("Scene {n}"), shown(&format!("Scene {n}"))))
+        .collect();
+    let want_eye = scene_by_name(&d, "Scene 1")["view"]["eye"].clone();
+
     // Going to the second scene shows its tags.
     let id = scene_by_name(&d, "Scene 2")["id"].clone();
     run(&mut d, json!({"type": "go_to_scene", "scene": id})).unwrap();
@@ -2396,6 +2401,7 @@ fn corpus_tutorial_scenes() {
         .collect();
     assert_eq!(visible.len(), 2, "{visible:?}");
 
+    // The 2017-2020 copies give the same twelve scenes, each showing the same tags.
     for year in 2017..=2020 {
         let path = dir.join(format!("../legacy_out/tutorial01_v{year}.skp"));
         let mut d = doc();
@@ -2404,12 +2410,33 @@ fn corpus_tutorial_scenes() {
             json!({"type": "import", "path": path.to_str().unwrap()}),
         )
         .unwrap();
+        d.scene().validate().unwrap();
+        assert_eq!(r["import"]["scenes"], 12, "{year}: {}", r["import"]);
         assert!(
-            warnings(&r["import"]).contains(&"12 scenes were not imported".to_string()),
+            !warnings(&r["import"]).iter().any(|w| w.contains("scene")),
             "{year}: {}",
             r["import"]
         );
-        assert!(scene_list(&d).is_empty(), "{year}");
+        for (name, tags) in &want {
+            let s = scene_by_name(&d, name);
+            let hidden: Vec<Value> = s["hidden_tags"].as_array().unwrap().clone();
+            let mut shown: Vec<String> = tags_of(&d)
+                .iter()
+                .filter(|t| !hidden.contains(&t["id"]))
+                .map(|t| t["name"].as_str().unwrap().to_string())
+                .collect();
+            shown.sort();
+            assert_eq!(&shown, tags, "{year} {name}");
+        }
+        assert_near(
+            &scene_by_name(&d, "Scene 1")["view"]["eye"],
+            [
+                want_eye[0].as_f64().unwrap(),
+                want_eye[1].as_f64().unwrap(),
+                want_eye[2].as_f64().unwrap(),
+            ],
+            1e-6,
+        );
     }
 }
 

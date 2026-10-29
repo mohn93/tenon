@@ -8,10 +8,12 @@
 
 mod archive;
 mod doc;
+mod png;
 mod write;
 
 pub use doc::{
-    Definition, Doc, Edge, Face, Geometry, Guide, Instance, Material, Tag, Texture, UvPin,
+    Definition, Doc, Edge, Face, Geometry, Guide, Instance, Material, Page, PageView, Tag, Texture,
+    UvPin,
 };
 pub use write::{Owner, WriteError, write};
 

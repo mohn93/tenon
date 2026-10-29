@@ -2,7 +2,8 @@
 //! every definition the root reaches (each once, in its own coordinates), the materials,
 //! every tag (as layers), guides, holes, soft edges and texture placements.
 //! Meters become inches. What a SketchUp file cannot hold (glowing materials, curves as
-//! curves, empty groups) and what is not written (scenes) is reported.
+//! curves, empty groups) and what is not written (a scene's positions, joints and lighting or
+//! display modes) is reported. Scenes are written with their name, camera and hidden tags.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -37,6 +38,8 @@ pub(crate) struct SkpExportStats {
     pub materials: usize,
     /// Tags written (every tag of the model).
     pub tags: usize,
+    /// Scenes written.
+    pub scenes: usize,
     /// What the file could not hold.
     pub warnings: Vec<String>,
     /// Faces with a textured side whose placement could not be pinned, written with the
@@ -100,6 +103,7 @@ pub(crate) fn encode_skp(scene: &Scene) -> Result<(Vec<u8>, SkpExportStats), Com
         });
     }
 
+    let (pages, page_stats) = pages(scene, &tag_index);
     let ctx = Ctx {
         scene,
         materials: &material_index,
@@ -142,12 +146,14 @@ pub(crate) fn encode_skp(scene: &Scene) -> Result<(Vec<u8>, SkpExportStats), Com
     stats.definitions = definitions.len();
     stats.materials = materials.len();
     stats.tags = tags.len();
+    stats.scenes = pages.len();
 
     let doc = Doc {
         materials,
         tags,
         definitions,
         root,
+        pages,
     };
     let bytes = skpwrite::write(&doc).map_err(|e| {
         CommandError::new(
@@ -183,14 +189,86 @@ pub(crate) fn encode_skp(scene: &Scene) -> Result<(Vec<u8>, SkpExportStats), Com
         "empty groups or components were left out",
     );
     warn(
-        scene.pages().count(),
-        "scene was not written",
-        "scenes were not written",
+        page_stats.positions,
+        "scene's instance positions were not written; SketchUp files cannot store them",
+        "scenes' instance positions were not written; SketchUp files cannot store them",
+    );
+    warn(
+        page_stats.joints,
+        "scene's joint values were not written; SketchUp files cannot store them",
+        "scenes' joint values were not written; SketchUp files cannot store them",
+    );
+    warn(
+        page_stats.display,
+        "scene's lighting, shadow, style or display mode was not written",
+        "scenes' lighting, shadow, style or display modes were not written",
+    );
+    warn(
+        page_stats.no_tags,
+        "scene stores no tag visibility; it was written showing every tag",
+        "scenes store no tag visibility; they were written showing every tag",
     );
     stats
         .warnings
         .extend(crate::export::annotation_warnings(scene));
     Ok((bytes, stats))
+}
+
+/// What the scenes hold that the file cannot, counted in scenes.
+#[derive(Default)]
+struct PageStats {
+    positions: usize,
+    joints: usize,
+    display: usize,
+    no_tags: usize,
+}
+
+/// The model's scenes as the file's pages, in tab order: name, camera (meters become
+/// inches; a parallel view's height at the target is 2 d tan(fov / 2)) and hidden tags.
+fn pages(scene: &Scene, tag_index: &HashMap<TagId, usize>) -> (Vec<skpwrite::Page>, PageStats) {
+    let mut stats = PageStats::default();
+    let mut out = Vec::new();
+    for (_, p) in scene.pages() {
+        stats.positions += usize::from(p.positions.is_some());
+        stats.joints += usize::from(p.joints.is_some());
+        stats.no_tags += usize::from(p.tags.is_none());
+        let view = p.view.as_ref().map(|v| {
+            let eye = DVec3::from(v.eye);
+            let target = DVec3::from(v.target);
+            let height = 2.0 * eye.distance(target) * (v.fov_y / 2.0).tan();
+            if v.night
+                || v.studio
+                || v.color_by_tag
+                || v.x_ray
+                || v.hidden_geometry
+                || !v.shadows.is_default()
+                || v.style.is_some()
+            {
+                stats.display += 1;
+            }
+            skpwrite::PageView {
+                eye: inches(eye),
+                target: inches(target),
+                up: v.up,
+                fov_deg: v.fov_y.to_degrees(),
+                parallel: v.parallel,
+                height: height / METERS_PER_INCH,
+            }
+        });
+        let mut hidden_tags: Vec<usize> = p
+            .tags
+            .iter()
+            .flatten()
+            .filter_map(|t| tag_index.get(t).copied())
+            .collect();
+        hidden_tags.sort_unstable();
+        out.push(skpwrite::Page {
+            name: p.name.clone(),
+            view,
+            hidden_tags,
+        });
+    }
+    (out, stats)
 }
 
 /// The definitions placed from the root, at any depth, in id order.

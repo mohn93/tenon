@@ -11,6 +11,8 @@ pub struct Doc {
     pub tags: Vec<Tag>,
     pub definitions: Vec<Definition>,
     pub root: Geometry,
+    /// Scenes, in tab order.
+    pub pages: Vec<Page>,
 }
 
 /// A tag (a layer in the file): its name, colour and visibility.
@@ -146,4 +148,28 @@ impl Guide {
             Guide::Line { hidden, .. } | Guide::Point { hidden, .. } => hidden,
         }
     }
+}
+
+/// A scene (a SketchUp page): its name, the view it restores (if any) and the tags it hides.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Page {
+    pub name: String,
+    /// The camera the scene restores; `None` leaves the camera alone.
+    pub view: Option<PageView>,
+    /// Indices into `Doc::tags` of the tags the scene hides (every other tag is shown).
+    pub hidden_tags: Vec<usize>,
+}
+
+/// A scene's camera, in inches and degrees.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PageView {
+    pub eye: [f64; 3],
+    pub target: [f64; 3],
+    pub up: [f64; 3],
+    /// The vertical field of view, in degrees.
+    pub fov_deg: f64,
+    /// Parallel projection rather than perspective.
+    pub parallel: bool,
+    /// The view's height at the target, in inches: what a parallel camera shows.
+    pub height: f64,
 }

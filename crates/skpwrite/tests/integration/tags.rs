@@ -111,6 +111,7 @@ fn tagged_doc(materials: usize) -> Doc {
             tag("Roof", [0, 128, 255], true),
             tag("Möbel 家具", [1, 2, 3], false),
         ],
+        pages: Vec::new(),
         definitions: vec![Definition {
             name: "Panel".into(),
             is_group: false,
@@ -291,6 +292,7 @@ fn group_definitions_carry_the_group_word_and_components_do_not() {
         hidden: false,
     };
     let doc = Doc {
+        pages: Vec::new(),
         definitions: vec![
             def("Red box", true),
             def("Blue box", false),

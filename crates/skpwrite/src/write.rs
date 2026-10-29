@@ -18,9 +18,9 @@
 
 use crate::SCAFFOLD;
 use crate::archive::{
-    Archive, DrawFlags, ImageKind, MAX_STRING_UNITS, TextureRecord, Use, UvSides,
+    Archive, DrawFlags, ImageKind, MAX_STRING_UNITS, PageRecord, TextureRecord, Use, UvSides,
 };
-use crate::doc::{Doc, Edge, Face, Geometry, Guide, Instance, UvPin};
+use crate::doc::{Doc, Edge, Face, Geometry, Guide, Instance, Page, PageView, UvPin};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
@@ -48,6 +48,16 @@ const SCAFFOLD_NEXT_SLOT: u32 = BASE + LAYER_SECTION_SLOTS;
 const PID_COUNTER_POS: usize = 1987;
 /// Tail offsets of slot references that move by every slot inserted before them.
 const TAIL_REF_POSITIONS: [usize; 6] = [409, 468, 477, 479, 1383, 1385];
+/// The page manager's scene count, in the tail: a `u32` right after its thumbnail size and a
+/// reserved word. The scenes follow it, then the manager's current scene.
+const PAGE_COUNT_AT: usize = 3631 - TAIL_POS;
+const PAGES_AT: usize = PAGE_COUNT_AT + 4;
+/// The scaffold's `CSkpStyle` class declaration (`ffff`, schema, name length, name) in the
+/// tail. With scenes, the first scene declares the class and this becomes a reference.
+const STYLE_DECL_AT: usize = 4005 - TAIL_POS;
+const STYLE_DECL_LEN: usize = 15;
+/// The most scenes a file holds (the reader's own bound on a page list).
+pub const MAX_PAGES: usize = 10_000;
 
 /// The standard Iso camera, over the scaffold's default one.
 const ISO_CAMERA_PREFIX_POS: usize = 2993;
@@ -69,6 +79,20 @@ const ISO_CAMERA_TAIL_2: (usize, [u8; 15]) = (
         78, 83, 200, 68, 119, 2, 146, 70, 187, 169, 88, 39, 187, 167, 226,
     ],
 );
+
+/// The capture flags of a SketchUp page: everything it can restore.
+const PAGE_FLAGS: u32 = 0x1ff;
+/// The flag bit for the camera.
+const PAGE_CAMERA: u32 = 0x1;
+/// What a scene with no view holds in its (ignored) camera.
+const NO_VIEW: PageView = PageView {
+    eye: [0.0, 0.0, 0.0],
+    target: [0.0, 0.0, 1.0],
+    up: [0.0, 1.0, 0.0],
+    fov_deg: 35.0,
+    parallel: false,
+    height: 133.0,
+};
 
 /// Every definition's timestamp: a fixed 2026-01-01T00:00:00Z, so the same document
 /// gives the same bytes.
@@ -279,6 +303,46 @@ pub fn write(doc: &Doc) -> Result<Vec<u8>, WriteError> {
     let root_count = ctx.entities(&mut ar, Owner::Root, &doc.root, &def_slots);
     let root_buf = std::mem::take(&mut ar.buf);
 
+    // The scenes, after the root; the tail's slots move by them too.
+    let mut page_slot = None;
+    if !doc.pages.is_empty() {
+        let thumbnail = crate::png::thumbnail();
+        for (i, page) in doc.pages.iter().enumerate() {
+            let hidden: Vec<u16> = page
+                .hidden_tags
+                .iter()
+                .map(|t| {
+                    u16::try_from(tag_slots[*t])
+                        .ok()
+                        .filter(|s| *s < 0x7fff)
+                        .ok_or(WriteError::TooLarge {
+                            what: "tag slot in a scene",
+                        })
+                })
+                .collect::<Result<_, _>>()?;
+            let (flags, view) = match &page.view {
+                Some(v) => (PAGE_FLAGS, *v),
+                None => (PAGE_FLAGS & !PAGE_CAMERA, NO_VIEW),
+            };
+            let slot = ar.page(&PageRecord {
+                name: &page.name,
+                flags,
+                eye: view.eye,
+                target: view.target,
+                up: view.up,
+                fov_deg: view.fov_deg,
+                height: view.height,
+                perspective: !view.parallel,
+                hidden_slots: &hidden,
+                guid: page_guid(i, page),
+                thumbnail: &thumbnail,
+            });
+            page_slot.get_or_insert(slot);
+        }
+    }
+    let pages_buf = std::mem::take(&mut ar.buf);
+    let style_class = ar.class_slot.get("CSkpStyle").copied();
+
     let total_shift = ar.next_slot - SCAFFOLD_NEXT_SLOT;
     let last_pid = u32::try_from(ar.next_pid - 1).unwrap_or(u32::MAX);
 
@@ -324,25 +388,55 @@ pub fn write(doc: &Doc) -> Result<Vec<u8>, WriteError> {
     out.extend_from_slice(&root_buf);
 
     // The tail, patched in offset order: a reference that widens to the escape grows the
-    // buffer, moving everything after it.
-    let mut tail = SCAFFOLD[TAIL_POS..].to_vec();
-    let mut growth = 0;
+    // buffer, moving everything after it. The scenes go between its first `PAGES_AT` bytes
+    // (ending in the manager's scene count) and the rest.
+    let mut head = SCAFFOLD[TAIL_POS..TAIL_POS + PAGES_AT].to_vec();
+    let mut tail = SCAFFOLD[TAIL_POS + PAGES_AT..].to_vec();
+    let at = |pos: usize, growth: isize| (pos as isize - PAGES_AT as isize + growth) as usize;
+    let mut growth: isize = 0;
+    // With scenes: the count, the manager's current scene (the first), and the style class
+    // the first scene declared (the tail's declaration of it is now a reference, which
+    // takes one slot fewer for everything after it).
+    let style_class = style_class.filter(|_| page_slot.is_some());
+    let mut style_shift = total_shift;
+    if let Some(first) = page_slot {
+        put_u32(&mut head, PAGE_COUNT_AT, doc.pages.len() as u32);
+        growth += set_ref(&mut tail, 0, false, first) as isize;
+        style_shift = total_shift - 1;
+    }
     for pos in TAIL_REF_POSITIONS.iter().take(4) {
-        growth += shift_ref(&mut tail, pos + growth, total_shift);
+        growth += shift_ref(&mut tail, at(*pos, growth), total_shift) as isize;
+    }
+    if let Some(class) = style_class {
+        let mut reference = Vec::new();
+        if class < 0x7fff {
+            reference.extend_from_slice(&(0x8000 | class as u16).to_le_bytes());
+        } else {
+            reference.extend_from_slice(&0x7fffu16.to_le_bytes());
+            reference.extend_from_slice(&(0x8000_0000 | class).to_le_bytes());
+        }
+        let from = at(STYLE_DECL_AT, growth);
+        tail.splice(from..from + STYLE_DECL_LEN, reference.iter().copied());
+        growth += reference.len() as isize - STYLE_DECL_LEN as isize;
     }
     put(
         &mut tail,
-        ISO_CAMERA_TAIL_1.0 + growth,
+        at(ISO_CAMERA_TAIL_1.0, growth),
         &ISO_CAMERA_TAIL_1.1,
     );
-    for pos in TAIL_REF_POSITIONS.iter().skip(4) {
-        growth += shift_ref(&mut tail, pos + growth, total_shift);
-    }
+    growth += shift_ref(&mut tail, at(TAIL_REF_POSITIONS[4], growth), style_shift) as isize;
+    let class_ref = at(TAIL_REF_POSITIONS[5], growth);
+    growth += match style_class {
+        Some(class) => set_ref(&mut tail, class_ref, true, class),
+        None => shift_ref(&mut tail, class_ref, total_shift),
+    } as isize;
     put(
         &mut tail,
-        ISO_CAMERA_TAIL_2.0 + growth,
+        at(ISO_CAMERA_TAIL_2.0, growth),
         &ISO_CAMERA_TAIL_2.1,
     );
+    out.extend_from_slice(&head);
+    out.extend_from_slice(&pages_buf);
     out.extend_from_slice(&tail);
     Ok(out)
 }
@@ -384,6 +478,25 @@ fn shift_ref(buf: &mut Vec<u8>, at: usize, shift: u32) -> usize {
     } else {
         slot
     };
+    let mut wide = 0x7fffu16.to_le_bytes().to_vec();
+    wide.extend_from_slice(&big.to_le_bytes());
+    buf.splice(at..at + 2, wide);
+    4
+}
+
+/// Overwrite the `u16` slot reference at `at` with a reference to `slot` (a class
+/// reference when `class`), widening it to the escape when the slot no longer fits. Returns
+/// how many bytes it grew (0 or 4).
+fn set_ref(buf: &mut Vec<u8>, at: usize, class: bool, slot: u32) -> usize {
+    if buf.get(at..at + 2).is_none() {
+        return 0;
+    }
+    let bit = if class { 0x8000 } else { 0 };
+    if slot < 0x7fff {
+        put(buf, at, &(bit | slot as u16).to_le_bytes());
+        return 0;
+    }
+    let big = if class { 0x8000_0000 | slot } else { slot };
     let mut wide = 0x7fffu16.to_le_bytes().to_vec();
     wide.extend_from_slice(&big.to_le_bytes());
     buf.splice(at..at + 2, wide);
@@ -453,6 +566,28 @@ impl Plan {
             unique(&mut names, "tag", &t.name)?;
         }
         let layer_count = fits_u32("tag list", doc.tags.len() + 1)?;
+        if doc.pages.len() > MAX_PAGES {
+            return Err(WriteError::TooLarge { what: "scene list" });
+        }
+        for (i, page) in doc.pages.iter().enumerate() {
+            check_string("scene name", &page.name)?;
+            for t in &page.hidden_tags {
+                tag_in_range(doc, Some(*t))?;
+            }
+            if let Some(v) = &page.view {
+                finite("scene camera", &v.eye)?;
+                finite("scene camera", &v.target)?;
+                finite("scene camera", &v.up)?;
+                finite("scene camera", &[v.fov_deg, v.height])?;
+                if !(v.fov_deg > 0.0 && v.fov_deg < 180.0) || v.height < 0.0 {
+                    return Err(WriteError::Degenerate {
+                        owner: Owner::Root,
+                        what: "scene camera",
+                        index: i,
+                    });
+                }
+            }
+        }
         let empty: Vec<bool> = doc
             .definitions
             .iter()
@@ -980,6 +1115,15 @@ fn definition_guid(index: usize, d: &crate::doc::Definition) -> [u8; 16] {
         i.translation.iter().for_each(|c| h.f64(*c));
     }
     h.u64(g.guides.len() as u64);
+    h.guid()
+}
+
+/// A scene's style record GUID, from its position and name.
+fn page_guid(index: usize, p: &Page) -> [u8; 16] {
+    let mut h = Hasher::new();
+    h.bytes(b"page");
+    h.u64(index as u64);
+    h.bytes(p.name.as_bytes());
     h.guid()
 }
 

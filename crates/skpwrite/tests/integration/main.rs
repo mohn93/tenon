@@ -1,6 +1,7 @@
 //! The crate's integration tests, in one binary. Every written document is read back with
 //! the project's own legacy reader (`skp::legacy`), which is the check that the bytes walk.
 
+mod pages;
 mod roundtrip;
 mod tags;
 

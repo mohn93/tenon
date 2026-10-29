@@ -96,8 +96,6 @@ pub(crate) struct SkpNotes {
     pub flat: usize,
     /// The file's layers past `MAX_IMPORT_TAGS`, not imported.
     pub dropped_tags: usize,
-    /// Scenes not imported (a 2017-2020 file's, whose scenes are not read).
-    pub scenes: usize,
     /// Imported scenes whose camera could not be used (an eye on its target, or none read
     /// though the scene restores one): they store no view.
     pub unusable_views: usize,
@@ -147,11 +145,6 @@ impl SkpNotes {
                 "tags past the {MAX_IMPORT_TAGS} an import may add were left off; what is on \
                  them is Untagged"
             ),
-        );
-        say(
-            self.scenes,
-            "scene was not imported",
-            "scenes were not imported",
         );
         say(
             self.annotations,
@@ -288,11 +281,6 @@ pub(crate) fn read_skp(
             .as_ref()
             .map_or(0, |s| saturate(s.faces_short_of_exact)),
         annotations: stats.as_ref().map_or(0, |s| saturate(s.annotations)),
-        // A 2017-2020 file's scenes are not read (counted); a newer file's are added below.
-        scenes: match container.generation {
-            Generation::Legacy => index.scenes.len(),
-            Generation::Vff => 0,
-        },
         ..SkpNotes::default()
     };
 
@@ -393,17 +381,17 @@ pub(crate) fn read_skp(
     };
     notes.added_tags = tags.added;
     notes.dropped_tags = tags.dropped;
-    if container.generation == Generation::Vff {
-        match add_pages(document, &index.scenes, &tags.ids, unit) {
-            Ok(pages) => {
-                notes.added_pages = pages.added;
-                notes.unusable_views = pages.unusable_views;
-                notes.dropped_scenes = pages.dropped;
-            }
-            Err(e) => {
-                remove_added(document, &notes);
-                return Err(e);
-            }
+    // Both containers' scenes: a 2017-2020 file's layer ids are list positions, the same
+    // numbering its `LayerDef`s and its scenes' hidden tags use.
+    match add_pages(document, &index.scenes, &tags.ids, unit) {
+        Ok(pages) => {
+            notes.added_pages = pages.added;
+            notes.unusable_views = pages.unusable_views;
+            notes.dropped_scenes = pages.dropped;
+        }
+        Err(e) => {
+            remove_added(document, &notes);
+            return Err(e);
         }
     }
     let ids = Ids {
