@@ -171,10 +171,17 @@ Upstream's tests are not copied: they read a private corpus.
     32 bits, which could name another layer). Instances keep the full pid in
     `RawInstance::layer`; the importer drops one past 32 bits the same way. A layer's own id
     saturates at `u32::MAX` (`NO_LAYER`), so nothing can refer to such a layer.
-28. Legacy annotations counted: `ReadStats::annotations` counts the `CDimensionLinear` and
-    `CText` records `new_obj` reads (they were read only to stay in step and dropped), so the
-    importer can say how many it left out. `CDimensionRadial` is still not a known class (see
-    the module notes). A unit test in `legacy.rs` reads a crafted `CText` record.
+28. Legacy annotations: `ReadStats::annotations` counts the `CDimensionLinear` and `CText`
+    records `new_obj` reads. Since M22a they are also kept (`PendingAnnot`, rolled back and
+    built with the definition's other arenas) and resolved in `resolve_annotations` into
+    `DefGeometry::annotations` / `annotation_skips`, the shapes the 2021+ path makes: a
+    dimension's two points and offset fields, a label's anchor, vector and string; a point
+    tied to a vertex or guide point is looked up through the slot table when the definition is
+    built (a record can precede the geometry it names). `ConstructionPoint` slots now carry
+    the guide's index. Layouts are in the comments of `read_body` (`CDimensionLinear`) and
+    `text_fields` (`CText`); the dimension's type (0 aligned, 1 horizontal, 2 vertical)
+    shares `annotations::linear_offset` with the 2021+ path. `CDimensionRadial` is still not a
+    known class. Unit tests in `legacy.rs` read crafted records.
 29. Hidden guides kept: `DefGeometry::hidden_guide_items` and `hidden_guide_layer` (parallel,
     layer as `guide_layer`) hold the hidden guides that `guides` leaves out, on both the
     2021+ and the legacy path (a legacy mark rolls them back with the other guide arenas).

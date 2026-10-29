@@ -716,6 +716,20 @@ at an end (the inside corner of an L with the edges around it chamfered too) sta
 from that end. The new face takes the front and back materials of the first face beside the edge
 (the outer and inner sides).
 
+Where exactly three chosen convex edges meet at a vertex with exactly three faces (a box's
+corner, a prism's, a sheared box's), the corner closes with a flat triangle instead of the three
+chamfer planes meeting in a point: the plane through the three points where the chamfer strips of
+each face meet cuts the tip off, and its corners are those points (a box corner with distance d:
+`d` in from two faces and on the third). Three concave chamfers meeting at an inside corner keep
+the three planes meeting in a point (a cone of empty space), as do corners of one or two chosen
+edges and non-trihedral vertices. `distances`, when given, is a list with one distance per entry
+of `edges` (same order, each more than 0.000001 m) in place of `distance`, which stays required
+and is the default for the schema; the triangle's corners then follow each edge's own strip
+width, but only when no distance at the corner is larger than the other two together; otherwise
+the corner stays crossed (a closed solid, no triangle). Taking the sizes in ascending order, one within
+0.0001 m or 0.1% (whichever is less) of the first size of its group is made equal to it. A list of another length is `invalid_input`; with a batch reference such as `"$0:e*"`
+in `edges`, the list must match the expanded edge count.
+
 The geometry chamfered (the open context's faces, nested groups and components aside, or the
 instance's definition, which must have no nested ones) must be a solid (see the `solid` query);
 otherwise `invalid_input` ("the open context is not a solid: edge e12 bounds 1 face", "i4 is not a
@@ -770,9 +784,36 @@ toward the middle, and the middle point sinks into the ball when a coarse round,
 segments, would cut it). A corner whose edges are too short to hold both patches, whose faces or edges are not just those three,
 or whose patch the boolean cannot cut, keeps the crossed rounds (the three cylinders intersect in
 a sharp pinch); so do corners with one or two chosen edges. A chamfer corner (`chamfer_edges`)
-closes with the three chamfers meeting in a point. One call has one profile: unequal radii or a
-mix of chamfers and rounds at a corner come from separate calls, which stay closed solids (the
-second call's edges run into the first's rounds without a patch). The flat faces
+closes with a flat triangle (see above). Where exactly three chosen concave edges (an inside
+corner, such as a notch cut from a cube's corner) meet at a vertex of three faces and have one
+radius, the corner is a concave sphere piece: the same patch built as a filler, a ball of
+`radius` in the empty corner tangent to the three faces. A corner of concave and convex rounds
+(an L's inside corner where the cove meets the rounded edges beside it) keeps the crossed cuts:
+a closed solid, but no patch. `radii`, when given, is a list with one radius per entry of
+`edges` (same order, each more than 0.000001 m) in place of `radius`, and must match the expanded
+edge count when `edges` holds a batch reference such as `"$0:e*"`; radii are snapped together as
+for `distances`. A corner whose three convex rounds have different radii has no common ball:
+each round's end arc is cut at its own depth along its edge (the furthest of the two places its
+tangent line crosses the neighbours'), a straight segment across each face joins one arc's end to
+the next arc's start (each face loses a small corner triangle), and the patch is a star-shaped
+fill about the mean of the three arc centres, in concentric rings clamped inside the faceted
+rounds and below the faces. The edges along the arcs are always soft, but the patch only
+approximates the rounds there, so with many segments the shading can still show a seam; the
+edges across a face are soft only where the crease is under about 10 degrees. The cutter reaches
+no further than a quarter of the largest radius outside the faces, so solids beside the corner
+are untouched. Not every corner is patched: on boxes, 4-, 5-, 6- and 8-sided prisms, 3-sided
+prisms and sheared boxes with every corner meeting three different radii (0.1, 0.15 and 0.2;
+0.05, 0.25 and 0.3; 0.1, 0.12 and 0.14) at 2, 3, 8 and 24 segments, 807 of 878 corners were
+patched. The rest kept the crossed rounds (closed, with a pinch where the cylinders cross):
+mostly at 2 or 3 segments (coarse facets leave no room inside them), at the extreme ratio
+0.05:0.25:0.3, and on prisms with obtuse corners (6- and 8-sided). A few calls with very close
+radii (0.05, 0.06, 0.07 on a unit cube at 24 segments) are refused as a whole with "the result
+would not be a solid", by the boolean on the rounds themselves, before any corner. A corner whose radii are all equal still gets its sphere, and concave
+corners of different radii keep the crossed cuts. A mix of chamfers and rounds at a corner comes from
+separate calls, which stay closed solids (the second call's edges run into the first's rounds
+without a patch), and a second call whose edge ends at faces that are not flat and coplanar
+(beside an earlier round) is refused ("ends at v12, where the other faces do not lie in one
+plane"). The flat faces
 beside a round can still be bevelled later: round a box's four upright edges, then the loop
 around its top (the straight sides and the rounds' top edges) in a second command, with another
 radius if wanted, or chamfer an edge next to a round. Edges facing each other across a face whose
@@ -1399,7 +1440,7 @@ solves on from the frame before it, and each pass of a loop starts again from th
 contact mid-play) is drawn as the frame before it. Agents see a pose with `render_view`'s
 `joints` instead.
 
-Scenes can store the active section planes and the section display (`sections` on `add_scene`, `update_scene` and `change_scene`; file schema 30, older files open unchanged). The `scenes` query lists `sections: true` for such a scene, and the `scene` query's `sections` is `null` or `{active: [{context, plane}], planes, cuts, fill, fill_color}` (`context` null for the root, else the definition id). `render_view` with `scene` (at `t` 1) draws with the scene's planes active and its section display, over which the call's own `section` override still applies. Erasing a plane drops it from every scene that stores it (undo brings it back). So does purging or pruning the definition it is in. `make_unique` copies get new plane ids, so going to a scene made earlier leaves the copy uncut. A file whose scene stores a missing plane is refused.
+Scenes can store the active section planes and the section display (`sections` on `add_scene`, `update_scene` and `change_scene`; file schema 30, older files open unchanged). The `scenes` query lists `sections: true` for such a scene, and the `scene` query's `sections` is `null` or `{active: [{context, plane}], planes, cuts, fill, fill_color}` (`context` null for the root, else the definition id). `render_view` with `scene` (at `t` 1) draws with the scene's planes active and its section display, over which the call's own `section` override still applies. Erasing a plane drops it from every scene that stores it (undo brings it back). So does purging or pruning the definition it is in. `make_unique` stores the copy's planes in every scene that stores the original's, in the same undo step, so going to a scene made earlier cuts the copy too. A file whose scene stores a missing plane is refused.
 
 Scenes can store joint values (`joints` on `add_scene`, `update_scene` and `change_scene`; the
 Scenes tab's Joint values checkbox stores every joint's value): going to such a scene drives
@@ -2322,23 +2363,30 @@ supported"). What is carried:
   cut to 240 characters and made unique against the model's tags and `Untagged` (`Walls 2`);
   existing tags are never changed. At most 1,024 tags are added; what is on the file's further
   layers is imported Untagged, with a warning.
-- Dimensions and text (SketchUp 2021 and newer files): each linear dimension becomes a linear
+- Dimensions and text (SketchUp 2017 and newer files; a 2017-2020 file's records are read the
+  same way): each linear dimension becomes a linear
   dimension and each text label with a pushpin leader a leader note, in the mesh of the
   definition (or the file's top level) that holds it, on the tag of its layer. An end of a
   dimension, and a leader's point, is anchored to the vertex of the mesh at that point (within
   1e-6 m) and else fixed there; a point the file ties to a vertex or guide point of the same
   definition by identity is read at that vertex or guide point. The dimension line is the file's
-  offset (`y position` along the plane's normal crossed with its x axis; the sign was fixed from
-  the file's dimensions, which sit above top edges and below floor edges). A dimension always
+  offset: `y position` along a direction its type sets (horizontal: the plane's normal crossed
+  with its x axis; vertical: the opposite of the x axis; aligned: the segment's perpendicular in
+  the plane); the signs were fixed from dimensions that sit above top edges, below floor edges
+  and outside end walls. A horizontal or vertical dimension whose segment is not parallel to
+  its axis (SketchUp shows its projection) is not imported. A dimension always
   shows its length: text of its own is not kept (counted). A note whose text is blank shows its
   point's coordinates, as `add_note` without `text` does; text over 64 lines or 1,024
   characters is cut to them, counted in a warning ("N notes' texts were shortened to the note
   limits"). At most 10,000 dimensions and notes are added;
   the report's `dimensions` and `notes` count them. Not imported, each counted in `warnings`:
-  radial dimensions and text without a pushpin leader (screen text and view-based leaders; the
-  files at hand hold neither, so their records are not decoded), hidden ones, those whose
-  numbers are not finite or lie beyond +/-1e6 m, and those tied to anything but a vertex or guide point of their own definition. Angular
-  dimensions do not exist in the file format.
+  radial dimensions (a 2017-2020 file's are not recognised at all) and text without a pushpin
+  leader (screen text and view-based leaders; the files at hand hold neither, so their records
+  are not decoded), hidden ones, those whose numbers are not finite or lie beyond +/-1e6 m, those
+  tied to anything but a vertex or guide point of their own definition (an edge, a face, a point
+  reached through a group or component path), and, in a 2017-2020 file, a label whose record
+  does not have the layout of the files at hand. Angular dimensions do not exist in the file
+  format.
 - Scenes (from SketchUp 2017 and newer files; a 2017-2020 file's scenes are found in the end of
   its stream and read the same way): each of the file's scenes becomes a scene, after
   the model's, in the file's order, with its name (trimmed, cut to 240 characters, a blank one
@@ -2461,9 +2509,8 @@ may make several), `vertices` the vertices made, `skipped` faces that made none 
 that cannot be read, fewer than three distinct corners, no area, or a duplicate), and
 `materials` the materials added. It also has `tags` (tags added), `scenes` (scenes added),
 `definitions` and `instances` (made from the file's, without the wrapper), `guides` (guides
-made), `dimensions` and `notes` (from a 2021 or newer file), `textures` (materials added with a texture) and `warnings`
-(sentences, such as "4 dimensions and text labels were not imported" (2017-2020 files),
-"1 radial dimension was not imported", "2 text labels without a pushpin leader (screen text)
+made), `dimensions` and `notes` (from a 2017 or newer file), `textures` (materials added with a texture) and `warnings`
+(sentences, such as "1 radial dimension was not imported", "2 text labels without a pushpin leader (screen text)
 were not imported",
 "1 image was skipped", "5 face holes could not be read and were dropped", "1 guide could not be
 read and was skipped"); each is absent when 0 or empty, and always absent for

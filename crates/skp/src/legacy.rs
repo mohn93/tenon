@@ -244,7 +244,8 @@ pub struct ReadStats {
     pub lost_entities: u64,
     /// Hidden guide lines and points, which `read_model` leaves out.
     pub hidden_guides: u64,
-    /// `CDimensionLinear` and `CText` records read (and left out of the model).
+    /// `CDimensionLinear` and `CText` records read (whether or not they made it into the
+    /// model; see `DefGeometry::annotation_skips` for those that did not).
     pub annotations: u64,
     /// Human-readable notes about anything that did not go cleanly.
     pub notes: Vec<String>,
@@ -1130,6 +1131,10 @@ struct Archive<'a> {
     hidden_guide_layers: Vec<u32>,
     /// See `ReadStats::annotations`.
     annotations: u64,
+    /// Dimensions and text read in the definitions still being built, stack-like with the
+    /// geometry arenas; resolved against the definition's vertices and guide points when it
+    /// is built (a record can be written before the geometry it refers to).
+    pending_annots: Vec<PendingAnnot>,
     /// Where the last image read ended, when it was a JPEG.
     jpeg_end: Option<u64>,
     /// What a completed definition is turned into.
@@ -1256,6 +1261,7 @@ impl<'a> Archive<'a> {
             hidden_guide_items: Vec::new(),
             hidden_guide_layers: Vec::new(),
             annotations: 0,
+            pending_annots: Vec::new(),
             jpeg_end: None,
             emit: Emit::Batches,
             topo_defs: Vec::new(),
@@ -1975,17 +1981,21 @@ impl<'a> Archive<'a> {
                 self.preamble()?;
                 let (_, _, layer, hidden) = self.drawbase()?;
                 let position = self.c.f64s::<3>()?;
+                // The slot keeps the guide's index so a text label attached to this point can
+                // find it (a hidden point is not kept).
+                let mut idx = NONE_IDX;
                 if hidden {
                     self.hidden_guides += 1;
                     self.hidden_guide_items.push(RawGuide::Point { position });
                     self.hidden_guide_layers.push(layer);
                 } else {
+                    idx = self.guides.len() as u32;
                     self.guides.push(RawGuide::Point { position });
                     self.guide_layers.push(layer);
                 }
                 let _reserved = self.c.f64s::<3>()?;
                 self.c.skip(1)?;
-                Ok(Slot::obj(Cls::ConstructionPoint, NONE_IDX))
+                Ok(Slot::obj(Cls::ConstructionPoint, idx))
             }
             Cls::SectionPlane => {
                 self.preamble()?;
@@ -2021,21 +2031,60 @@ impl<'a> Archive<'a> {
             }
             Cls::DimLinear => {
                 self.preamble()?;
-                self.drawbase()?;
-                let _text = self.c.utf16()?;
+                let (_, _, layer, hidden) = self.drawbase()?;
+                let text = self.c.utf16()?;
                 self.read_object(Some(Cls::SkFont))?;
                 // 161 fixed bytes plus the refs, measured over 42 dimensions
                 // in 23 legacy files. The refs are what make it variable: a
                 // 2-byte tag in a small archive, 6 once the store map passes
                 // 0x7ffe objects - so a fixed-size skip walks off exactly on
                 // the large models, and silently truncates the root list.
-                self.c.skip(37)?;
-                self.entity_ref()?;
-                self.connection_paths()?;
-                self.c.skip(32)?;
-                self.entity_ref()?;
-                self.connection_paths()?;
-                self.c.skip(72)?;
+                //
+                // Each end is `5 bytes, u32 kind, u32 4, point (3 x f64)` and a
+                // connection (an entity ref, then `connection_paths`); a point
+                // attached to an entity holds zero and the ref names the entity.
+                let head = self.c.fixed::<37>()?;
+                let a_ref = self.entity_ref()?;
+                let a_paths = self.connection_paths()?;
+                let mid = self.c.fixed::<32>()?;
+                let b_ref = self.entity_ref()?;
+                let b_paths = self.connection_paths()?;
+                let tail = self.c.fixed::<72>()?;
+                // A kind of 2 or more says the end is attached; with no ref it is not a free
+                // point at zero but unread.
+                let end_point = |kind: &[u8], b: &[u8], r: Option<u32>| match r {
+                    Some(r) => Some(AnnotPoint::Entity(r)),
+                    None if u32::from_le_bytes([kind[0], kind[1], kind[2], kind[3]]) >= 2 => None,
+                    None => Some(AnnotPoint::Free([
+                        f64_at(b, 0),
+                        f64_at(b, 8),
+                        f64_at(b, 16),
+                    ])),
+                };
+                let ends = (
+                    end_point(&head[5..], &head[13..], a_ref),
+                    end_point(&mid[0..], &mid[8..], b_ref),
+                );
+                let body =
+                    if let (Some(start), Some(end), 0, 0) = (ends.0, ends.1, a_paths, b_paths) {
+                        PendingBody::Linear {
+                            start,
+                            end,
+                            normal: [f64_at(&tail, 0), f64_at(&tail, 8), f64_at(&tail, 16)],
+                            x_axis: [f64_at(&tail, 24), f64_at(&tail, 32), f64_at(&tail, 40)],
+                            dim_type: u32::from_le_bytes([tail[48], tail[49], tail[50], tail[51]]),
+                            y_pos: f64_at(&tail, 52),
+                            custom_text: !text.is_empty(),
+                        }
+                    } else {
+                        // Through an instance path, or attached to nothing: not read.
+                        PendingBody::Unread
+                    };
+                self.pending_annots.push(PendingAnnot {
+                    hidden,
+                    layer_slot: layer,
+                    body,
+                });
                 Ok(Slot::obj(Cls::DimLinear, NONE_IDX))
             }
             Cls::Text => self.read_text(),
@@ -2168,13 +2217,17 @@ impl<'a> Archive<'a> {
         Ok(())
     }
 
-    fn connection_paths(&mut self) -> Result<()> {
-        self.entity_ref()?;
+    /// Reads a connection's second entity ref and its two path lists; returns how many
+    /// instance-path items (and a second ref, which is one more) it held. Zero for every
+    /// connection to a vertex or guide point of the dimension's own definition.
+    fn connection_paths(&mut self) -> Result<u32> {
+        let mut found = u32::from(self.entity_ref()?.is_some());
         for _ in 0..2 {
             let n = self.c.u32()?;
             if n > 1000 {
                 return Err(Error::Malformed("implausible dimension path length"));
             }
+            found += n;
             for _ in 0..n {
                 // Usually a reference, but MFC writes an object in full the
                 // first time anything points at it - and a dimension
@@ -2191,7 +2244,7 @@ impl<'a> Archive<'a> {
                 }
             }
         }
-        Ok(())
+        Ok(found)
     }
 
     fn vertex_ref(&mut self) -> Result<u32> {
@@ -2521,9 +2574,52 @@ impl<'a> Archive<'a> {
 
     // -- CText ------------------------------------------------------------
 
+    /// The fields of a `CText` middle that runs from `start` to the string marker at `marker`
+    /// (123 bytes in every sample, more when a connection holds paths):
+    ///
+    /// ```text
+    /// 16 bytes, u32 kind, u32 4, anchor 3 x f64, connection (entity ref, second ref,
+    /// u32 n1, u32 n2), leader vector 3 x f64, text direction 3 x f64, u32 leader type,
+    /// the 11-byte block
+    /// ```
+    ///
+    /// The anchor is zero when the label is attached to an entity (the ref names it). `None`
+    /// when the middle is not this layout (a shorter record, a connection with paths): the
+    /// label is then counted as unread. The cursor is left where it was.
+    fn text_fields(&mut self, start: u64, marker: u64) -> Option<(AnnotPoint, [f64; 3], u32)> {
+        const TAIL: u64 = 24 + 24 + 4 + 11;
+        let save = self.c.at();
+        let r = (|| -> Result<Option<(AnnotPoint, [f64; 3], u32)>> {
+            if marker < start + 24 + 24 + 12 + TAIL {
+                return Ok(None);
+            }
+            let attached = self.c.u32_at(start + 16)? >= 2;
+            self.c.seek(start + 24)?;
+            let a = self.c.f64s::<3>()?;
+            let r1 = self.entity_ref()?;
+            let r2 = self.entity_ref()?;
+            let (n1, n2) = (self.c.u32()?, self.c.u32()?);
+            if r2.is_some() || n1 != 0 || n2 != 0 || self.c.at() + TAIL != marker {
+                return Ok(None);
+            }
+            let vector = self.c.f64s::<3>()?;
+            let _direction = self.c.f64s::<3>()?;
+            let kind = self.c.u32()?;
+            let anchor = match r1 {
+                Some(r) => AnnotPoint::Entity(r),
+                // Attached by its kind but with no ref: unread, not free at zero.
+                None if attached => return Ok(None),
+                None => AnnotPoint::Free(a),
+            };
+            Ok(Some((anchor, vector, kind)))
+        })();
+        let _ = self.c.seek(save);
+        r.ok().flatten()
+    }
+
     fn read_text(&mut self) -> Result<Slot> {
         self.preamble()?;
-        self.drawbase()?;
+        let (_, _, layer, hidden) = self.drawbase()?;
         self.read_object(Some(Cls::SkFont))?;
         // The middle of this record is variant-length, delimited by an
         // eleven-byte block `01 00 00 00 ?? 00 <u32 arrow> 01` immediately
@@ -2557,8 +2653,22 @@ impl<'a> Archive<'a> {
             }
             from = idx + 3;
         };
+        let fields = self.text_fields(start, idx);
         self.c.seek(idx)?;
-        let _text = self.c.utf16()?;
+        let text = self.c.utf16()?;
+        self.pending_annots.push(PendingAnnot {
+            hidden,
+            layer_slot: layer,
+            body: match fields {
+                Some((anchor, vector, kind)) => PendingBody::Leader {
+                    anchor,
+                    vector,
+                    kind,
+                    text,
+                },
+                None => PendingBody::Unread,
+            },
+        });
         self.c.skip(5)?;
         // Optional leader-attachment refs. Only the escaped six-byte form is
         // recognisable without risk: a two-byte back-ref here would be
@@ -2865,6 +2975,7 @@ impl<'a> Archive<'a> {
             ftcs: self.ftcs.len() as u32,
             guides: self.guides.len() as u32,
             hidden_guide_items: self.hidden_guide_items.len() as u32,
+            annots: self.pending_annots.len() as u32,
             instances: self.instances.len() as u32,
             slot: self.next_slot(),
         }
@@ -2892,6 +3003,7 @@ impl<'a> Archive<'a> {
             .truncate(m.hidden_guide_items as usize);
         self.hidden_guide_layers
             .truncate(m.hidden_guide_items as usize);
+        self.pending_annots.truncate(m.annots as usize);
         {
             let from = core::cmp::min(m.slot.saturating_sub(self.base) as usize, self.slots.len());
             for i in from..self.slots.len() {
@@ -2905,6 +3017,7 @@ impl<'a> Archive<'a> {
                     // later definition has to read as unknown rather than as
                     // somebody else's mapping.
                     || k == K_OBJ + Cls::Ftc as u8
+                    || k == K_OBJ + Cls::ConstructionPoint as u8
                     || k == K_OBJ + Cls::AttrContainer as u8
                 {
                     self.slots[i] = Slot {
@@ -3096,7 +3209,102 @@ impl<'a> Archive<'a> {
         g.hidden_guide_items.extend_from_slice(hidden);
         let layers = self.hidden_guide_layers.get(at..).unwrap_or(&[]);
         g.hidden_guide_layer = layers.iter().map(|&s| self.layer_index(s)).collect();
+        self.resolve_annotations(&mut g, m)?;
         Some(g)
+    }
+
+    /// Turns the dimensions and labels read since `m` into `g.annotations` and
+    /// `g.annotation_skips`, the shapes the modern path produces, counting each against the
+    /// element budget. A point attached to an entity becomes that vertex's or guide point's
+    /// position; one attached to anything else (or to something outside this definition) is
+    /// unread. `None` once the budget is spent.
+    fn resolve_annotations(&mut self, g: &mut DefGeometry, m: &Mark) -> Option<()> {
+        use crate::annotations::RawAnnotation;
+        let at = m.annots as usize;
+        let count = self.pending_annots.len().saturating_sub(at);
+        spend(&mut self.budget, count as u64).ok()?;
+        let pending = self.pending_annots.get(at..).unwrap_or(&[]);
+        let finite = |p: [f64; 3]| p.iter().all(|x| x.is_finite());
+        let point = |p: AnnotPoint| -> Option<[f64; 3]> {
+            let p = match p {
+                AnnotPoint::Free(p) => p,
+                AnnotPoint::Entity(r) => {
+                    let e = self.entry(self.translate_ref(r).ok().flatten()?);
+                    if e.is(Cls::Vertex) {
+                        let k = (e.idx as usize).checked_sub(m.verts as usize)?;
+                        let v = g.vertex_pos.get(3 * k..3 * k + 3)?;
+                        [v[0], v[1], v[2]]
+                    } else if e.is(Cls::ConstructionPoint) && e.idx >= m.guides {
+                        match self.guides.get(e.idx as usize)? {
+                            RawGuide::Point { position } => *position,
+                            RawGuide::Line { .. } => return None,
+                        }
+                    } else {
+                        return None;
+                    }
+                }
+            };
+            finite(p).then_some(p)
+        };
+        let mut found = Vec::new();
+        let mut skips = crate::annotations::AnnotationSkips::default();
+        for a in pending {
+            if a.hidden {
+                skips.hidden = skips.hidden.saturating_add(1);
+                continue;
+            }
+            let layer = self.layer_index(a.layer_slot);
+            let made = match &a.body {
+                PendingBody::Unread => None,
+                PendingBody::Linear {
+                    start,
+                    end,
+                    normal,
+                    x_axis,
+                    dim_type,
+                    y_pos,
+                    custom_text,
+                } => (|| {
+                    let (start, end) = (point(*start)?, point(*end)?);
+                    let offset = crate::annotations::linear_offset(
+                        *dim_type, *normal, *x_axis, *y_pos, start, end,
+                    )?;
+                    Some(RawAnnotation::Linear {
+                        start,
+                        end,
+                        offset,
+                        layer,
+                        custom_text: *custom_text,
+                    })
+                })(),
+                PendingBody::Leader {
+                    anchor,
+                    vector,
+                    kind,
+                    text,
+                } => {
+                    if *kind != 2 {
+                        skips.screen_text = skips.screen_text.saturating_add(1);
+                        continue;
+                    }
+                    point(*anchor)
+                        .filter(|_| finite(*vector))
+                        .map(|anchor| RawAnnotation::Leader {
+                            anchor,
+                            vector: *vector,
+                            text: text.clone(),
+                            layer,
+                        })
+                }
+            };
+            match made {
+                Some(a) => found.push(a),
+                None => skips.unread = skips.unread.saturating_add(1),
+            }
+        }
+        g.annotations = found;
+        g.annotation_skips = skips;
+        Some(())
     }
 
     /// Edges, with their flags and both adjacent face normals.
@@ -3455,9 +3663,54 @@ struct Mark {
     ftcs: u32,
     guides: u32,
     hidden_guide_items: u32,
+    annots: u32,
     /// Not released: `finish` groups every placement at the end.
     instances: u32,
     slot: u32,
+}
+
+/// A point of a dimension or label: stated in the record, or the entity (a store-map index
+/// of the file, as `entity_ref` reads it) the record is attached to.
+#[derive(Clone, Copy)]
+enum AnnotPoint {
+    Free([f64; 3]),
+    Entity(u32),
+}
+
+enum PendingBody {
+    /// Not read: a connection through an instance path, or a layout not recognised.
+    Unread,
+    Linear {
+        start: AnnotPoint,
+        end: AnnotPoint,
+        normal: [f64; 3],
+        x_axis: [f64; 3],
+        /// 0 aligned, 1 horizontal, 2 vertical (see `annotations::linear_offset`).
+        dim_type: u32,
+        y_pos: f64,
+        custom_text: bool,
+    },
+    Leader {
+        anchor: AnnotPoint,
+        vector: [f64; 3],
+        /// 2 is a pushpin leader; other values are screen or view-based text.
+        kind: u32,
+        text: String,
+    },
+}
+
+/// A dimension or label read from the file, waiting for its definition to be built.
+struct PendingAnnot {
+    hidden: bool,
+    layer_slot: u32,
+    body: PendingBody,
+}
+
+/// The `f64` at byte `at` of `b` (the caller has checked the length).
+fn f64_at(b: &[u8], at: usize) -> f64 {
+    let mut a = [0u8; 8];
+    a.copy_from_slice(&b[at..at + 8]);
+    f64::from_le_bytes(a)
 }
 
 struct TexBlock {
@@ -5792,5 +6045,154 @@ mod tests {
         assert!(slot.is(Cls::Text));
         assert_eq!(archive.annotations, 1);
         assert_eq!(archive.c.left(), 8);
+        // The middle is too short to hold the fields: the label is unread, not misread.
+        assert!(matches!(
+            archive.pending_annots[0].body,
+            PendingBody::Unread
+        ));
+    }
+
+    fn f64s(v: &[f64]) -> Vec<u8> {
+        v.iter().flat_map(|x| x.to_le_bytes()).collect()
+    }
+
+    fn empty_mark() -> Mark {
+        Mark {
+            verts: 0,
+            edges: 0,
+            faces: 0,
+            loops: 0,
+            loop_uses: 0,
+            face_loops: 0,
+            ftcs: 0,
+            guides: 0,
+            hidden_guide_items: 0,
+            annots: 0,
+            instances: 0,
+            slot: 0,
+        }
+    }
+
+    /// A `CText` with the 123-byte middle every sample has: free anchor, leader vector.
+    fn full_text_record(kind: u32) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&[0xff, 0xff, 0, 0, 5, 0]);
+        b.extend_from_slice(b"CText");
+        b.extend_from_slice(&[0, 0]); // no attribute container
+        b.extend_from_slice(&[0; 8]); // drawing element
+        b.extend_from_slice(&[0, 0]); // layer slot
+        b.extend_from_slice(&[0, 0]); // no font
+        b.extend_from_slice(&[0; 16]);
+        b.extend_from_slice(&[1, 0, 0, 0, 4, 0, 0, 0]);
+        b.extend_from_slice(&f64s(&[1.0, 2.0, 3.0])); // anchor
+        b.extend_from_slice(&[0; 12]); // no connection
+        b.extend_from_slice(&f64s(&[4.0, 5.0, 6.0])); // leader vector
+        b.extend_from_slice(&f64s(&[0.0, 0.0, 1.0])); // text direction
+        b.extend_from_slice(&kind.to_le_bytes());
+        b.extend_from_slice(&[1, 0, 0, 0, 1, 0, 3, 0, 0, 0, 1]);
+        b.extend_from_slice(&[0xff, 0xfe, 0xff, 2, b'H', 0, b'i', 0]);
+        b.extend_from_slice(&[0; 5]);
+        b
+    }
+
+    /// A `CDimensionLinear` between two free points, `dim_type` and `y_pos` as given.
+    fn dimension_record(dim_type: u32, y_pos: f64, via_path: bool) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&[0xff, 0xff, 0, 0, 16, 0]);
+        b.extend_from_slice(b"CDimensionLinear");
+        b.extend_from_slice(&[0, 0]); // no attribute container
+        b.extend_from_slice(&[0; 8]); // drawing element
+        b.extend_from_slice(&[0, 0]); // layer slot
+        b.extend_from_slice(&[0xff, 0xfe, 0xff, 0]); // no text of its own
+        b.extend_from_slice(&[0, 0]); // no font
+                                      // One end: the block with its point, then the connection (an entity ref, the second
+                                      // ref, the two path counts and any path items).
+        let end = |head: &[u8], p: [f64; 3], paths: u32| {
+            let mut e = Vec::new();
+            e.extend_from_slice(head);
+            e.extend_from_slice(&f64s(&p));
+            e.extend_from_slice(&[0, 0]); // no entity
+            e.extend_from_slice(&[0, 0]); // no second ref
+            e.extend_from_slice(&paths.to_le_bytes());
+            e.extend(std::iter::repeat_n([1u8, 0], paths as usize).flatten());
+            e.extend_from_slice(&0u32.to_le_bytes());
+            e
+        };
+        // 5 bytes, kind 1, 4; and 8 bytes of the same kind for the second end.
+        b.extend_from_slice(&end(&[0, 0, 0, 0, 0, 1, 0, 0, 0, 4, 0, 0, 0], [0.0; 3], 0));
+        b.extend_from_slice(&end(
+            &[1, 0, 0, 0, 4, 0, 0, 0],
+            [100.0, 0.0, 0.0],
+            u32::from(via_path),
+        ));
+        b.extend_from_slice(&f64s(&[0.0, 0.0, 1.0])); // normal
+        b.extend_from_slice(&f64s(&[1.0, 0.0, 0.0])); // x axis
+        b.extend_from_slice(&dim_type.to_le_bytes());
+        b.extend_from_slice(&y_pos.to_le_bytes());
+        b.extend_from_slice(&0f64.to_le_bytes());
+        b.extend_from_slice(&[1, 0, 0, 0]);
+        b
+    }
+
+    fn walk(bytes: Vec<u8>) -> (Vec<crate::annotations::RawAnnotation>, u32, u32) {
+        use crate::source::ByteSource;
+        let src = MemorySource::new(bytes);
+        let end = src.len();
+        let c = Cur::new(&src, 0, end);
+        let mut archive = Archive::new(c, 16, &VersionMap::default());
+        archive.read_object(None).unwrap().unwrap();
+        let mut g = DefGeometry::default();
+        archive.resolve_annotations(&mut g, &empty_mark()).unwrap();
+        (
+            g.annotations,
+            g.annotation_skips.unread,
+            g.annotation_skips.screen_text,
+        )
+    }
+
+    #[test]
+    fn a_text_label_is_read_with_its_anchor_vector_and_string() {
+        use crate::annotations::RawAnnotation;
+        let (found, unread, screen) = walk(full_text_record(2));
+        assert_eq!((unread, screen), (0, 0));
+        assert_eq!(
+            found,
+            [RawAnnotation::Leader {
+                anchor: [1.0, 2.0, 3.0],
+                vector: [4.0, 5.0, 6.0],
+                text: "Hi".into(),
+                layer: 0,
+            }]
+        );
+        // Screen text (leader type 0) is counted, not imported.
+        let (found, unread, screen) = walk(full_text_record(0));
+        assert_eq!((found.len(), unread, screen), (0, 0, 1));
+    }
+
+    #[test]
+    fn a_linear_dimension_is_read_with_its_offset() {
+        use crate::annotations::RawAnnotation;
+        // Aligned: the segment runs along x, so the line is 10 along n x x = +y.
+        let (found, unread, _) = walk(dimension_record(0, 10.0, false));
+        assert_eq!(unread, 0);
+        assert_eq!(
+            found,
+            [RawAnnotation::Linear {
+                start: [0.0, 0.0, 0.0],
+                end: [100.0, 0.0, 0.0],
+                offset: [0.0, 10.0, 0.0],
+                layer: 0,
+                custom_text: false,
+            }]
+        );
+        // Vertical, on a segment that is not vertical: unread.
+        let (found, unread, _) = walk(dimension_record(2, 10.0, false));
+        assert_eq!((found.len(), unread), (0, 1));
+    }
+
+    #[test]
+    fn a_dimension_through_an_instance_path_is_unread() {
+        let (found, unread, _) = walk(dimension_record(0, 10.0, true));
+        assert_eq!((found.len(), unread), (0, 1));
     }
 }

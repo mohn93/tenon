@@ -891,8 +891,10 @@ mod craft {
                     );
                     body.extend(spot(*a, t::DIMENSION_PT_REF1));
                     body.extend(spot(*b, t::DIMENSION_PT_REF2));
-                    body.extend(rec(t::DIMENSION_NORMAL, &doubles(&[-1.0, 0.0, 0.0])));
-                    body.extend(rec(t::DIMENSION_X_AXIS, &doubles(&[0.0, -1.0, 0.0])));
+                    // A horizontal dimension: its segments run along x, which is x_axis;
+                    // normal x x_axis is +z.
+                    body.extend(rec(t::DIMENSION_NORMAL, &doubles(&[0.0, -1.0, 0.0])));
+                    body.extend(rec(t::DIMENSION_X_AXIS, &doubles(&[1.0, 0.0, 0.0])));
                     body.extend(rec(t::DIMENSION_TYPE, &1u32.to_le_bytes()));
                     body.extend(rec(t::DIMENSION_Y_POS, &doubles(&[*y_pos])));
                     body.extend(rec(t::DIMENSION_X_POS, &doubles(&[0.0])));
@@ -2013,8 +2015,9 @@ fn corpus_tutorial_tags() {
     assert_eq!(want.iter().filter(|t| !t.2).count(), 6, "{want:?}");
     assert!(want.iter().any(|t| t.3 > 0), "{want:?}");
 
-    // The 2017-2020 copies give the same tags, but not the tutorial's three text labels (one
-    // on "Scene 04", two on "Scene 05"), which a tag's count includes.
+    // The 2017-2020 copies give the same tags and counts, labels included. A SketchUp file
+    // written back does not hold the three labels (one on "Scene 04", two on "Scene 05"),
+    // which a tag's count includes.
     let mut want_legacy = want.clone();
     for t in &mut want_legacy {
         match t.0.as_str() {
@@ -2027,7 +2030,7 @@ fn corpus_tutorial_tags() {
         let (d, _) = open(&dir.join(format!("../legacy_out/tutorial01_v{year}.skp")));
         let got = summary(&d);
         println!("{year}: {got:?}");
-        assert_eq!(got, want_legacy, "{year}");
+        assert_eq!(got, want, "{year}");
     }
 
     let mut d = d;
@@ -2738,7 +2741,7 @@ fn annotations_file() -> Vec<u8> {
         root_annotations: vec![
             Ann::Linear {
                 a: free([0.0; 3]),
-                b: free([0.0, 1.0, 0.0]),
+                b: free([1.0, 0.0, 0.0]),
                 y_pos: -1.0,
                 text: "",
                 hidden: false,
@@ -3019,6 +3022,77 @@ fn corpus_annotations_import() {
     d.scene().validate().unwrap();
     let report = &r["import"];
     assert_eq!(report["notes"], 3, "{report}");
+}
+
+/// The 2017-2020 container: the tutorial saved by SketchUp 2024 as a 2017 and a 2020 file
+/// imports the same three labels as the 2021+ original, and a 2017 elevation imports its
+/// dimensions (three, attached to something that is not a vertex, are counted and skipped).
+#[test]
+#[ignore = "needs a local corpus in SKP_CORPUS (an absolute path)"]
+fn corpus_legacy_annotations_import() {
+    let Some(dir) = std::env::var_os("SKP_CORPUS") else {
+        println!("SKP_CORPUS is not set; skipping");
+        return;
+    };
+    let dir = Path::new(&dir);
+    let import = |rel: &str| {
+        let mut d = doc();
+        let path = dir.join(rel);
+        let r = run(
+            &mut d,
+            json!({"type": "import", "path": path.to_str().unwrap()}),
+        )
+        .unwrap();
+        d.scene().validate().unwrap();
+        (d, r["import"].clone())
+    };
+    let labels = |d: &Document| {
+        let scene = d.scene();
+        let meshes = std::iter::once(scene.root()).chain(scene.definitions().map(|(_, x)| &x.mesh));
+        let mut v: Vec<(String, [f64; 3])> = meshes
+            .flat_map(|m| m.notes())
+            .map(|(_, n)| match n {
+                kernel::Note::Leader {
+                    position,
+                    text: Some(t),
+                    ..
+                } => (t.clone(), position.to_array()),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0).then(a.1[0].total_cmp(&b.1[0])));
+        v
+    };
+    let (d, report) = import("su2024/su007_Tutorial01_.skp");
+    let want = labels(&d);
+    assert_eq!(want.len(), 3, "{report}");
+    for year in [2017, 2020] {
+        let (d, report) = import(&format!("../legacy_out/tutorial01_v{year}.skp"));
+        assert_eq!(report["notes"], 3, "{report}");
+        assert!(
+            !warnings(&report).iter().any(|w| w.contains("label")),
+            "{report}"
+        );
+        let got = labels(&d);
+        for (g, w) in got.iter().zip(&want) {
+            assert_eq!(g.0, w.0);
+            for i in 0..3 {
+                assert!((g.1[i] - w.1[i]).abs() < 1e-9, "{year}: {g:?} {w:?}");
+            }
+        }
+    }
+
+    let (_, report) = import("openskp_fixtures/capilla_quiroz_v17.skp");
+    assert_eq!(report["dimensions"], 26, "{report}");
+    assert!(
+        warnings(&report).contains(
+            &"3 dimensions and text labels could not be read and were skipped".to_string()
+        ),
+        "{report}"
+    );
+    let (_, report) = import("openskp_fixtures/legacy_annotations.skp");
+    assert_eq!(report["dimensions"], 1, "{report}");
+    assert_eq!(report["notes"], 1, "{report}");
 }
 
 #[test]

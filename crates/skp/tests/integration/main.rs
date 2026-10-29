@@ -4,6 +4,7 @@
 mod annotations;
 mod fixtures;
 mod legacy;
+mod legacy_annotations;
 mod robustness;
 
 use skp::container::{Container, Generation};
