@@ -1256,3 +1256,86 @@ fn a_revealed_hidden_instance_is_picked_and_its_parts_follow_the_strict_ones() {
     assert_eq!(view.len(), 1);
     assert!(face_under_in(&view, &c, px(&c, top)).is_none());
 }
+
+/// A 3 x 3 grid of unit cells whose walls are shared single faces: the eight outer ones are
+/// pushed up into solid rooms and the middle one is closed by a roof into an empty room. It is
+/// grouped and placed by `place`, with the root plane z = 0.5 keeping the part below it.
+fn grid_scene(place: DAffine3) -> Scene {
+    let mut m = Model::new();
+    let cells: Vec<(f64, f64)> = (0..9).map(|k| ((k % 3) as f64, (k / 3) as f64)).collect();
+    for &(x, y) in &cells {
+        m.add_polygon(&[
+            p(x, y, 0.0),
+            p(x + 1.0, y, 0.0),
+            p(x + 1.0, y + 1.0, 0.0),
+            p(x, y + 1.0, 0.0),
+        ])
+        .unwrap();
+    }
+    let at = |m: &Model, x: f64, y: f64| {
+        m.faces()
+            .find(|(f, _)| {
+                let c = m.triangulate(*f).unwrap().concat();
+                let c = c.iter().fold(DVec3::ZERO, |a, b| a + *b) / c.len() as f64;
+                (c - p(x + 0.5, y + 0.5, 0.0)).length() < 1e-6
+            })
+            .map(|(f, _)| f)
+            .unwrap()
+    };
+    for &(x, y) in cells.iter().filter(|c| **c != (1.0, 1.0)) {
+        let f = at(&m, x, y);
+        m.push_pull(f, 1.0).unwrap();
+    }
+    m.add_polygon(&[
+        p(1.0, 1.0, 1.0),
+        p(2.0, 1.0, 1.0),
+        p(2.0, 2.0, 1.0),
+        p(1.0, 2.0, 1.0),
+    ])
+    .unwrap();
+    // The room's floor and roof face into it, like its walls.
+    let inward: Vec<_> = m
+        .faces()
+        .filter(|(f, face)| {
+            let c = m.triangulate(*f).unwrap().concat();
+            let c = c.iter().fold(DVec3::ZERO, |a, b| a + *b) / c.len() as f64;
+            let in_room = (c.x - 1.5).abs() < 1e-6 && (c.y - 1.5).abs() < 1e-6;
+            (in_room && c.z == 0.0 && face.normal.z < 0.0)
+                || (in_room && c.z == 1.0 && face.normal.z > 0.0)
+        })
+        .map(|(f, _)| f)
+        .collect();
+    m.reverse_faces(&inward);
+    let mut s = Scene::from_root(m);
+    let edges: Vec<_> = s.root().edges().map(|(id, _)| id).collect();
+    let faces: Vec<_> = s.root().faces().map(|(id, _)| id).collect();
+    let (i, _) = s
+        .make_group(MeshId::Root, &edges, &faces, &[], DefinitionKind::Group, "")
+        .unwrap();
+    s.set_instance_transform(MeshId::Root, i, place).unwrap();
+    s.edit(MeshId::Root, |m| {
+        m.add_section(kernel::SectionPlane::new(p(0.0, 0.0, 0.5), -DVec3::Z), true)
+    })
+    .unwrap();
+    s
+}
+
+#[test]
+fn a_shared_wall_grid_is_filled_for_picking_the_same_in_a_mirrored_group() {
+    let fills = |place: DAffine3| -> Vec<bool> {
+        let s = grid_scene(place);
+        let view = Scenery::of(&s, &[]).unwrap();
+        let sign = place.matrix3.x_axis.x;
+        (0..9)
+            .map(|k| {
+                let (x, y) = ((k % 3) as f64 + 0.5, (k / 3) as f64 + 0.5);
+                let t = view.fill_hit(p(sign * x, y, 5.0), -DVec3::Z, 0.0, 10.0);
+                t.is_some_and(|t| (t - 4.5).abs() < 1e-6)
+            })
+            .collect()
+    };
+    let plain = fills(DAffine3::IDENTITY);
+    // Every solid cell is filled.
+    assert!((0..9).all(|k| k == 4 || plain[k]), "{plain:?}");
+    assert_eq!(fills(DAffine3::from_scale(p(-1.0, 1.0, 1.0))), plain);
+}

@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use kernel::{
-    EntityId, InstanceId, JointId, JointKind, KernelError, MeshId, Page, PageId, PageView,
-    SceneChange, SceneTransition, TagEdit,
+    EntityId, InstanceId, JointId, JointKind, KernelError, MeshId, Page, PageId, PageSections,
+    PageView, SceneChange, SceneTransition, TagEdit,
 };
 
 use glam::DAffine3;
@@ -18,7 +18,11 @@ use super::{Document, MAX_COORDINATE, unit_vector};
 use crate::camera::{Camera, Lighting, Projection};
 use crate::command::{CommandError, ErrorKind, SceneJoints, ScenePositions};
 use crate::motion::{JointPose, Motion};
-use crate::query::{QueryResult, SceneInfo, SceneJointValue, SceneView};
+use crate::query::{
+    QueryResult, SceneInfo, SceneJointValue, SceneSectionPlane, SceneSections, SceneView,
+};
+
+use super::sections::SectionFillColor;
 
 impl Document {
     /// The scene last added or gone to, while it exists.
@@ -172,6 +176,23 @@ impl Document {
         }
     }
 
+    /// The section planes a scene stores now: the active plane of each mesh that has one, and
+    /// the section display.
+    fn current_sections(&self) -> PageSections {
+        let d = self.section_display;
+        PageSections {
+            active: self
+                .scene
+                .meshes()
+                .filter_map(|(id, m)| Some((id, m.active_section()?)))
+                .collect(),
+            planes: d.planes,
+            cuts: d.cuts,
+            fill: d.fill,
+            material_fill: d.fill_color == SectionFillColor::Material,
+        }
+    }
+
     /// Adds a scene after the last one, storing the current view (`camera`) and hidden tags
     /// (`tags`); without `name` it is "Scene 1" (or the lowest free number). It becomes the
     /// selected scene.
@@ -182,9 +203,11 @@ impl Document {
         tags: bool,
         positions: Option<&ScenePositions>,
         joints: Option<&SceneJoints>,
+        sections: Option<bool>,
     ) -> Result<SceneChange, CommandError> {
         let page = Page {
             name: name.map_or_else(|| self.scene.free_page_name(), str::to_string),
+            sections: (sections == Some(true)).then(|| self.current_sections()),
             view: camera.then(|| self.view_to_store()).transpose()?,
             tags: tags.then(|| self.scene.hidden_tags()),
             positions: match positions {
@@ -213,8 +236,12 @@ impl Document {
         tags: Option<bool>,
         positions: Option<&ScenePositions>,
         joints: Option<&SceneJoints>,
+        sections: Option<bool>,
     ) -> Result<SceneChange, CommandError> {
         let page = self.page(id)?;
+        let sections = sections
+            .unwrap_or(page.sections.is_some())
+            .then(|| self.current_sections());
         let camera = camera.unwrap_or(page.view.is_some());
         let tags = tags.unwrap_or(page.tags.is_some());
         let stored = page.positions.as_ref();
@@ -234,6 +261,7 @@ impl Document {
             tags: tags.then(|| self.scene.hidden_tags()),
             positions,
             joints,
+            sections,
         };
         self.scene
             .change_page(id, page)
@@ -243,6 +271,7 @@ impl Document {
     /// Renames a scene and chooses what it stores: a part turned off is dropped, a part
     /// turned on is stored from the current state only when the scene lacks it, and a part that
     /// stays keeps what was stored.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn change_scene_changes(
         &mut self,
         id: PageId,
@@ -251,16 +280,18 @@ impl Document {
         tags: Option<bool>,
         positions: Option<&ScenePositions>,
         joints: Option<&SceneJoints>,
+        sections: Option<bool>,
     ) -> Result<SceneChange, CommandError> {
         if name.is_none()
             && camera.is_none()
             && tags.is_none()
             && positions.is_none()
             && joints.is_none()
+            && sections.is_none()
         {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "change_scene needs a name, camera, tags, positions or joints",
+                "change_scene needs a name, camera, tags, positions, joints or sections",
             ));
         }
         let page = self.page(id)?;
@@ -283,12 +314,22 @@ impl Document {
         };
         let positions = self.positions_after(positions, page.positions.as_ref(), true)?;
         let joints = self.joints_after(joints, page.joints.as_ref(), true)?;
+        let sections = match sections {
+            Some(false) => None,
+            Some(true) => Some(
+                page.sections
+                    .clone()
+                    .unwrap_or_else(|| self.current_sections()),
+            ),
+            None => page.sections.clone(),
+        };
         let page = Page {
             name: name.map_or_else(|| page.name.clone(), str::to_string),
             view,
             tags: hidden,
             positions,
             joints,
+            sections,
         };
         self.scene
             .change_page(id, page)
@@ -411,6 +452,32 @@ impl Document {
                 }
             }
         }
+        if let Some(stored) = &page.sections {
+            // Exactly the stored planes are active; a mesh with another one active drops it.
+            let contexts: Vec<(MeshId, Option<kernel::SectionId>)> = self
+                .scene
+                .meshes()
+                .map(|(m, model)| (m, model.active_section()))
+                .collect();
+            for (mesh, now) in contexts {
+                let want = stored.active.get(&mesh).copied();
+                if want != now
+                    // A plane that is gone (a file edited by hand) is skipped.
+                    && let Ok(change) = self.scene.set_active_section(mesh, want)
+                {
+                    changes.push(change);
+                }
+            }
+            let d = &mut self.section_display;
+            d.planes = stored.planes;
+            d.cuts = stored.cuts;
+            d.fill = stored.fill;
+            d.fill_color = if stored.material_fill {
+                SectionFillColor::Material
+            } else {
+                SectionFillColor::Dark
+            };
+        }
         if let Some((camera, v)) = view {
             let v = &v;
             self.camera = camera;
@@ -426,6 +493,35 @@ impl Document {
         }
         self.selected_scene = Some(id);
         Ok(SceneChange::join(changes))
+    }
+
+    /// `frame` (a copy of the model to draw) with the section planes scene `id` stores active,
+    /// and the section display it stores; `None` when the scene stores none (or does not
+    /// exist). The document is untouched.
+    pub fn frame_with_scene_sections(
+        &self,
+        mut frame: kernel::Scene,
+        id: PageId,
+    ) -> Option<(kernel::Scene, super::SectionDisplay)> {
+        let stored = self.scene.page(id)?.sections.as_ref()?;
+        let contexts: Vec<MeshId> = frame.meshes().map(|(m, _)| m).collect();
+        for mesh in contexts {
+            let want = stored.active.get(&mesh).copied();
+            if frame.mesh(mesh).and_then(|m| m.active_section()) != want {
+                let _ = frame.set_active_section(mesh, want);
+            }
+        }
+        let display = super::SectionDisplay {
+            planes: stored.planes,
+            cuts: stored.cuts,
+            fill: stored.fill,
+            fill_color: if stored.material_fill {
+                SectionFillColor::Material
+            } else {
+                SectionFillColor::Dark
+            },
+        };
+        Some((frame, display))
     }
 
     /// Every scene in order, with what it stores and whether it is selected.
@@ -444,6 +540,7 @@ impl Document {
                     .flat_map(|m| m.keys().copied().map(EntityId::Instance))
                     .collect(),
                 joints: p.joints.iter().flat_map(|m| m.keys().copied()).collect(),
+                sections: p.sections.is_some(),
                 selected: selected == Some(id),
             })
             .collect()
@@ -489,6 +586,27 @@ impl Document {
                         }
                     })
                     .collect()
+            }),
+            sections: page.sections.as_ref().map(|s| SceneSections {
+                active: s
+                    .active
+                    .iter()
+                    .map(|(m, plane)| SceneSectionPlane {
+                        context: match m {
+                            MeshId::Root => None,
+                            MeshId::Definition(d) => Some(*d),
+                        },
+                        plane: EntityId::Section(*plane),
+                    })
+                    .collect(),
+                planes: s.planes,
+                cuts: s.cuts,
+                fill: s.fill,
+                fill_color: if s.material_fill {
+                    SectionFillColor::Material
+                } else {
+                    SectionFillColor::Dark
+                },
             }),
             revision: self.revision,
         })

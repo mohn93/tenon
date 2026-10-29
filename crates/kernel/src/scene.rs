@@ -622,11 +622,15 @@ impl Scene {
         let next = m.next_id();
         self.next_id = self.next_id.max(next);
         let changes = result?;
-        Ok(if changes.is_empty() {
-            SceneChange::default()
-        } else {
-            Step::Edit(mesh, changes).into()
-        })
+        if changes.is_empty() {
+            return Ok(SceneChange::default());
+        }
+        let mut change: SceneChange = Step::Edit(mesh, changes).into();
+        // A scene storing an active plane forgets it once the plane is gone.
+        if self.pages.iter().any(|(_, p)| p.sections.is_some()) {
+            change.steps.extend(self.drop_stale_sections().steps);
+        }
+        Ok(change)
     }
 
     /// Adds an empty definition and returns its id and the step that added it.
@@ -753,6 +757,7 @@ impl Scene {
                 steps.push(self.remove_definition(id));
             }
         }
+        steps.extend(self.drop_stale_sections().steps);
         SceneChange { steps }
     }
 
@@ -937,6 +942,14 @@ impl Scene {
                 if !t.is_finite() || t.matrix3.determinant().abs() < crate::data::MIN_DETERMINANT {
                     return Err(format!(
                         "scene {id} stores a transform that is not finite and invertible"
+                    ));
+                }
+            }
+            for (m, plane) in p.sections.iter().flat_map(|s| &s.active) {
+                if self.mesh(*m).and_then(|m| m.section(*plane)).is_none() {
+                    return Err(format!(
+                        "scene {id} stores a missing section plane s{}",
+                        plane.0
                     ));
                 }
             }
