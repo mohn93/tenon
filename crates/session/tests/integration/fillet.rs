@@ -142,7 +142,15 @@ fn all_twelve_edges_of_a_box_stay_a_closed_solid() {
     let v = volume(&d, &b);
     let sharp = 24.0 - quarter_loss(r, 8) * 4.0 * (9.0 - 6.0 * r);
     let spherical = sharp - 8.0 * r.powi(3) * (1.0 - std::f64::consts::PI / 6.0);
-    assert!(v < sharp && v > spherical, "{spherical} < {v} < {sharp}");
+    // Every corner is an octant of a ball (faceted, so a little under the smooth one).
+    assert!(
+        v < spherical && spherical - v < 0.01,
+        "{v} {spherical} {sharp}"
+    );
+    // The patches are soft: 12 rounds of 9 lines and 8 patches of 108 sides.
+    let soft = mesh(&d, &b).edges().filter(|(_, e)| e.soft).count();
+    assert_eq!(soft, 12 * 9 + 8 * 108);
+    assert_eq!(mesh(&d, &b).faces().count(), 6 + 12 * 8 + 8 * 64);
 }
 
 #[test]

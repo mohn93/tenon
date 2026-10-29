@@ -758,8 +758,21 @@ first face's materials. A convex edge loses material; a concave edge gains a cov
 
 Ends, corners and validation are as for `chamfer_edges`, with the setback above in place of
 `distance` ("radius too large for edge e12" when the round would not stay inside both faces).
-Rounds of convex edges meeting at an outside corner overlap and close it: a box with all twelve
-edges rounded has corners where the three rounds cross, not spherical patches. The flat faces
+Rounds of convex edges meeting at an outside corner overlap and close it. Where exactly three
+chosen convex edges meet at a vertex with exactly three faces (a box's corner, a prism's, a
+sheared box's), the corner is a patch of the sphere of `radius` tangent to the three faces
+(centre `radius` inside each), bounded by the three rounds' end arcs, which are planar sections
+perpendicular to each edge through the sphere's centre: shared vertices, so the solid stays
+closed, and soft edges, so it shades smooth. With equal arc step counts (a box: 8 each) the
+patch is a grid of n^2 triangles (64 for a box corner); otherwise concentric rings from its
+middle point out to the arcs, kept inside the faceted rounds they border (the rings thin out
+toward the middle, and the middle point sinks into the ball when a coarse round, such as 2
+segments, would cut it). A corner whose edges are too short to hold both patches, whose faces or edges are not just those three,
+or whose patch the boolean cannot cut, keeps the crossed rounds (the three cylinders intersect in
+a sharp pinch); so do corners with one or two chosen edges. A chamfer corner (`chamfer_edges`)
+closes with the three chamfers meeting in a point. One call has one profile: unequal radii or a
+mix of chamfers and rounds at a corner come from separate calls, which stay closed solids (the
+second call's edges run into the first's rounds without a patch). The flat faces
 beside a round can still be bevelled later: round a box's four upright edges, then the loop
 around its top (the straight sides and the rounds' top edges) in a second command, with another
 radius if wanted, or chamfer an edge next to a round. Edges facing each other across a face whose
