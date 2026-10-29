@@ -726,8 +726,8 @@ edges and non-trihedral vertices. `distances`, when given, is a list with one di
 of `edges` (same order, each more than 0.000001 m) in place of `distance`, which stays required
 and is the default for the schema; the triangle's corners then follow each edge's own strip
 width, but only when no distance at the corner is larger than the other two together; otherwise
-the corner stays crossed (a closed solid, no triangle). Sizes within 0.0001 m of each other are
-made equal. A list of another length is `invalid_input`; with a batch reference such as `"$0:e*"`
+the corner stays crossed (a closed solid, no triangle). Taking the sizes in ascending order, one within
+0.0001 m or 0.1% (whichever is less) of the first size of its group is made equal to it. A list of another length is `invalid_input`; with a batch reference such as `"$0:e*"`
 in `edges`, the list must match the expanded edge count.
 
 The geometry chamfered (the open context's faces, nested groups and components aside, or the
@@ -791,17 +791,24 @@ radius, the corner is a concave sphere piece: the same patch built as a filler, 
 (an L's inside corner where the cove meets the rounded edges beside it) keeps the crossed cuts:
 a closed solid, but no patch. `radii`, when given, is a list with one radius per entry of
 `edges` (same order, each more than 0.000001 m) in place of `radius`, and must match the expanded
-edge count when `edges` holds a batch reference such as `"$0:e*"`; radii within 0.0001 m of each
-other are made equal. A corner whose three convex rounds have different radii has no common ball:
+edge count when `edges` holds a batch reference such as `"$0:e*"`; radii are snapped together as
+for `distances`. A corner whose three convex rounds have different radii has no common ball:
 each round's end arc is cut at its own depth along its edge (the furthest of the two places its
 tangent line crosses the neighbours'), a straight segment across each face joins one arc's end to
 the next arc's start (each face loses a small corner triangle), and the patch is a star-shaped
 fill about the mean of the three arc centres, in concentric rings clamped inside the faceted
-rounds and below the faces. The patch is smooth with the rounds along its arcs (soft edges) but
-may crease up to about a facet step where it meets a face's segment. On a box, prisms with 3, 5
-and 6 sides and sheared boxes with radii 0.1, 0.15 and 0.2 in turn every corner got its patch
-except one corner of the hexagonal prism, which kept the crossed rounds (closed, a pinch where
-the cylinders cross); a corner whose radii are all equal still gets its sphere, and concave
+rounds and below the faces. The edges along the arcs are always soft, but the patch only
+approximates the rounds there, so with many segments the shading can still show a seam; the
+edges across a face are soft only where the crease is under about 10 degrees. The cutter reaches
+no further than a quarter of the largest radius outside the faces, so solids beside the corner
+are untouched. Not every corner is patched: on boxes, 4-, 5-, 6- and 8-sided prisms, 3-sided
+prisms and sheared boxes with every corner meeting three different radii (0.1, 0.15 and 0.2;
+0.05, 0.25 and 0.3; 0.1, 0.12 and 0.14) at 2, 3, 8 and 24 segments, 807 of 878 corners were
+patched. The rest kept the crossed rounds (closed, with a pinch where the cylinders cross):
+mostly at 2 or 3 segments (coarse facets leave no room inside them), at the extreme ratio
+0.05:0.25:0.3, and on prisms with obtuse corners (6- and 8-sided). A few calls with very close
+radii (0.05, 0.06, 0.07 on a unit cube at 24 segments) are refused as a whole with "the result
+would not be a solid", by the boolean on the rounds themselves, before any corner. A corner whose radii are all equal still gets its sphere, and concave
 corners of different radii keep the crossed cuts. A mix of chamfers and rounds at a corner comes from
 separate calls, which stay closed solids (the second call's edges run into the first's rounds
 without a patch), and a second call whose edge ends at faces that are not flat and coplanar

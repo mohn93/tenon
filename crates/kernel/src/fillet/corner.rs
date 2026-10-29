@@ -15,6 +15,9 @@ use glam::DMat3;
 
 use super::*;
 
+/// The largest crease (radians) left soft across a face beside a patch of unequal rounds.
+const SLIGHT: f64 = 0.17;
+
 /// Caps of the cutter lie this fraction of the radius outside the faces.
 const CAP: f64 = 0.25;
 
@@ -36,6 +39,9 @@ pub(super) struct Patch {
     pub concave: bool,
     /// For a patch of rounds of different radii, the positions of its vertices.
     pub marks: Vec<DVec3>,
+    /// And the sides of its boundary that lie on the rounds' end arcs (the others lie across
+    /// the faces).
+    pub arc_sides: Vec<[DVec3; 2]>,
 }
 
 /// The patches for the fillets `cuts` (already closed at their ends) of `m`.
@@ -172,6 +178,7 @@ fn patch(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3], concave: bool) -
         flat: None,
         concave,
         marks: Vec::new(),
+        arc_sides: Vec::new(),
     })
 }
 
@@ -337,27 +344,42 @@ fn patch_mixed(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<
                 first[i] = first[i].min(near + 0.15);
             }
         }
-        let layers: Vec<Vec<DVec3>> = (1..rings)
-            .map(|j| {
-                let along = j as f64 / (rings - 1) as f64;
-                let points = ((count as f64 * j as f64 / rings as f64).round() as usize)
-                    .clamp(6.min(count), count);
-                (0..points)
-                    .map(|k| {
-                        let s = k as f64 * count as f64 / points as f64;
-                        let (i0, f) = (s.floor() as usize % count, s.fract());
-                        let i1 = (i0 + 1) % count;
-                        let dir = slerp(to[i0], to[i1], f);
-                        let d = dist[i0] + (dist[i1] - dist[i0]) * f;
-                        let t = (first[i0] + (first[i1] - first[i0]) * f) * along;
-                        spot(dir, d, t)
-                    })
-                    .collect()
-            })
-            .collect();
-        if first.iter().all(|t| *t > 0.05) && layers.iter().flatten().all(|p| inside(*p)) {
-            layers_at = layers;
-            found = true;
+        let build = |first: &[f64]| -> Vec<Vec<DVec3>> {
+            (1..rings)
+                .map(|j| {
+                    let along = j as f64 / (rings - 1) as f64;
+                    let points = ((count as f64 * j as f64 / rings as f64).round() as usize)
+                        .clamp(6.min(count), count);
+                    (0..points)
+                        .map(|k| {
+                            let s = k as f64 * count as f64 / points as f64;
+                            let (i0, f) = (s.floor() as usize % count, s.fract());
+                            let i1 = (i0 + 1) % count;
+                            let dir = slerp(to[i0], to[i1], f);
+                            let d = dist[i0] + (dist[i1] - dist[i0]) * f;
+                            let t = (first[i0] + (first[i1] - first[i0]) * f) * along;
+                            spot(dir, d, t)
+                        })
+                        .collect()
+                })
+                .collect()
+        };
+        // Points between ring samples can fall outside the faceted rounds: shrink and rebuild.
+        for _ in 0..8 {
+            if first.iter().any(|t| *t <= 0.05) {
+                break;
+            }
+            let layers = build(&first);
+            if layers.iter().flatten().all(|p| inside(*p)) {
+                layers_at = layers;
+                found = true;
+                break;
+            }
+            for t in first.iter_mut() {
+                *t *= 0.85;
+            }
+        }
+        if found {
             break;
         }
     }
@@ -410,25 +432,18 @@ fn patch_mixed(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<
     let tri = |cutter: &mut Model,
                add: &mut dyn FnMut(&mut Model, Vec<VertexId>, DVec3) -> FaceId,
                t: [VertexId; 3],
-               out: f64|
+               flip: bool|
      -> Option<FaceId> {
         let ps = t.map(|w| cutter.pos(w));
         let normal = (ps[1] - ps[0]).cross(ps[2] - ps[0]).try_normalize()?;
-        // Out of the cutter: away from the centre for the cone, toward it for the patch.
-        let side = normal.dot((ps[0] + ps[1] + ps[2]) / 3.0 - c);
-        let normal = if side * out >= 0.0 { normal } else { -normal };
-        Some(add(cutter, t.to_vec(), normal))
+        Some(add(cutter, t.to_vec(), if flip { -normal } else { normal }))
     };
     let mut add_dyn = |cutter: &mut Model, l: Vec<VertexId>, normal: DVec3| add(cutter, l, normal);
-    // The patch, facing the centre.
+    // The patch's triangles, all wound the same way round the ring.
+    let mut patch_tris: Vec<[VertexId; 3]> = Vec::new();
     let first = &layers[0];
     for i in 0..first.len() {
-        painted.push(tri(
-            &mut cutter,
-            &mut add_dyn,
-            [q, first[i], first[(i + 1) % first.len()]],
-            -1.0,
-        )?);
+        patch_tris.push([q, first[i], first[(i + 1) % first.len()]]);
     }
     for w in layers.windows(2) {
         let (inner, outer) = (&w[0], &w[1]);
@@ -446,13 +461,29 @@ fn patch_mixed(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<
                 d(&cutter, next_inner, b) <= d(&cutter, a, next_outer)
             };
             if advance_inner {
-                painted.push(tri(&mut cutter, &mut add_dyn, [a, b, next_inner], -1.0)?);
+                patch_tris.push([a, b, next_inner]);
                 i += 1;
             } else {
-                painted.push(tri(&mut cutter, &mut add_dyn, [a, b, next_outer], -1.0)?);
+                patch_tris.push([a, b, next_outer]);
                 j += 1;
             }
         }
+    }
+    // One orientation for the whole patch: its winding is consistent, so it either faces
+    // away from the centre as wound (and is turned over) or already toward it; the cone is
+    // wound the same way round and takes the opposite sign.
+    let away_from_c: f64 = patch_tris
+        .iter()
+        .map(|t| {
+            let ps = t.map(|w| cutter.pos(w));
+            (ps[1] - ps[0])
+                .cross(ps[2] - ps[0])
+                .dot((ps[0] + ps[1] + ps[2]) / 3.0 - c)
+        })
+        .sum();
+    let turn = away_from_c > 0.0;
+    for t in &patch_tris {
+        painted.push(tri(&mut cutter, &mut add_dyn, *t, turn)?);
     }
     // Skirts and cone.
     let high = 2.0 * rmax;
@@ -491,22 +522,38 @@ fn patch_mixed(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<
             &mut cutter,
             &mut add_dyn,
             [top_id, outer_ids[i], outer_ids[(i + 1) % count]],
-            1.0,
+            !turn,
         )?);
     }
     cutter.take_changes();
     if open_reason(&cutter).is_some() || signed_volume(&cutter) <= 0.0 {
         return None;
     }
-    let paint = cuts[0].1.paint;
-    let [outer_paint, inner_paint] = paint;
-    for f in painted {
+    let _ = painted;
+    // The skirts and the cone reach far; cut them off just outside the faces, so nothing
+    // beside the corner is touched.
+    let planes = [
+        (away[0], vertex + away[0] * (depth[0] + rmax)),
+        (away[1], vertex + away[1] * (depth[1] + rmax)),
+        (away[2], vertex + away[2] * (depth[2] + rmax)),
+        (n[0], vertex + n[0] * CAP * rmax),
+        (n[1], vertex + n[1] * CAP * rmax),
+        (n[2], vertex + n[2] * CAP * rmax),
+    ];
+    let clip = hexahedron(&planes)?;
+    let mut cutter = combine(&cutter, &clip, BooleanOp::Intersect).ok()??;
+    let [outer_paint, inner_paint] = cuts[0].1.paint;
+    let ids: Vec<FaceId> = cutter.faces().map(|(id, _)| id).collect();
+    for f in ids {
         let mut face = cutter.face(f).expect("face").clone();
         face.front = outer_paint;
         face.back = inner_paint;
         cutter.replace_face(f, face);
     }
     cutter.take_changes();
+    if open_reason(&cutter).is_some() || signed_volume(&cutter) <= 0.0 {
+        return None;
+    }
     Some(Patch {
         vertex: v,
         centre: c,
@@ -521,7 +568,69 @@ fn patch_mixed(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<
         flat: None,
         concave: false,
         marks,
+        arc_sides: (0..count)
+            .filter(|i| ring[*i].2.is_some())
+            .map(|i| [ring[i].0, ring[(i + 1) % count].0])
+            .collect(),
     })
+}
+
+/// The hexahedron inside `planes` (`[arc 0, arc 1, arc 2, cap 0, cap 1, cap 2]`, each a normal
+/// pointing out and a point on it; planes `k` and `k + 3` face each other along different
+/// directions, `k` with `k` of the other triple), or None when they do not bound one.
+fn hexahedron(planes: &[(DVec3, DVec3); 6]) -> Option<Model> {
+    let corner = |bits: [bool; 3]| -> Option<DVec3> {
+        let ps = [0, 1, 2].map(|k| planes[k + if bits[k] { 3 } else { 0 }]);
+        let rows = DMat3::from_cols(ps[0].0, ps[1].0, ps[2].0).transpose();
+        if rows.determinant().abs() < 1e-6 {
+            return None;
+        }
+        Some(
+            rows.inverse()
+                * DVec3::new(
+                    ps[0].0.dot(ps[0].1),
+                    ps[1].0.dot(ps[1].1),
+                    ps[2].0.dot(ps[2].1),
+                ),
+        )
+    };
+    let mut m = Model::new();
+    let mut at: HashMap<[bool; 3], VertexId> = HashMap::new();
+    for b in 0..8 {
+        let bits = [b & 1 != 0, b & 2 != 0, b & 4 != 0];
+        at.insert(bits, m.insert_vertex(corner(bits)?));
+    }
+    let mut sides: HashSet<(VertexId, VertexId)> = HashSet::new();
+    for k in 0..3 {
+        let (k1, k2) = ((k + 1) % 3, (k + 2) % 3);
+        for cap in [false, true] {
+            let l: Vec<VertexId> = [(false, false), (true, false), (true, true), (false, true)]
+                .iter()
+                .map(|(b1, b2)| {
+                    let mut bits = [false; 3];
+                    bits[k] = cap;
+                    bits[k1] = *b1;
+                    bits[k2] = *b2;
+                    at[&bits]
+                })
+                .collect();
+            let normal = planes[k + if cap { 3 } else { 0 }].0;
+            let mut l = l;
+            let pts: Vec<DVec3> = l.iter().map(|w| m.pos(*w)).collect();
+            if vector_area(&pts).dot(normal) < 0.0 {
+                l.reverse();
+            }
+            for i in 0..4 {
+                let (a, b) = (l[i], l[(i + 1) % 4]);
+                if sides.insert((a.min(b), a.max(b))) {
+                    m.insert_edge(a, b);
+                }
+            }
+            m.insert_face(Face::new(l, Vec::new(), normal));
+        }
+    }
+    m.take_changes();
+    (open_reason(&m).is_none() && signed_volume(&m) > 0.0).then_some(m)
 }
 
 /// The flat closure of three chamfers of `distance` at `v`, or None when the corner is not a
@@ -646,6 +755,7 @@ fn flat(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<Patch> 
         flat: Some(meet),
         concave: false,
         marks: Vec::new(),
+        arc_sides: Vec::new(),
     })
 }
 
@@ -1070,13 +1180,13 @@ fn took(m: &Model, p: &Patch) -> bool {
     if !p.marks.is_empty() {
         return p.marks.iter().all(|c| {
             m.vertices()
-                .any(|(_, v)| v.pos.distance(*c) < 5.0 * LENGTH_TOL.min(1e-3 * p.radius))
+                .any(|(_, v)| v.pos.distance(*c) < (5.0 * LENGTH_TOL).min(1e-3 * p.radius))
         });
     }
     if let Some(corners) = p.flat {
         return corners.iter().all(|c| {
             m.vertices()
-                .any(|(_, v)| v.pos.distance(*c) < 5.0 * LENGTH_TOL.min(1e-3 * p.radius))
+                .any(|(_, v)| v.pos.distance(*c) < (5.0 * LENGTH_TOL).min(1e-3 * p.radius))
         });
     }
     on_sphere(m, p).count() >= p.points
@@ -1120,8 +1230,20 @@ pub(super) fn soften(m: &mut Model, patches: &[Patch], done: &[usize], step: f64
                 };
                 let other = if g == f { h } else { g };
                 let (nf, no) = (face.normal, m.face(other).expect("face").normal);
-                let reach = if p.marks.is_empty() { 2.0 } else { 3.0 };
-                if (is_patch(other) || nf.angle_between(no) <= reach * step + 1e-6)
+                // A patch of unequal rounds softens along its arcs whatever the angle, and
+                // across a face only where the crease is slight.
+                let (pa, pb) = (m.pos(a), m.pos(b));
+                let on_arc = p.arc_sides.iter().any(|[u, w]| {
+                    let tol = 1e-7 * p.radius.max(1e-3);
+                    (u.distance(pa) < tol && w.distance(pb) < tol)
+                        || (u.distance(pb) < tol && w.distance(pa) < tol)
+                });
+                let slight = if p.marks.is_empty() {
+                    nf.angle_between(no) <= 2.0 * step + 1e-6
+                } else {
+                    nf.angle_between(no) <= SLIGHT
+                };
+                if (is_patch(other) || on_arc || slight)
                     && let Some(e) = m.edge_between(a, b)
                 {
                     let edge = m.edge(e).expect("edge");

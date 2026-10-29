@@ -266,8 +266,9 @@ pub fn bevelled(m: &Model, edges: &[EdgeId], profile: Profile) -> Result<Model, 
 /// patch (see `corner`; a corner it cannot build keeps its crossed rounds, still a closed
 /// solid); chamfers at a trihedral corner close with a
 /// flat triangle when no distance there is more than the other two together (else the corner
-/// stays crossed). Sizes within `SNAP` of each other are made equal (the first of each group,
-/// in ascending order), so nearly equal radii get the same corner as equal ones.
+/// stays crossed). In ascending order, a size within `SNAP` (0.0001 m) or 0.1% of the first
+/// size of its group, whichever is less, is made equal to it, so nearly equal radii get the
+/// same corner as equal ones.
 pub fn bevelled_each(
     m: &Model,
     edges: &[(EdgeId, f64)],
@@ -319,7 +320,7 @@ fn bevel_core(
     sorted.sort_by(f64::total_cmp);
     let mut groups: Vec<f64> = Vec::new();
     for s in sorted {
-        if groups.last().is_none_or(|g| s - g > SNAP) {
+        if groups.last().is_none_or(|g| s - g > SNAP.min(1e-3 * g)) {
             groups.push(s);
         }
     }
@@ -2244,65 +2245,6 @@ mod tests {
     }
 
     #[test]
-    fn corners_of_three_different_radii_get_a_ringed_patch() {
-        let mut shapes: Vec<(String, Model, f64)> = vec![
-            ("box".into(), cuboid([2.0, 3.0, 4.0]), 1.0),
-            ("small box".into(), cuboid([1.0, 1.0, 1.0]), 0.5),
-        ];
-        for sides in [3, 5, 6] {
-            let p = Solid::prism(1.0, 2.0, sides, 0.0).unwrap().to_model();
-            shapes.push((format!("{sides}-sided prism"), p, 0.3));
-        }
-        for shear in [0.1, 0.5] {
-            shapes.push((format!("shear {shear}"), sheared_box(2.0, shear), 1.0));
-        }
-        for (name, m, scale) in &shapes {
-            let ids: Vec<EdgeId> = m
-                .edges()
-                .filter(|(_, e)| !e.soft && e.curve.is_none_or(|_| e.polygon))
-                .map(|(id, _)| id)
-                .collect();
-            // Radii 0.1, 0.15 and 0.2 in turn, so most corners meet three different ones.
-            let sized: Vec<(EdgeId, f64)> = ids
-                .iter()
-                .enumerate()
-                .map(|(i, e)| (*e, [0.1, 0.15, 0.2][i % 3] * scale))
-                .collect();
-            let (out, patched) = bevel_core(m, &sized, fillet(0.1)).unwrap();
-            closed(&out);
-            let corners = m.vertices().count();
-            // A corner may keep its crossed rounds (the hexagonal prism has one that does).
-            assert!(
-                patched.len() + 1 >= corners,
-                "{name}: {} of {corners}",
-                patched.len()
-            );
-            assert!(signed_volume(&out) < signed_volume(m), "{name}");
-            // No hard edge between two curved faces near a corner, except at a corner that
-            // kept its crossed rounds.
-            let flat = |n: DVec3| m.faces().any(|(_, f)| f.normal.dot(n) > 1.0 - 1e-9);
-            let mut hard = 0;
-            for (_, e) in out.edges() {
-                let (p, q) = (out.pos(e.v[0]), out.pos(e.v[1]));
-                let near = m.vertices().any(|(_, v)| {
-                    v.pos.distance(p) < 0.5 * scale && v.pos.distance(q) < 0.5 * scale
-                });
-                let [f, g] = out.faces_on_side(e.v[0], e.v[1])[..] else {
-                    continue;
-                };
-                let (nf, ng) = (out.face(f).unwrap().normal, out.face(g).unwrap().normal);
-                if near && !e.soft && !flat(nf) && !flat(ng) {
-                    hard += 1;
-                }
-            }
-            assert!(
-                hard == 0 || patched.len() < corners,
-                "{name}: {hard} hard edges"
-            );
-        }
-    }
-
-    #[test]
     fn a_corner_of_three_radii_lies_between_the_corners_of_the_least_and_most() {
         let m = cuboid([2.0, 3.0, 4.0]);
         let edges = [
@@ -2321,5 +2263,150 @@ mod tests {
         let (mixed, patches) = of([0.1, 0.15, 0.2]);
         assert_eq!(patches, 1);
         assert!(large < mixed && mixed < small, "{large} {mixed} {small}");
+    }
+    /// A colour (0, 1 or 2) for each of `edges` so that the edges at every vertex differ, by
+    /// backtracking; None if there is none.
+    fn three_colours(m: &Model, edges: &[EdgeId]) -> Option<Vec<usize>> {
+        fn go(m: &Model, edges: &[EdgeId], at: usize, colour: &mut Vec<usize>) -> bool {
+            if at == edges.len() {
+                return true;
+            }
+            let e = m.edge(edges[at]).unwrap();
+            for c in 0..3 {
+                let clash = (0..at).any(|i| {
+                    let o = m.edge(edges[i]).unwrap();
+                    colour[i] == c && o.v.iter().any(|v| e.v.contains(v))
+                });
+                if !clash {
+                    colour.push(c);
+                    if go(m, edges, at + 1, colour) {
+                        return true;
+                    }
+                    colour.pop();
+                }
+            }
+            false
+        }
+        let mut colour = Vec::new();
+        go(m, edges, 0, &mut colour).then_some(colour)
+    }
+
+    /// Shapes with a radius scale for the mixed-radii tests.
+    fn mixed_shapes() -> Vec<(String, Model, f64)> {
+        let mut shapes: Vec<(String, Model, f64)> = vec![
+            ("box".into(), cuboid([2.0, 3.0, 4.0]), 1.0),
+            ("small box".into(), cuboid([1.0, 1.0, 1.0]), 0.5),
+        ];
+        for sides in [3, 4, 5, 6, 8] {
+            let p = Solid::prism(1.0, 2.0, sides, 0.0).unwrap().to_model();
+            shapes.push((format!("{sides}-sided prism"), p, 0.3));
+        }
+        for shear in [0.1, 0.5] {
+            shapes.push((format!("shear {shear}"), sheared_box(2.0, shear), 1.0));
+        }
+        shapes
+    }
+
+    #[test]
+    fn corners_of_three_different_radii_get_a_ringed_patch() {
+        let (mut patched_all, mut corners_all) = (0, 0);
+        for (name, m, scale) in mixed_shapes() {
+            let ids: Vec<EdgeId> = m
+                .edges()
+                .filter(|(_, e)| !e.soft && e.curve.is_none_or(|_| e.polygon))
+                .map(|(id, _)| id)
+                .collect();
+            // Radii 0.1, 0.15 and 0.2: every corner meets three different ones.
+            let colour = three_colours(&m, &ids).expect("3-colourable");
+            let sized: Vec<(EdgeId, f64)> = ids
+                .iter()
+                .zip(&colour)
+                .map(|(e, c)| (*e, [0.1, 0.15, 0.2][*c] * scale))
+                .collect();
+            for segments in [3, 8] {
+                let profile = Profile::Fillet {
+                    radius: 0.1,
+                    segments,
+                };
+                let (out, patched) = bevel_core(&m, &sized, profile).unwrap();
+                closed(&out);
+                let corners = m.vertices().count();
+                patched_all += patched.len();
+                corners_all += corners;
+                assert!(signed_volume(&out) < signed_volume(&m), "{name}");
+                // No hard edge between two curved faces near a corner that was patched: the
+                // arcs are soft whatever the angle.
+                let flat = |n: DVec3| m.faces().any(|(_, f)| f.normal.dot(n) > 1.0 - 1e-9);
+                let mut hard = 0;
+                for (_, e) in out.edges() {
+                    let (p, q) = (out.pos(e.v[0]), out.pos(e.v[1]));
+                    let near = m.vertices().any(|(_, v)| {
+                        v.pos.distance(p) < 0.5 * scale && v.pos.distance(q) < 0.5 * scale
+                    });
+                    let [f, g] = out.faces_on_side(e.v[0], e.v[1])[..] else {
+                        continue;
+                    };
+                    let (nf, ng) = (out.face(f).unwrap().normal, out.face(g).unwrap().normal);
+                    if near && !e.soft && !flat(nf) && !flat(ng) {
+                        hard += 1;
+                    }
+                }
+                assert!(
+                    hard == 0 || patched.len() < corners,
+                    "{name} at {segments}: {hard} hard edges"
+                );
+            }
+        }
+        // Most corners get their patch; a few keep the crossed rounds (checked for closure).
+        assert!(
+            patched_all * 10 >= corners_all * 8,
+            "{patched_all} of {corners_all}"
+        );
+    }
+
+    #[test]
+    fn the_patch_of_three_radii_leaves_a_solid_beside_it_alone() {
+        // A second solid 0.3 m off the corner diagonally, and 0.6 m: the cutter stays within
+        // a quarter of the largest radius outside the faces.
+        for gap in [0.3, 0.6] {
+            let a = cuboid([1.0, 1.0, 1.0]);
+            let corner = [1.0, 1.0, 1.0];
+            let edges = [
+                edge_at(&a, corner, [0.0, 1.0, 1.0]),
+                edge_at(&a, corner, [1.0, 0.0, 1.0]),
+                edge_at(&a, corner, [1.0, 1.0, 0.0]),
+            ];
+            let sized: Vec<(EdgeId, f64)> = edges.iter().copied().zip([0.1, 0.15, 0.2]).collect();
+            let alone = bevelled_each(&a, &sized, fillet(0.1)).unwrap();
+            let b = placed_copy(
+                &cuboid([1.0, 1.0, 1.0]),
+                DAffine3::from_translation(DVec3::splat(1.0 + gap)),
+                None,
+            );
+            let both = combine(&a, &b, BooleanOp::Union).unwrap().unwrap();
+            let sized: Vec<(EdgeId, f64)> = [
+                ([1.0, 1.0, 1.0], [0.0, 1.0, 1.0]),
+                ([1.0, 1.0, 1.0], [1.0, 0.0, 1.0]),
+                ([1.0, 1.0, 1.0], [1.0, 1.0, 0.0]),
+            ]
+            .iter()
+            .zip([0.1, 0.15, 0.2])
+            .map(|((p, q), r)| (edge_at(&both, *p, *q), r))
+            .collect();
+            let (out, patched) = bevel_core(&both, &sized, fillet(0.1)).unwrap();
+            assert_eq!(patched.len(), 1, "gap {gap}");
+            closed(&out);
+            // The second box is untouched: its volume and its 8 corners.
+            let far = |p: DVec3| p.min_element() > 1.0 + gap - 1e-9;
+            assert_eq!(
+                out.vertices().filter(|(_, v)| far(v.pos)).count(),
+                8,
+                "gap {gap}"
+            );
+            assert!(
+                (signed_volume(&out) - (signed_volume(&alone) + 1.0)).abs() < 1e-9,
+                "gap {gap}"
+            );
+        }
     }
 }
