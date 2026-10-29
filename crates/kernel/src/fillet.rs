@@ -346,8 +346,12 @@ fn bevel_core(
         let [a, b] = e.v;
         if m.faces_on_side(a, b).is_empty() && m.faces_on_side(b, a).is_empty() {
             let (pa, pb) = (m.pos(a), m.pos(b));
-            let va = rest.find_vertex(pa).unwrap_or_else(|| rest.insert_vertex(pa));
-            let vb = rest.find_vertex(pb).unwrap_or_else(|| rest.insert_vertex(pb));
+            let va = rest
+                .find_vertex(pa)
+                .unwrap_or_else(|| rest.insert_vertex(pa));
+            let vb = rest
+                .find_vertex(pb)
+                .unwrap_or_else(|| rest.insert_vertex(pb));
             rest.insert_edge_like(va, vb, e);
         }
     }
@@ -1120,7 +1124,10 @@ mod tests {
         assert!((signed_volume(&r) - (32.0 - 0.125 * 4.0 + 1.0)).abs() < 1e-9);
         assert!(has_vertex(&r, [0.0, 0.0, 3.0]) && has_vertex(&r, [0.0, 0.0, 2.0]));
         // A round of the same size leaves the block alone too.
-        let round = Profile::Fillet { radius: 0.5, segments: 4 };
+        let round = Profile::Fillet {
+            radius: 0.5,
+            segments: 4,
+        };
         let r = bevelled(&m, &[e], round).unwrap();
         assert_eq!(open_reason(&r), None);
         assert!(has_vertex(&r, [0.0, 0.0, 3.0]) && has_vertex(&r, [0.0, 0.0, 2.0]));
