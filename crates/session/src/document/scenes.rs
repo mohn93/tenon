@@ -271,6 +271,7 @@ impl Document {
     /// Renames a scene and chooses what it stores: a part turned off is dropped, a part
     /// turned on is stored from the current state only when the scene lacks it, and a part that
     /// stays keeps what was stored.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn change_scene_changes(
         &mut self,
         id: PageId,
