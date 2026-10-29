@@ -375,10 +375,11 @@ pub struct DefGeometry {
     /// (an unknown record, or a guide without its point or line), skipped. Always 0 for
     /// legacy files.
     pub unread_guides: u32,
-    /// 2021+ files: the linear dimensions and pushpin-leader text labels read (legacy files
-    /// have none: their annotations are counted in `legacy::ReadStats::annotations`).
+    /// The linear dimensions and pushpin-leader text labels read (2017-2020 files too, built
+    /// in `legacy.rs`; `legacy::ReadStats::annotations` counts every record seen).
     pub annotations: Vec<crate::annotations::RawAnnotation>,
-    /// 2021+ files: what the annotation lists held that is not in `annotations`.
+    /// What the annotation lists held that is not in `annotations` (no radial count for a
+    /// 2017-2020 file, whose radial dimensions are not recognised).
     pub annotation_skips: crate::annotations::AnnotationSkips,
 }
 
