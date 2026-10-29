@@ -27,12 +27,7 @@ impl Document {
         if !(distance.is_finite() && distance > MIN_SIZE) {
             return Err(invalid(format!("distance must be more than {MIN_SIZE} m")));
         }
-        self.bevel_changes(
-            instance,
-            edges,
-            Profile::Chamfer { distance },
-            distances,
-        )
+        self.bevel_changes(instance, edges, Profile::Chamfer { distance }, distances)
     }
 
     /// `fillet_edges`: as `chamfer_edges`, rounding with `radius` in `segments` (default 8)

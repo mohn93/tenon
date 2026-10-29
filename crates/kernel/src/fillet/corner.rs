@@ -82,12 +82,7 @@ pub(super) fn patches(m: &Model, cuts: &[(EdgeId, EdgeCut)], profile: Profile) -
 }
 
 /// The patch at `v` for three fillet cuts, or None when the corner is not a plain trihedral one.
-fn patch(
-    m: &Model,
-    v: VertexId,
-    cuts: [&(EdgeId, EdgeCut); 3],
-    concave: bool,
-) -> Option<Patch> {
+fn patch(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3], concave: bool) -> Option<Patch> {
     let Profile::Fillet { radius, .. } = cuts[0].1.profile else {
         return None;
     };
@@ -136,7 +131,12 @@ fn patch(
             .map(|(e, c)| (*e, c))?;
         let along = if cut.va == v { cut.u } else { -cut.u };
         let foot = cut.a + cut.u * (centre - cut.a).dot(cut.u);
-        let mut points: Vec<DVec3> = cut.profile.profile(cut).into_iter().map(|o| foot + o).collect();
+        let mut points: Vec<DVec3> = cut
+            .profile
+            .profile(cut)
+            .into_iter()
+            .map(|o| foot + o)
+            .collect();
         if cut.f1 != faces[k1] {
             points.reverse();
         }
@@ -205,7 +205,9 @@ fn flat(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<Patch> 
         }
         meet[k] = vertex + ea * s + eb * t;
     }
-    let mut across = (meet[1] - meet[0]).cross(meet[2] - meet[0]).try_normalize()?;
+    let mut across = (meet[1] - meet[0])
+        .cross(meet[2] - meet[0])
+        .try_normalize()?;
     if across.dot(vertex - meet[0]) > 0.0 {
         across = -across;
     }
@@ -668,12 +670,7 @@ pub(super) fn apply(m: Model, patches: &[Patch]) -> (Model, Vec<usize>) {
     (acc, done)
 }
 
-fn apply_all(
-    m: Model,
-    patches: &[Patch],
-    some: &[usize],
-    op: BooleanOp,
-) -> (Model, Vec<usize>) {
+fn apply_all(m: Model, patches: &[Patch], some: &[usize], op: BooleanOp) -> (Model, Vec<usize>) {
     let tools: Vec<Model> = some.iter().map(|i| patches[*i].cutter.clone()).collect();
     let mut acc = m.clone();
     let mut ok = true;

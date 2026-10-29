@@ -1723,7 +1723,10 @@ mod tests {
         let (a, b, c) = (2.0 - d, 3.0 - d, 4.0 - d);
         let prisms = d * d / 2.0 * (a + b + c);
         let removed = signed_volume(&m) - signed_volume(&r);
-        assert!(removed > prisms && removed < prisms + d * d * d * 2.0, "{removed}");
+        assert!(
+            removed > prisms && removed < prisms + d * d * d * 2.0,
+            "{removed}"
+        );
     }
 
     #[test]
@@ -1748,7 +1751,9 @@ mod tests {
             for (_, corner) in m.vertices() {
                 let near = out.faces().filter(|(_, f)| {
                     f.outer.len() == 3
-                        && f.outer.iter().all(|v| out.pos(*v).distance(corner.pos) < 4.0 * d)
+                        && f.outer
+                            .iter()
+                            .all(|v| out.pos(*v).distance(corner.pos) < 4.0 * d)
                 });
                 assert_eq!(near.count(), 1, "{name} at {}", corner.pos);
             }
@@ -2185,5 +2190,4 @@ mod tests {
             Err(BevelError::Invalid(_))
         ));
     }
-
 }
