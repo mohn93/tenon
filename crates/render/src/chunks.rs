@@ -300,6 +300,28 @@ impl ChunkPlan {
         camera: &Camera,
         pick: impl Fn(usize, f32) -> Option<(usize, Range<u32>)>,
     ) -> Runs {
+        self.visible_inner(camera, pick, 0.0, true)
+    }
+
+    /// Like `visible`, but for things drawn wider than their primitives, by up to
+    /// `reach_pixels`: the guard grows by that much, and no chunk is left out for being small.
+    pub fn visible_wide(&self, camera: &Camera, reach_pixels: f32) -> Runs {
+        self.visible_inner(camera, |_, _| None, reach_pixels, false)
+    }
+
+    fn visible_inner(
+        &self,
+        camera: &Camera,
+        pick: impl Fn(usize, f32) -> Option<(usize, Range<u32>)>,
+        reach_pixels: f32,
+        skip_small: bool,
+    ) -> Runs {
+        // The reach as a fraction of the half view, the smaller side's (clip space is -1..1).
+        let reach = if reach_pixels.is_finite() && reach_pixels > 0.0 {
+            2.0 * reach_pixels / camera.viewport.x.min(camera.viewport.y).max(1.0) as f32
+        } else {
+            0.0
+        };
         let m = camera.view_proj_f32();
         let mut runs = Runs::default();
         for (k, c) in self.chunks.iter().enumerate() {
@@ -313,7 +335,7 @@ impl ChunkPlan {
                     if k & 4 == 0 { c.lo.z } else { c.hi.z },
                 );
                 let q: Vec4 = m * p.extend(1.0);
-                let g = GUARD * q.w;
+                let g = (GUARD + reach) * q.w;
                 // Signed distances to the six planes of the view volume (0 <= z <= w),
                 // loosened by the guard; inside where not negative.
                 let d = [
@@ -351,7 +373,7 @@ impl ChunkPlan {
                 });
                 let px =
                     (hi - lo) * 0.5 * Vec2::new(camera.viewport.x as f32, camera.viewport.y as f32);
-                if f64::from(px.length()) < SMALL_PIXELS {
+                if skip_small && f64::from(px.length()) < SMALL_PIXELS {
                     continue;
                 }
             }
@@ -584,5 +606,24 @@ mod tests {
         let v = [[0.0, 0.0, 0.0], [0.0, 0.9, 0.0], [0.0, 0.9, 0.0001]];
         let p = ChunkPlan::new(3, &[], 3, CHUNK_PRIMITIVES, &|i| v[i], &|_| true);
         assert!(p.visible(&cam).solid.is_empty());
+    }
+
+    #[test]
+    fn wide_effects_keep_tiny_chunks_and_widen_the_guard() {
+        let mut cam = Camera::new(glam::DVec2::new(64.0, 64.0));
+        cam.eye = DVec3::new(0.0, -100.0, 0.0);
+        cam.target = DVec3::ZERO;
+        let one = |x: f32| {
+            let v = [[x, 0.0, 0.0], [x, 0.001, 0.0], [x, 0.001, 0.0001]];
+            ChunkPlan::new(3, &[], 3, CHUNK_PRIMITIVES, &|i| v[i], &|_| true)
+        };
+        // Under a pixel straight ahead: dropped, unless the effect draws wider than that.
+        assert!(one(0.0).visible(&cam).solid.is_empty());
+        assert_eq!(one(0.0).visible_wide(&cam, 6.0).solid, vec![0..3]);
+        // Just beyond the guard on the side: dropped, but a 6 px profile reaches into view.
+        let x = 1.15 * (cam.fov_y as f32 / 2.0).tan() * 100.0;
+        assert!(one(x).visible(&cam).solid.is_empty());
+        assert!(one(x).visible_wide(&cam, 0.0).solid.is_empty());
+        assert_eq!(one(x).visible_wide(&cam, 6.0).solid, vec![0..3]);
     }
 }

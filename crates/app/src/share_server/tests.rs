@@ -75,8 +75,15 @@ fn connect(port: u16) -> TcpStream {
 
 fn read_reply(mut s: TcpStream) -> Reply {
     let mut raw = Vec::new();
-    let _ = s.read_to_end(&mut raw);
-    let at = find(&raw, b"\r\n\r\n").expect("a response head");
+    // Keep what arrived even if the read then fails (a reset after the head is fine).
+    let read = s.read_to_end(&mut raw);
+    let at = find(&raw, b"\r\n\r\n").unwrap_or_else(|| {
+        panic!(
+            "a response head; read result {read:?}, got {} bytes: {:?}",
+            raw.len(),
+            String::from_utf8_lossy(&raw)
+        )
+    });
     let head = String::from_utf8(raw[..at].to_vec()).unwrap();
     let status = head.split(' ').nth(1).unwrap().parse().unwrap();
     Reply {
@@ -871,4 +878,49 @@ fn the_preferred_port_is_used_when_free_and_a_free_one_otherwise() {
     cfg.preferred_port = Some(free);
     assert_eq!(Server::start(cfg).unwrap().port(), free);
     assert_eq!(PREFERRED_PORT, 47240);
+}
+
+#[test]
+fn silent_refused_clients_do_not_stall_accepting() {
+    let d = viewer();
+    let mut cfg = config(&d);
+    cfg.max_connections = 1;
+    cfg.idle = Duration::from_secs(5);
+    let s = Server::start(cfg).unwrap();
+    let _held = connect(s.port());
+    std::thread::sleep(Duration::from_millis(200));
+    // Over the cap and silent, but held open.
+    let silent: Vec<TcpStream> = (0..20).map(|_| connect(s.port())).collect();
+    let t = Instant::now();
+    assert_eq!(get(s.port(), "/").status, 503);
+    assert!(
+        t.elapsed() < Duration::from_millis(700),
+        "the refusal took {:?}",
+        t.elapsed()
+    );
+    drop(silent);
+}
+
+#[test]
+fn a_refused_client_that_sends_late_still_reads_the_503() {
+    let d = viewer();
+    let mut cfg = config(&d);
+    cfg.max_connections = 1;
+    cfg.idle = Duration::from_secs(5);
+    let s = Server::start(cfg).unwrap();
+    let _held = connect(s.port());
+    std::thread::sleep(Duration::from_millis(200));
+    let mut c = connect(s.port());
+    std::thread::sleep(Duration::from_millis(250));
+    c.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+    assert_eq!(read_reply(c).status, 503);
+}
+
+#[test]
+fn a_bad_request_with_a_body_and_a_non_utf8_header_is_still_answered() {
+    let d = viewer();
+    let s = start(&d);
+    let mut req = b"GET / HTTP/9.9\r\nX-Bad: \xff\xfe\r\nContent-Length: 4000\r\n\r\n".to_vec();
+    req.extend_from_slice(&[b'x'; 4000]);
+    assert_eq!(raw(s.port(), &req).status, 400);
 }

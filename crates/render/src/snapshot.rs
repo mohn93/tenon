@@ -80,6 +80,12 @@ impl Snapshotter {
         self.renderer.set_color_by_tag(on);
     }
 
+    /// Sets how many triangles (or edges) a model needs to be drawn by spatial chunk (see
+    /// [`Renderer::set_culling_from`]); 0 culls every model. For tests.
+    pub fn set_culling_from(&mut self, count: usize) {
+        self.renderer.set_culling_from(count);
+    }
+
     /// Draws faces as glass and hidden entities ghosted in the captures from now on (the
     /// default draws neither).
     pub fn set_glass_view(&mut self, view: GlassView) {

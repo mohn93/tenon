@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 
 use glam::{DVec2, DVec3};
-use kernel::{DefinitionKind, EntityId, MeshId, Model, Scene};
+use kernel::{DefinitionKind, EdgeStyle, EntityId, MeshId, Model, Scene, StyleSettings};
 use render::{HoverLook, Viewport};
 use session::Camera;
 
@@ -21,10 +21,19 @@ fn row() -> (Scene, EntityId) {
 
 /// `row` with `count` squares.
 fn row_of(count: u32) -> (Scene, EntityId) {
+    row_with(count, false)
+}
+
+/// `row_of`, each square split by a diagonal into two coplanar faces when `split`: the
+/// diagonal is never a profile, so the profile pass has an index list of the other edges.
+fn row_with(count: u32, split: bool) -> (Scene, EntityId) {
     let mut m = Model::new();
     let p = |x: f64, y: f64| DVec3::new(x, y, 0.0);
     m.add_polygon(&[p(0.0, 0.0), p(4.0, 0.0), p(4.0, 4.0), p(0.0, 4.0)])
         .unwrap();
+    if split {
+        m.add_edge(p(0.0, 0.0), p(4.0, 4.0)).unwrap();
+    }
     let edges: Vec<_> = m.edges().map(|(id, _)| id).collect();
     let faces: Vec<_> = m.faces().map(|(id, _)| id).collect();
     let mut s = Scene::from_root(m);
@@ -281,5 +290,65 @@ fn a_model_that_grows_past_the_threshold_is_chunked_on_the_same_renderer() {
         whole.set_scene(scene, &[], &BTreeSet::new());
         assert_eq!(r.visible_triangles(&cam).is_some(), chunked);
         assert!(screen.draw(&mut r, &cam, full, &[]) == screen.draw(&mut whole, &cam, full, &[]));
+    }
+}
+
+fn edge_effects(edges: EdgeStyle) -> StyleSettings {
+    StyleSettings {
+        edges,
+        ..StyleSettings::default()
+    }
+}
+
+#[test]
+fn profile_and_endpoint_edges_out_of_view_are_not_drawn_and_the_picture_is_the_same() {
+    let Some(screen) = Offscreen::new() else {
+        return;
+    };
+    // Split squares: the diagonals are no profile candidates, so the passes draw index ranges.
+    let (scene, _) = row_with(SQUARES, true);
+    let full = Viewport::full((W, H));
+    let styles = [
+        edge_effects(EdgeStyle {
+            profiles: Some(6.0),
+            ..EdgeStyle::default()
+        }),
+        edge_effects(EdgeStyle {
+            endpoints: Some(8.0),
+            ..EdgeStyle::default()
+        }),
+        edge_effects(EdgeStyle {
+            profiles: Some(6.0),
+            endpoints: Some(8.0),
+            ..EdgeStyle::default()
+        }),
+    ];
+    let cameras = [
+        near_start(),
+        camera_at(
+            DVec3::new(1750.0, -60.0, 40.0),
+            DVec3::new(1750.0, 0.0, 0.0),
+        ),
+    ];
+    for style in &styles {
+        let make = |from: usize| {
+            let mut r = screen.renderer();
+            r.set_model_style(Some(style));
+            r.set_culling_from(from);
+            r.set_scene(&scene, &[], &BTreeSet::new());
+            r
+        };
+        let (mut culled, mut whole) = (make(100), make(usize::MAX));
+        for cam in &cameras {
+            if style.edges.profiles.is_some() {
+                let (drawn, all) = culled.visible_profile_edges(cam).expect("culled by chunk");
+                assert_eq!(all, 4 * SQUARES, "the diagonals are left out of the list");
+                assert!(drawn > 0 && drawn < all / 2, "drew {drawn} of {all}");
+            }
+            let a = screen.draw(&mut culled, cam, full, &[]);
+            let b = screen.draw(&mut whole, cam, full, &[]);
+            assert!(coloured(&b) > 500 || b.iter().any(|&v| v != b[0]));
+            assert!(a == b, "culling changed the picture of {style:?}");
+        }
     }
 }

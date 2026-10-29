@@ -116,6 +116,10 @@ fn snapshotter(style: Option<&StyleSettings>) -> Option<Snapshotter> {
         return None;
     };
     snap.set_model_style(style);
+    // TENON_TEST_CULL=1 runs these with every model culled by chunk: same pictures expected.
+    if std::env::var_os("TENON_TEST_CULL").is_some() {
+        snap.set_culling_from(0);
+    }
     Some(snap)
 }
 
@@ -766,4 +770,51 @@ fn a_soft_ridge_between_nearly_flat_faces_is_a_silhouette() {
         column.first().is_some_and(|r| r.start <= 55),
         "the ridge profile is drawn: {column:?}"
     );
+}
+
+/// Pictures with culling by chunk forced on (every model chunked) and off, for scenes with
+/// profiles, endpoints and sketchy edges. `TENON_TEST_CULL=1` runs the whole file culled.
+#[test]
+fn culling_every_model_by_chunk_does_not_change_the_pictures() {
+    let marked = style(EdgeStyle {
+        profiles: Some(8.0),
+        endpoints: Some(12.0),
+        sketchy: Some(Sketchy {
+            jitter: 3.0,
+            extension: 4.0,
+        }),
+        ..EdgeStyle::default()
+    });
+    let cases = [
+        (split_box(), profiles(8.0), front(Projection::Perspective)),
+        (split_box(), profiles(8.0), front(Projection::Parallel)),
+        (
+            split_box(),
+            marked,
+            camera([3.0, -2.5, 2.5], [3.0, 1.75, 0.5], Projection::Perspective),
+        ),
+        (
+            raised_edge(),
+            style(EdgeStyle {
+                endpoints: Some(12.0),
+                ..EdgeStyle::default()
+            }),
+            camera([0.0, -6.0, 1.0], [0.0, 0.0, 1.0], Projection::Parallel),
+        ),
+        (one_edge(), marked, edge_camera()),
+    ];
+    for (scene, style, camera) in &cases {
+        let shoot_with = |cull: bool| {
+            let mut snap = snapshotter(Some(style))?;
+            snap.set_culling_from(if cull { 0 } else { usize::MAX });
+            snap.capture(scene, &[], &BTreeSet::new(), camera, Lighting::Day, W, H)
+        };
+        let Some(whole) = shoot_with(false) else {
+            return;
+        };
+        assert!(
+            shoot_with(true).unwrap() == whole,
+            "culling changed the picture of {style:?}"
+        );
+    }
 }
