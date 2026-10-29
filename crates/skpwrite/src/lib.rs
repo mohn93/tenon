@@ -15,7 +15,7 @@ pub use doc::{
     Definition, Doc, Edge, Face, Geometry, Guide, Instance, Material, Page, PageView, Tag, Texture,
     UvPin,
 };
-pub use write::{Owner, WriteError, write};
+pub use write::{Owner, WriteError, WriteNotes, write, write_noted};
 
 /// The blank SketchUp 2017 document every file is built from: openskp's
 /// `_scaffold/blank_v17.skp`, written by the SketchUp SDK. Its splice offsets in

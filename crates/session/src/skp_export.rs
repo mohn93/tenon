@@ -155,7 +155,7 @@ pub(crate) fn encode_skp(scene: &Scene) -> Result<(Vec<u8>, SkpExportStats), Com
         root,
         pages,
     };
-    let bytes = skpwrite::write(&doc).map_err(|e| {
+    let (bytes, written) = skpwrite::write_noted(&doc).map_err(|e| {
         CommandError::new(
             ErrorKind::InvalidInput,
             format!("cannot write a SketchUp file: {e}"),
@@ -202,6 +202,11 @@ pub(crate) fn encode_skp(scene: &Scene) -> Result<(Vec<u8>, SkpExportStats), Com
         page_stats.display,
         "scene's lighting, shadow, style or display mode was not written",
         "scenes' lighting, shadow, style or display modes were not written",
+    );
+    warn(
+        written.skipped_hidden_tags,
+        "hidden tag of a scene was left out; its layer is past what a scene's list holds",
+        "hidden tags of scenes were left out; their layers are past what a scene's list holds",
     );
     warn(
         page_stats.no_tags,

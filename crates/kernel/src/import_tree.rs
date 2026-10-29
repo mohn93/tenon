@@ -268,6 +268,8 @@ impl Scene {
             && root.edges.is_empty()
             && root.guides.is_empty()
             && root.instances.is_empty()
+            && root.dimensions.is_empty()
+            && root.notes.is_empty()
         {
             return Err(KernelError::NothingToImport);
         }
@@ -754,7 +756,11 @@ impl Model {
             for dx in -1..=1 {
                 for dy in -1..=1 {
                     for dz in -1..=1 {
-                        let key = [c[0] + dx, c[1] + dy, c[2] + dz];
+                        let key = [
+                            c[0].saturating_add(dx),
+                            c[1].saturating_add(dy),
+                            c[2].saturating_add(dz),
+                        ];
                         for (id, q) in grid.get(&key).into_iter().flatten() {
                             let d = q.distance(p);
                             if d < LENGTH_TOL && best.is_none_or(|(b, _)| d < b) {

@@ -102,10 +102,8 @@ fn point_of(r: &Record, g: &DefGeometry, guide_points: &[(u64, [f64; 3])]) -> Op
                 let p = g.vertex_pos.get(3 * i..3 * i + 3)?;
                 return Some([p[0], p[1], p[2]]);
             }
-            guide_points
-                .iter()
-                .find(|(p, _)| *p == pid)
-                .map(|(_, v)| *v)
+            let at = guide_points.binary_search_by_key(&pid, |(p, _)| *p).ok()?;
+            Some(guide_points[at].1)
         }
         _ => None,
     }
@@ -218,7 +216,7 @@ fn text(rec: &Record, g: &DefGeometry, points: &[(u64, [f64; 3])]) -> Read {
 }
 
 /// Reads the component's dimension and text lists into `g`, counting every element against
-/// `budget`. `guide_points` are the component's guide points by pid, which a text label may
+/// `budget`. `guide_points` are the component's guide points sorted by pid, which a text label may
 /// be attached to.
 pub(crate) fn read_annotations(
     payload: &[u8],
@@ -306,7 +304,7 @@ mod tests {
                 &rec(
                     t::INSTANCE_PATH,
                     &cat(&[
-                        rec(t::INSTANCE_PATH_LEAF_PID_REF, &l.to_le_bytes()[..2]),
+                        rec(t::INSTANCE_PATH_LEAF_PID_REF, &l.to_le_bytes()[..4]),
                         rec(t::INSTANCE_PATH_INSTANCE_PID_REFS, &[]),
                     ]),
                 ),
@@ -478,6 +476,29 @@ mod tests {
                 unread: 1,
             }
         );
+    }
+
+    #[test]
+    fn many_labels_on_many_guide_points_are_found_by_binary_search() {
+        // 100,000 labels, each on its own guide point: a linear search per label would be
+        // 10^10 steps.
+        const N: u64 = 100_000;
+        let points: Vec<(u64, [f64; 3])> = (1..=N).map(|p| (p, [p as f64, 0.0, 0.0])).collect();
+        let labels: Vec<Vec<u8>> = (1..=N)
+            .map(|p| text_rec(2, point(3, [0.0; 3], Some(p)), "x"))
+            .collect();
+        let payload = rec(t::COMPONENT_TEXTS, &labels.concat());
+        let mut g = DefGeometry::default();
+        let mut budget = 10 * N;
+        let started = std::time::Instant::now();
+        read_annotations(&payload, &mut g, &points, &mut budget).unwrap();
+        assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+        assert_eq!(g.annotations.len(), N as usize);
+        assert_eq!(g.annotation_skips.unread, 0);
+        let RawAnnotation::Leader { anchor, .. } = &g.annotations[41] else {
+            panic!()
+        };
+        assert_eq!(anchor[0], 42.0);
     }
 
     #[test]

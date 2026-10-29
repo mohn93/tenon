@@ -185,6 +185,34 @@ fn scenes_cross_the_slot_escape() {
 }
 
 #[test]
+fn hidden_tags_with_layer_slots_past_the_limit_are_left_out_and_counted() {
+    // Textured materials take two slots each: 16,378 of them end the materials' own slots
+    // just under 0x7fff and put every tag's layer slot past it.
+    let mut d = doc(0, three_pages());
+    d.materials = (0..16_378)
+        .map(|i| Material {
+            name: format!("M{i}"),
+            rgba: [1, 2, 3, 255],
+            opacity: 1.0,
+            texture: Some(skpwrite::Texture {
+                bytes: crate::png_2x2(),
+                width: 1.0,
+                height: 1.0,
+            }),
+        })
+        .collect();
+    let (bytes, notes) = skpwrite::write_noted(&d).expect("writes");
+    // "Front" hides two tags, "Tags only" one.
+    assert_eq!(notes.skipped_hidden_tags, 3);
+    let (_, index, _) = read(&bytes);
+    assert_eq!(index.scenes.len(), 3);
+    assert!(hidden(&index, &index.scenes[0]).is_empty());
+    // Within the limit nothing is left out.
+    let (_, notes) = skpwrite::write_noted(&doc(0, three_pages())).unwrap();
+    assert_eq!(notes.skipped_hidden_tags, 0);
+}
+
+#[test]
 fn the_same_scenes_give_the_same_bytes() {
     let a = write(&doc(0, three_pages())).unwrap();
     let b = write(&doc(0, three_pages())).unwrap();

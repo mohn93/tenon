@@ -759,6 +759,26 @@ fn dimensions_and_notes_anchor_to_vertices_within_the_tolerance() {
     assert!(matches!(anchor, Anchor::Point(_)) && text.is_none());
     s.validate().unwrap();
 
+    // A root holding only a dimension imports (it is something to import), and a point
+    // far beyond any coordinate limit does not overflow the vertex search.
+    let only = ImportTree {
+        definitions: vec![],
+        root: ImportGeometry {
+            dimensions: vec![ImportDimension {
+                a: DVec3::new(1e300, 0.0, 0.0),
+                b: DVec3::new(-1e300, 0.0, 0.0),
+                offset: DVec3::Y,
+                tag: None,
+            }],
+            ..Default::default()
+        },
+    };
+    let mut s = Scene::new();
+    let (_, report, _) = s
+        .import_tree(MeshId::Root, &only, DefinitionKind::Group, "Only")
+        .unwrap();
+    assert_eq!(report.dimensions, 1);
+
     // Past the cap, or not finite, or on a tag the scene lacks: refused, nothing changes.
     let many = ImportTree {
         definitions: vec![],

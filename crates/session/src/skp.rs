@@ -118,6 +118,11 @@ pub(crate) struct SkpNotes {
     pub unusable_views: usize,
     /// The file's scenes past `MAX_IMPORT_SCENES`, not imported.
     pub dropped_scenes: usize,
+    /// Hidden tags of scenes that are not in the model: Layer0, or a layer past
+    /// `MAX_IMPORT_TAGS` (counted per scene).
+    pub lost_hidden_tags: usize,
+    /// Notes whose text was cut to the note limits.
+    pub shortened_text: usize,
     /// Materials used past `MAX_IMPORT_MATERIALS`, imported as no material (set by the
     /// caller, which counts the materials built faces keep).
     pub dropped_materials: usize,
@@ -208,6 +213,16 @@ impl SkpNotes {
             self.dropped_scenes,
             &format!("scene past the {MAX_IMPORT_SCENES} an import may add was left off"),
             &format!("scenes past the {MAX_IMPORT_SCENES} an import may add were left off"),
+        );
+        say(
+            self.lost_hidden_tags,
+            "hidden tag of a scene is not in the model (Layer0, or past the tag limit); the scene shows it",
+            "hidden tags of scenes are not in the model (Layer0, or past the tag limit); the scenes show them",
+        );
+        say(
+            self.shortened_text,
+            "note's text was shortened to the note limits",
+            "notes' texts were shortened to the note limits",
         );
         say(
             self.unusable_views,
@@ -436,11 +451,12 @@ pub(crate) fn read_skp(
     notes.dropped_tags = tags.dropped;
     // Both containers' scenes: a 2017-2020 file's layer ids are list positions, the same
     // numbering its `LayerDef`s and its scenes' hidden tags use.
-    match add_pages(document, &index.scenes, &tags.ids, unit) {
+    match add_pages(document, &index.scenes, &index.layers, &tags.ids, unit) {
         Ok(pages) => {
             notes.added_pages = pages.added;
             notes.unusable_views = pages.unusable_views;
             notes.dropped_scenes = pages.dropped;
+            notes.lost_hidden_tags = pages.lost_hidden_tags;
         }
         Err(e) => {
             remove_added(document, &notes);
@@ -890,6 +906,21 @@ fn geometry(
     })
 }
 
+/// `text` cut to the note limits (the first `MAX_NOTE_LINES` lines, then the first
+/// `MAX_NOTE_CHARS` characters); None when nothing is left.
+fn shorten_note_text(text: &str) -> Option<String> {
+    let mut cut: String = text
+        .lines()
+        .take(kernel::MAX_NOTE_LINES)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .chars()
+        .take(kernel::MAX_NOTE_CHARS)
+        .collect();
+    cut.truncate(cut.trim_end().len());
+    kernel::check_note_text(&cut).ok().map(|()| cut)
+}
+
 /// A mesh's dimensions and leader notes in meters (`unit` per inch), counting what is left
 /// out in `notes`: a number that is not finite, a point (the leader's text included, or a
 /// dimension line's end) beyond `MAX_COORDINATE`, text that is too long, and what is past
@@ -952,8 +983,9 @@ fn annotations(
                 let text = match text.trim() {
                     "" => None,
                     _ => {
-                        kernel::check_note_text(text).ok()?;
-                        Some(text.clone())
+                        let cut = shorten_note_text(text)?;
+                        notes.shortened_text += usize::from(cut != *text);
+                        Some(cut)
                     }
                 };
                 text_notes.push(ImportNote {
@@ -1250,6 +1282,8 @@ struct AddedPages {
     unusable_views: usize,
     /// Scenes past `MAX_IMPORT_SCENES`.
     dropped: usize,
+    /// Hidden tags of the scenes that are layers of the file but no tag of the model.
+    lost_hidden_tags: usize,
 }
 
 /// Adds one scene per page of a 2021+ file, in the file's order and after the model's scenes,
@@ -1267,11 +1301,14 @@ struct AddedPages {
 fn add_pages(
     document: &mut Document,
     scenes: &[SceneDef],
+    layers: &[LayerDef],
     tags: &HashMap<u32, TagId>,
     unit: f64,
 ) -> Result<AddedPages, CommandError> {
+    let known: HashSet<u32> = layers.iter().map(|l| l.id).collect();
     let mut out = AddedPages {
         added: Vec::new(),
+        lost_hidden_tags: 0,
         unusable_views: 0,
         dropped: scenes.len().saturating_sub(MAX_IMPORT_SCENES),
     };
@@ -1307,6 +1344,13 @@ fn add_pages(
         } else {
             None
         };
+        if def.flags & page_flag::VISIBLE_LAYERS != 0 {
+            out.lost_hidden_tags += def
+                .hidden_layer_ids
+                .iter()
+                .filter(|l| known.contains(l) && !tags.contains_key(l))
+                .count();
+        }
         let tags = (def.flags & page_flag::VISIBLE_LAYERS != 0).then(|| {
             def.hidden_layer_ids
                 .iter()

@@ -2201,8 +2201,12 @@ fn scenes_import_with_their_cameras_and_hidden_tags() {
     d.scene().validate().unwrap();
     let report = &r["import"];
     assert_eq!(report["scenes"], 4, "{report}");
-    assert!(
-        !warnings(report).iter().any(|w| w.contains("scene")),
+    // "Front" hides Layer0, which is no tag: the only thing said.
+    assert_eq!(
+        warnings(report),
+        [
+            "1 hidden tag of a scene is not in the model (Layer0, or past the tag limit); the scene shows it"
+        ],
         "{report}"
     );
     assert_eq!(scene_names(&d), ["Front", "Plan", "Tags only", "Nothing"]);
@@ -3015,4 +3019,86 @@ fn corpus_annotations_import() {
     d.scene().validate().unwrap();
     let report = &r["import"];
     assert_eq!(report["notes"], 3, "{report}");
+}
+
+#[test]
+fn note_text_over_the_limits_is_shortened_and_counted() {
+    use craft::{Ann, Layering, Spot, file_with_layers, scaled};
+    let long: &'static str = "x".repeat(2000).leak();
+    let lines: &'static str = vec!["line"; 70].join("\n").leak();
+    let note = |text| Ann::Leader {
+        at: Spot::Free([0.0; 3]),
+        vector: [1.0, 0.0, 0.0],
+        text,
+        leader_type: 2,
+        layer: None,
+    };
+    let bytes = file_with_layers(
+        &[(vec![], vec![])],
+        &[(0, scaled(1.0, 0.0), None)],
+        &[],
+        &Layering {
+            root_annotations: vec![note(long), note(lines), note("fine")],
+            ..Layering::default()
+        },
+    );
+    let mut d = doc();
+    let path = write("long-notes.skp", &bytes);
+    let r = run(
+        &mut d,
+        json!({"type": "import", "path": path, "as": "context"}),
+    )
+    .unwrap();
+    d.scene().validate().unwrap();
+    let report = &r["import"];
+    assert_eq!(report["notes"], 3, "{report}");
+    assert!(
+        warnings(report).contains(&"2 notes' texts were shortened to the note limits".to_string()),
+        "{report}"
+    );
+    let texts: Vec<String> = d
+        .scene()
+        .root()
+        .notes()
+        .filter_map(|(_, n)| n.text().map(str::to_string))
+        .collect();
+    assert!(texts.iter().any(|t| t.chars().count() == 1024));
+    assert!(texts.iter().any(|t| t.lines().count() == 64));
+    assert!(texts.contains(&"fine".to_string()));
+}
+
+#[test]
+fn hidden_tags_that_are_not_in_the_model_are_counted() {
+    // Layer0 and a layer past the 1,024-tag limit, both hidden by one scene.
+    use craft::{Layering, Page, file_with_layers, scaled};
+    let mut layers = vec![(500, "Layer0".to_string(), false)];
+    layers.extend((0..1030).map(|k| (1000 + k as u64, format!("L{k}"), false)));
+    let bytes = file_with_layers(
+        &[(vec![], vec![])],
+        &[(0, scaled(1.0, 0.0), None)],
+        &[],
+        &Layering {
+            layers,
+            pages: vec![Page {
+                name: "Hides".into(),
+                flags: Some(0x20),
+                camera: None,
+                layers: vec![500, 1000 + 1029, 1000],
+            }],
+            ..Layering::default()
+        },
+    );
+    let (d, r, _) = import_timed("lost-hidden-tags.skp", &bytes);
+    let r = r.unwrap();
+    d.scene().validate().unwrap();
+    let report = &r["import"];
+    assert!(
+        warnings(report).contains(
+            &"2 hidden tags of scenes are not in the model (Layer0, or past the tag limit); the scenes show them"
+                .to_string()
+        ),
+        "{report}"
+    );
+    let hides = scene_by_name(&d, "Hides");
+    assert_eq!(hides["hidden_tags"].as_array().unwrap().len(), 1, "{hides}");
 }

@@ -743,7 +743,8 @@ pub fn parse_component_within(payload: &[u8], budget: &mut u64) -> Result<DefGeo
         }
     }
 
-    // Dimensions and text (`annotations.rs`).
+    // Dimensions and text (`annotations.rs`); a label's guide point is found by pid.
+    guide_points.sort_by_key(|(pid, _)| *pid);
     crate::annotations::read_annotations(payload, &mut g, &guide_points, budget)?;
 
     // Placements. Three sections carry them and two of the three wrap each

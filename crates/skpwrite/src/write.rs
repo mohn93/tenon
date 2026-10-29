@@ -246,6 +246,20 @@ impl std::error::Error for WriteError {}
 
 /// Write `doc` as a SketchUp 2017 file.
 pub fn write(doc: &Doc) -> Result<Vec<u8>, WriteError> {
+    write_noted(doc).map(|(bytes, _)| bytes)
+}
+
+/// What a write left out of the document, besides what it refused.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WriteNotes {
+    /// Hidden tags of scenes left out of the scenes' lists: their layer's slot is past what a
+    /// scene's list holds (0x7ffe).
+    pub skipped_hidden_tags: usize,
+}
+
+/// [`write`], saying what it left out.
+pub fn write_noted(doc: &Doc) -> Result<(Vec<u8>, WriteNotes), WriteError> {
+    let mut notes = WriteNotes::default();
     let plan = Plan::new(doc)?;
     let pid_start = u64::from(read_u32(SCAFFOLD, PID_COUNTER_POS)) + 1;
     let mut ar = Archive::new(BASE, pid_start);
@@ -311,15 +325,9 @@ pub fn write(doc: &Doc) -> Result<Vec<u8>, WriteError> {
             let hidden: Vec<u16> = page
                 .hidden_tags
                 .iter()
-                .map(|t| {
-                    u16::try_from(tag_slots[*t])
-                        .ok()
-                        .filter(|s| *s < 0x7fff)
-                        .ok_or(WriteError::TooLarge {
-                            what: "tag slot in a scene",
-                        })
-                })
-                .collect::<Result<_, _>>()?;
+                .filter_map(|t| u16::try_from(tag_slots[*t]).ok().filter(|s| *s < 0x7fff))
+                .collect();
+            notes.skipped_hidden_tags += page.hidden_tags.len() - hidden.len();
             let (flags, view) = match &page.view {
                 Some(v) => (PAGE_FLAGS, *v),
                 None => (PAGE_FLAGS & !PAGE_CAMERA, NO_VIEW),
@@ -438,7 +446,7 @@ pub fn write(doc: &Doc) -> Result<Vec<u8>, WriteError> {
     out.extend_from_slice(&head);
     out.extend_from_slice(&pages_buf);
     out.extend_from_slice(&tail);
-    Ok(out)
+    Ok((out, notes))
 }
 
 fn read_u32(b: &[u8], at: usize) -> u32 {

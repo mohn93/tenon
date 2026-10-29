@@ -2204,7 +2204,7 @@ written, each definition counted once: `definitions`, `instances`, `faces`, `edg
 cannot hold: "N materials glow; SketchUp files cannot store that", "N curves were written as
 separate edges", "N empty groups or components were left out", "N textured faces kept the
 default texture placement; their corners are too close to a line", and what it does not write:
-"N scenes' instance positions were not written", "N scenes' joint values were not written" and "N scenes' lighting, shadow, style or display modes were not written" (SketchUp pages cannot hold them), and "N scenes store no tag visibility; they were written showing every tag" (one for each; "1 scene ..." for one). The report's `scenes` is the number of scenes written (absent when 0). Every format but SVG (which draws dimensions and notes and applies section cuts, see below), `skp` included, leaves out
+"N scenes' instance positions were not written; SketchUp files cannot store them", "N scenes' joint values were not written; SketchUp files cannot store them", "N scenes' lighting, shadow, style or display modes were not written", "N scenes store no tag visibility; they were written showing every tag" and "N hidden tags of scenes were left out; their layers are past what a scene's list holds". The report's `scenes` is the number of scenes written (absent when 0). Every format but SVG (which draws dimensions and notes and applies section cuts, see below), `skp` included, leaves out
 dimensions, notes and section planes; `warnings` then says "N dimensions were not written", "N notes were
 not written" and "N section planes were not written" ("1 section plane was not written"; the root and each definition the root places counted once). A binary STL holds at most 2^32 - 1
 triangles and a `.glb` at most 4 GiB (about 59 million triangles); a larger model is refused
@@ -2315,15 +2315,17 @@ supported"). What is carried:
   definition by identity is read at that vertex or guide point. The dimension line is the file's
   offset (`y position` along the plane's normal crossed with its x axis; the sign was fixed from
   the file's dimensions, which sit above top edges and below floor edges). A dimension always
-  shows its length: text of its own is not kept (counted). A note without text shows its point's
-  coordinates, as `add_note` without `text` does. At most 10,000 dimensions and notes are added;
+  shows its length: text of its own is not kept (counted). A note whose text is blank shows its
+  point's coordinates, as `add_note` without `text` does; text over 64 lines or 1,024
+  characters is cut to them, counted in a warning ("N notes' texts were shortened to the note
+  limits"). At most 10,000 dimensions and notes are added;
   the report's `dimensions` and `notes` count them. Not imported, each counted in `warnings`:
   radial dimensions and text without a pushpin leader (screen text and view-based leaders; the
   files at hand hold neither, so their records are not decoded), hidden ones, those whose
-  numbers are not finite or lie beyond +/-1e6 m or whose text is blank-invalid or too long, and
-  those tied to anything but a vertex or guide point of their own definition. Angular
+  numbers are not finite or lie beyond +/-1e6 m, and those tied to anything but a vertex or guide point of their own definition. Angular
   dimensions do not exist in the file format.
-- Scenes (from SketchUp 2017 and newer files; a 2017-2020 file's scenes are found in the end of its stream and read the same way): each of the file's scenes becomes a scene, after
+- Scenes (from SketchUp 2017 and newer files; a 2017-2020 file's scenes are found in the end of
+  its stream and read the same way): each of the file's scenes becomes a scene, after
   the model's, in the file's order, with its name (trimmed, cut to 240 characters, a blank one
   named as `add_scene` names it, and made unique against the model's scenes: `Front 2`). A
   scene that restores the camera stores its view: the file's camera in meters times `scale`, in
@@ -2331,7 +2333,8 @@ supported"). What is carried:
   parallel, its field of view (a parallel camera keeps the height of its view through it), lit
   by day, not colored by tag. A scene that restores tag visibility stores the tags of its
   hidden layers as its hidden tags (Layer0, which is Untagged, and layers not imported are left
-  out). What a scene does not restore it does not store. A camera that cannot be used (its eye
+  out, counted in a warning: "N hidden tags of scenes are not in the model (Layer0, or past the
+  tag limit); the scenes show them"). What a scene does not restore it does not store. A camera that cannot be used (its eye
   on its target, beyond +/-1e6 m, or missing from a scene that restores one) is left out, with
   a warning ("1 scene's camera could not be used; the scene leaves the camera alone"). At most
   1,024 scenes are added; the file's further scenes are left off, with a warning. No scene is

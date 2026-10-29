@@ -117,7 +117,8 @@ sequence"); the C++ and TypeScript ports restart them per section.
     the one the first page declared (as in SketchUp's files), which moves the tail's later
     slots by one less. Compared byte for byte with a SketchUp-written page, only values
     differ (colours, guids, ids, the model's own style and place); not yet opened in
-    SketchUp itself. A hidden tag whose layer slot is past 0x7fff is `TooLarge`.
+    SketchUp itself. A hidden tag whose layer slot is past 0x7ffe (a scene lists them as `u16`s) is left
+    out of the scene and counted in `WriteNotes::skipped_hidden_tags`.
 17. **Not ported:** tag folders, attribute dictionaries, curves (`CArcCurve`,
     `CCurve`), images, dimensions, text, section planes,
     component behaviours, opening and editing an existing file. Hidden edges, faces and
