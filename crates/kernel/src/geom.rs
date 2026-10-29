@@ -166,9 +166,14 @@ pub fn point_in_polygon(p: DVec2, poly: &[DVec2]) -> bool {
 }
 
 /// Vector area of a closed 3D polygon (direction = normal by right-hand rule, length = area).
+///
+/// Summed about the first point, so a small polygon far from the origin keeps its digits.
 pub fn vector_area(points: &[DVec3]) -> DVec3 {
+    let Some(&origin) = points.first() else {
+        return DVec3::ZERO;
+    };
     (0..points.len())
-        .map(|i| points[i].cross(points[(i + 1) % points.len()]))
+        .map(|i| (points[i] - origin).cross(points[(i + 1) % points.len()] - origin))
         .sum::<DVec3>()
         * 0.5
 }

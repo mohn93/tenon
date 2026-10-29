@@ -1440,13 +1440,15 @@ impl Document {
                 instance,
                 edges,
                 distance,
-            } => self.chamfer_edges_changes(*instance, edges, *distance),
+                distances,
+            } => self.chamfer_edges_changes(*instance, edges, *distance, distances.as_deref()),
             Command::FilletEdges {
                 instance,
                 edges,
                 radius,
                 segments,
-            } => self.fillet_edges_changes(*instance, edges, *radius, *segments),
+                radii,
+            } => self.fillet_edges_changes(*instance, edges, *radius, *segments, radii.as_deref()),
             Command::SolidIntersect { ids } => {
                 self.solid_all_changes(kernel::boolean::BooleanOp::Intersect, ids)
             }

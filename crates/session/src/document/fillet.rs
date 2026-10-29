@@ -22,11 +22,12 @@ impl Document {
         instance: Option<EntityId>,
         edges: &[EntityId],
         distance: f64,
+        distances: Option<&[f64]>,
     ) -> Result<SceneChange, CommandError> {
         if !(distance.is_finite() && distance > MIN_SIZE) {
             return Err(invalid(format!("distance must be more than {MIN_SIZE} m")));
         }
-        self.bevel_changes(instance, edges, Profile::Chamfer { distance })
+        self.bevel_changes(instance, edges, Profile::Chamfer { distance }, distances)
     }
 
     /// `fillet_edges`: as `chamfer_edges`, rounding with `radius` in `segments` (default 8)
@@ -37,6 +38,7 @@ impl Document {
         edges: &[EntityId],
         radius: f64,
         segments: Option<u32>,
+        radii: Option<&[f64]>,
     ) -> Result<SceneChange, CommandError> {
         if !(radius.is_finite() && radius > MIN_SIZE) {
             return Err(invalid(format!("radius must be more than {MIN_SIZE} m")));
@@ -45,7 +47,7 @@ impl Document {
         if !(1..=MAX_SEGMENTS).contains(&segments) {
             return Err(invalid(format!("segments must be 1 to {MAX_SEGMENTS}")));
         }
-        self.bevel_changes(instance, edges, Profile::Fillet { radius, segments })
+        self.bevel_changes(instance, edges, Profile::Fillet { radius, segments }, radii)
     }
 
     /// Bevels `edges` (see `chamfer_edges`) with `profile`; on an error nothing changes.
@@ -54,9 +56,28 @@ impl Document {
         instance: Option<EntityId>,
         edges: &[EntityId],
         profile: Profile,
+        sizes: Option<&[f64]>,
     ) -> Result<SceneChange, CommandError> {
         if edges.is_empty() {
             return Err(invalid("edges must name at least 1 edge"));
+        }
+        let (noun, plural) = match profile {
+            Profile::Chamfer { .. } => ("distance", "distances"),
+            Profile::Fillet { .. } => ("radius", "radii"),
+        };
+        if let Some(sizes) = sizes {
+            if sizes.len() != edges.len() {
+                return Err(invalid(format!(
+                    "{plural} must have one value for each of the {} edges, not {}",
+                    edges.len(),
+                    sizes.len()
+                )));
+            }
+            if let Some(bad) = sizes.iter().find(|s| !(s.is_finite() && **s > MIN_SIZE)) {
+                return Err(invalid(format!(
+                    "{noun} must be more than {MIN_SIZE} m, not {bad}"
+                )));
+            }
         }
         let (mesh, owner) = match instance {
             None => (self.active(), None),
@@ -79,8 +100,9 @@ impl Document {
         let m = self.scene.mesh(mesh).expect("the mesh exists");
         let mut seen = BTreeSet::new();
         let mut ids: Vec<EdgeId> = Vec::new();
+        let mut each: Vec<(EdgeId, f64)> = Vec::new();
         let mut missing = Vec::new();
-        for id in edges {
+        for (at, id) in edges.iter().enumerate() {
             let EntityId::Edge(e) = *id else {
                 if owner.is_none() && !self.exists(*id) {
                     if !missing.contains(id) {
@@ -100,6 +122,7 @@ impl Document {
                 return Err(invalid(format!("{id} is named twice")).with_ids(vec![*id]));
             }
             ids.push(e);
+            each.push((e, sizes.map_or(profile.size(), |s| s[at])));
         }
         if !missing.is_empty() {
             return Err(match owner {
@@ -115,7 +138,7 @@ impl Document {
             });
         }
         self.scene
-            .bevel_edges(mesh, &ids, profile)
+            .bevel_edges_each(mesh, &each, profile)
             .map_err(|e| match e {
                 BevelError::NotSolid(why) => {
                     invalid(format!("the open context is not a solid: {why}"))

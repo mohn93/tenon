@@ -1229,13 +1229,17 @@ pub enum Command {
     /// Chamfers of convex edges meeting at an outside corner overlap and close it; at any
     /// other end (no other chosen edge, next to a concave edge, or an inside corner) the cut
     /// stops in the plane of the face there. A concave edge whose two faces are both cut away
-    /// at an end starts `distance` back from that end. Faces and edges the cut does not touch
-    /// keep their ids.
+    /// at an end starts `distance` back from that end. Three chamfers meeting at an outside
+    /// corner of three faces close it with a flat triangle. Faces and edges the cut does not
+    /// touch keep their ids. `distances`, when given, has one distance per edge (same order as
+    /// `edges`) in place of `distance`, which stays the required default.
     ChamferEdges {
         #[serde(default)]
         instance: Option<EntityId>,
         edges: Vec<EntityId>,
         distance: f64,
+        #[serde(default)]
+        distances: Option<Vec<f64>>,
     },
     /// Round straight edges of a solid, as one undo step: each edge in `edges` becomes an arc
     /// of `radius` meters (more than 0.000001, in the edited mesh's own coordinates) tangent to
@@ -1244,7 +1248,10 @@ pub enum Command {
     /// meets the flat faces, are soft. The round touches each face `radius / tan(angle / 2)`
     /// from the edge, `angle` the angle between the faces inside the solid (for a concave
     /// edge, outside it). Everything else is as `chamfer_edges`, with that setback in place of
-    /// the distance.
+    /// the distance. `radii`, when given, has one radius per edge (same order as `edges`) in
+    /// place of `radius`, which stays the required default; three convex rounds of different
+    /// radii at a vertex of three faces get a ringed patch between their end arcs, and three
+    /// concave rounds of one radius get a concave sphere piece.
     FilletEdges {
         #[serde(default)]
         instance: Option<EntityId>,
@@ -1252,6 +1259,8 @@ pub enum Command {
         radius: f64,
         #[serde(default)]
         segments: Option<u32>,
+        #[serde(default)]
+        radii: Option<Vec<f64>>,
     },
     /// Move, turn and scale the texture on faces of the open context, as one undo step: on
     /// top of the projection, `offset` [u, v] in meters, `rotation_deg` counter-clockwise
