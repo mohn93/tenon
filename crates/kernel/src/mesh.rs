@@ -18,6 +18,9 @@ impl Model {
     pub fn triangle_vertices(&self, id: FaceId) -> Option<Vec<[VertexId; 3]>> {
         let face = self.face(id)?;
         let origin = self.position(*face.outer.first()?)?;
+        if !face.normal.is_finite() || face.normal.length_squared() < 0.5 {
+            return None;
+        }
         let plane = Plane {
             normal: face.normal,
             d: face.normal.dot(origin),
@@ -38,10 +41,17 @@ impl Model {
                 ids.push(*id);
                 points.push(p);
                 // As `plane.project(p)`, with the basis worked out once.
-                coords.extend([p.dot(u), p.dot(v)]);
+                // Relative to the face's first vertex: far from the origin the absolute
+                // coordinates of a small face lose their digits and collapse into collinear
+                // points, where the triangulator panics.
+                let q = p - origin;
+                coords.extend([q.dot(u), q.dot(v)]);
             }
         }
 
+        if coords.iter().any(|c| !c.is_finite()) {
+            return None;
+        }
         let indices = earcutr::earcut(&coords, &hole_starts, 2).ok()?;
         let tris = indices
             .as_chunks::<3>()

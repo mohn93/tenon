@@ -1971,4 +1971,25 @@ mod tests {
         scene.apply(&change.inverse());
         assert_eq!(*scene.mesh(mesh).unwrap(), m);
     }
+
+    #[test]
+    fn a_tiny_box_far_from_the_origin_is_bevelled_or_refused() {
+        for r in [1e-5, 5e-4] {
+            for offset in [0.0, 1e3, 1e5] {
+                let m = placed_copy(
+                    &cuboid([0.01, 0.02, 0.03]),
+                    DAffine3::from_translation(DVec3::splat(offset)),
+                    None,
+                );
+                let edges: Vec<EdgeId> = m.edges().map(|(id, _)| id).collect();
+                for profile in [fillet(r), chamfer(r)] {
+                    match bevelled(&m, &edges, profile) {
+                        Ok(out) => closed(&out),
+                        // A radius near the 1e-6 tolerance may be refused, never a panic.
+                        Err(e) => assert!(r < 1e-4, "{r} at {offset}: {e}"),
+                    }
+                }
+            }
+        }
+    }
 }
