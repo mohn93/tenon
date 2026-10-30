@@ -486,12 +486,12 @@ fn shell_surfaces(m: &Model, shell: &[FaceId], outward: f64) -> Result<Vec<Vec<F
     Ok(groups.into_values().collect())
 }
 
-/// Why the shells of `m` with edges of more than two faces are not one solid with voids: some
-/// surface is not closed, or none or more than one encloses positive volume (a part inside facing
-/// outward overlaps the solid). `outward` is the sign of the volume of `m`.
+/// Why the shells of `m` with edges of more than two faces are not solids with voids: some
+/// surface is not closed, none encloses positive volume, or one that does lies inside another
+/// (a part inside facing outward overlaps the solid). Solids touching along an edge are fine.
+/// `outward` is the sign of the volume of `m`.
 pub(crate) fn surface_problem(m: &Model, outward: f64) -> Option<String> {
-    let mut positive = 0;
-    let mut any = false;
+    let mut solids: Vec<Model> = Vec::new();
     for shell in shells_of(m) {
         let shared = shell.iter().any(|f| {
             let face = m.face(*f).expect("face");
@@ -502,7 +502,6 @@ pub(crate) fn surface_problem(m: &Model, outward: f64) -> Option<String> {
         if !shared {
             continue;
         }
-        any = true;
         let groups = match shell_surfaces(m, &shell, outward) {
             Ok(g) => g,
             Err(why) => return Some(why),
@@ -513,12 +512,26 @@ pub(crate) fn surface_problem(m: &Model, outward: f64) -> Option<String> {
                 return Some(why);
             }
             if signed_volume(&part) * outward > 0.0 {
-                positive += 1;
+                solids.push(part);
             }
         }
     }
-    (any && positive != 1)
-        .then(|| "a part of it inside the solid faces outward, or it has no outside".to_string())
+    if solids.is_empty() {
+        return Some("it has no outside".into());
+    }
+    for (i, a) in solids.iter().enumerate() {
+        let Some(p) = a.faces().find_map(|(f, _)| interior_point(a, f)) else {
+            continue;
+        };
+        if solids
+            .iter()
+            .enumerate()
+            .any(|(j, b)| i != j && point_inside(p, b) == Some(true))
+        {
+            return Some("a part of it inside the solid faces outward".into());
+        }
+    }
+    None
 }
 
 /// The two faces of the edge a-b of `m` that bound the empty space outside the solid, when more
