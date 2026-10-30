@@ -488,3 +488,69 @@ fn the_cost_estimate_grows_with_loop_sizes() {
     );
     assert_eq!(face_segments_cost(&holed, &b), 8 * 4);
 }
+
+#[test]
+fn a_line_leaving_a_face_across_a_shallow_edge_is_followed_to_it() {
+    // The corner (0, 0.5) is 5e-7 above the line y = 0.5; the edge to (1, 0.5 - 5e-5) crosses
+    // the line at x = 0.0099, and the face lies below the edge: the line is in the face from the
+    // corner to there.
+    let c = 0.5;
+    let floor = shape(
+        &[
+            p(0.0, c + 5e-7, 0.0),
+            p(1.0, c - 5e-5, 0.0),
+            p(1.0, c - 1.0, 0.0),
+            p(0.0, c - 1.0, 0.0),
+        ],
+        &[],
+    );
+    let w = wall(-1.0, -1.0, 2.0, 1.0, c);
+    for segs in [face_segments(&floor, &w), face_segments(&w, &floor)] {
+        let (s, e) = only(&segs);
+        assert!(s.x.abs() < 1e-6, "{s}");
+        assert!((e.x - 0.0099).abs() < 1e-4, "{e}");
+    }
+}
+
+#[test]
+fn two_faces_sharing_a_crease_cut_a_shallow_face_to_one_point_of_it() {
+    // The faces meet along the y axis at (0, y, 0); the first is twisted by 4e-6, so its
+    // fitted plane is off the crease by a fraction of a micron. The third face crosses the
+    // crease at a shallow angle (0.076 rad), which magnifies that to over a micron along it.
+    // Each face's cut ends on the crease, at the same point.
+    let fitted = |q: [DVec3; 4]| {
+        let n = (q[2] - q[0]).cross(q[3] - q[1]).normalize();
+        FaceShape {
+            outer: q.to_vec(),
+            holes: Vec::new(),
+            plane: Plane::through(q.iter().sum::<DVec3>() / 4.0, n),
+        }
+    };
+    let right = fitted([
+        p(0.0, -1.0, 0.0),
+        p(1.0, -1.0, 0.2),
+        p(1.0, 1.0, 0.2 + 4e-6),
+        p(0.0, 1.0, 0.0),
+    ]);
+    let left = fitted([
+        p(0.0, -1.0, 0.0),
+        p(0.0, 1.0, 0.0),
+        p(-1.0, 1.0, 0.3),
+        p(-1.0, -1.0, 0.3),
+    ]);
+    let slope = 0.0761;
+    let cut = fitted([
+        p(-1.0, -0.5, 0.01 + slope * 0.5),
+        p(1.0, -0.5, 0.01 + slope * 0.5),
+        p(1.0, 0.5, 0.01 - slope * 0.5),
+        p(-1.0, 0.5, 0.01 - slope * 0.5),
+    ]);
+    // The end of each face's cut on the crease (x = 0).
+    let on_crease = |segs: Vec<(DVec3, DVec3)>| {
+        let (s, e) = only(&segs);
+        if s.x.abs() < e.x.abs() { s } else { e }
+    };
+    let r = on_crease(face_segments(&right, &cut));
+    let l = on_crease(face_segments(&left, &cut));
+    assert!(r.distance(l) < LENGTH_TOL, "{r} vs {l}");
+}

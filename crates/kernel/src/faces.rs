@@ -98,14 +98,13 @@ impl Model {
         planes
     }
 
-    /// Whether `f` lies in `plane`: its normal parallel to the plane's and its first vertex on
-    /// it; or, for a plane fitted to a few points and so tilted more (a short edge a few
-    /// tenths of a micron off its face fits a plane tilted by more than `PLANE_ANGLE_TOL`),
-    /// every vertex of its outer loop on it, which is how a plane gathers its edges.
+    /// Whether `f` lies in `plane`: every vertex of its outer loop on it, which is how a plane
+    /// gathers its edges. A face tilted under `PLANE_ANGLE_TOL` with only its first vertex on
+    /// the plane is not in it when it is long enough for its far vertices to be off: its far
+    /// edges are not gathered, and the rebuild would drop the face. A plane fitted to a few
+    /// points of a short edge is tilted more than that from the facet it cuts, and the facet
+    /// is in it all the same.
     fn face_in_plane(&self, f: &Face, plane: &Plane) -> bool {
-        if f.normal.cross(plane.normal).length() < PLANE_ANGLE_TOL {
-            return plane.contains(self.pos(f.outer[0]));
-        }
         f.outer.iter().all(|v| plane.contains(self.pos(*v)))
     }
 
@@ -487,6 +486,41 @@ mod tests {
             .unwrap();
         assert_eq!(m.faces().count(), 2);
         assert_eq!(m.face(other.0), Some(&other.1));
+    }
+
+    #[test]
+    fn a_long_neighbour_tilted_under_the_angle_tolerance_is_left_alone() {
+        // The second quad is 10 m long and tilted 5e-7 rad, under `PLANE_ANGLE_TOL`, so its far
+        // vertices are 5e-6 off the first quad's plane. Whichever vertex its loop starts at,
+        // drawing on the first quad must leave it as it was.
+        let mut counts = Vec::new();
+        for flip in [false, true] {
+            let mut m = Model::new();
+            let mut edges = vec![
+                ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0)),
+                ((1.0, 0.0, 0.0), (1.0, 1.0, 0.0)),
+                ((1.0, 1.0, 0.0), (0.0, 1.0, 0.0)),
+                ((0.0, 1.0, 0.0), (0.0, 0.0, 0.0)),
+                ((1.0, 0.0, 0.0), (11.0, 0.0, 5e-6)),
+                ((11.0, 0.0, 5e-6), (11.0, 1.0, 5e-6)),
+                ((11.0, 1.0, 5e-6), (1.0, 1.0, 0.0)),
+            ];
+            if flip {
+                edges.reverse();
+            }
+            for (a, b) in edges {
+                m.add_edge(DVec3::from(a), DVec3::from(b)).unwrap();
+            }
+            assert_eq!(m.faces().count(), 2);
+            let other = m
+                .faces()
+                .find(|(_, f)| f.outer.iter().any(|v| m.pos(*v).x > 5.0))
+                .map(|(id, f)| (id, f.clone()))
+                .unwrap();
+            m.add_edge(DVec3::ZERO, DVec3::new(1.0, 1.0, 0.0)).unwrap();
+            counts.push((m.faces().count(), m.face(other.0) == Some(&other.1)));
+        }
+        assert_eq!(counts, [(3, true), (3, true)]);
     }
 
     #[test]
