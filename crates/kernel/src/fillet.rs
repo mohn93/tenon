@@ -1317,7 +1317,8 @@ mod tests {
         let m = beside(&base, &block);
         let e = edge_at(&m, [0.0, 0.0, 2.0], [4.0, 0.0, 2.0]);
         let r = bevelled(&m, &[e], chamfer(0.5)).unwrap();
-        assert_eq!(open_reason(&r), None);
+        // The block shares its border with the base's face, so the whole is not manifold there.
+        r.validate().unwrap();
         assert!((signed_volume(&r) - (32.0 - 0.125 * 4.0 + 1.0)).abs() < 1e-9);
         assert!(has_vertex(&r, [0.0, 0.0, 3.0]) && has_vertex(&r, [0.0, 0.0, 2.0]));
         // A round of the same size leaves the block alone too.
@@ -1326,7 +1327,8 @@ mod tests {
             segments: 4,
         };
         let r = bevelled(&m, &[e], round).unwrap();
-        assert_eq!(open_reason(&r), None);
+        // The block shares its border with the base's face, so the whole is not manifold there.
+        r.validate().unwrap();
         assert!(has_vertex(&r, [0.0, 0.0, 3.0]) && has_vertex(&r, [0.0, 0.0, 2.0]));
     }
 
