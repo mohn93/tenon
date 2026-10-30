@@ -1191,10 +1191,44 @@ pub const ORIGIN_SNAP: f64 = 16.0;
 /// positions are the world's, as before. A geo-referenced model (5e6 m out) is then drawn
 /// with f32 positions of the size of the model, not of its distance from the origin.
 pub fn render_origin(scene: &Scene) -> DVec3 {
-    match scene.bounds(MeshId::Root) {
-        Some([lo, hi]) => origin_for((lo + hi) * 0.5),
+    match mesh_box(scene, MeshId::Root, &mut HashMap::new()) {
+        Some((lo, hi)) => origin_for((lo + hi) * 0.5),
         None => DVec3::ZERO,
     }
+}
+
+/// The box around a mesh's vertices and instances (like `Scene::bounds`), each definition
+/// measured once however often it is placed.
+fn mesh_box(
+    scene: &Scene,
+    id: MeshId,
+    memo: &mut HashMap<MeshId, Option<(DVec3, DVec3)>>,
+) -> Option<(DVec3, DVec3)> {
+    if let Some(b) = memo.get(&id) {
+        return *b;
+    }
+    let mesh = scene.mesh(id)?;
+    let mut b: Option<(DVec3, DVec3)> = None;
+    let mut add = |p: DVec3| {
+        b = Some(b.map_or((p, p), |(lo, hi)| (lo.min(p), hi.max(p))));
+    };
+    for (_, v) in mesh.vertices() {
+        add(v.pos);
+    }
+    for (_, i) in mesh.instances() {
+        if let Some((lo, hi)) = mesh_box(scene, MeshId::Definition(i.definition), memo) {
+            for k in 0..8 {
+                let c = DVec3::new(
+                    if k & 1 == 0 { lo.x } else { hi.x },
+                    if k & 2 == 0 { lo.y } else { hi.y },
+                    if k & 4 == 0 { lo.z } else { hi.z },
+                );
+                add(i.transform.transform_point3(c));
+            }
+        }
+    }
+    memo.insert(id, b);
+    b
 }
 
 /// `render_origin` for a model centered at `center`.

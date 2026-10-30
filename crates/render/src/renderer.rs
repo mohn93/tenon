@@ -2297,7 +2297,11 @@ impl Renderer {
             self.drawn_axes(),
         );
         if moved {
-            self.write_preview();
+            // The preview was relative to the old origin.
+            self.preview_vertices.clear();
+            if let Some(preview) = &mut self.preview {
+                preview.count = 0;
+            }
         }
     }
 
@@ -2693,32 +2697,15 @@ impl Renderer {
 
     /// Draws `triangles` (three vertices each) from the next frame, blended over the scene and
     /// hidden by what is in front of them; empty draws none. Re-uploads only when it changed,
-    /// into the same buffer while they fit.
+    /// into the same buffer while they fit. Positions are relative to `origin()`, which the
+    /// caller subtracts in f64 (a model moved by `set_model` drops the preview until this is
+    /// called again).
     pub fn set_preview(&mut self, triangles: &[PreviewVertex]) {
         if triangles == self.preview_vertices.as_slice() {
             return;
         }
         self.preview_vertices.clear();
         self.preview_vertices.extend_from_slice(triangles);
-        self.write_preview();
-    }
-
-    /// Uploads `preview_vertices` in the scene's relative coordinates.
-    fn write_preview(&mut self) {
-        let moved: Vec<PreviewVertex>;
-        let triangles = if self.origin == DVec3::ZERO {
-            &self.preview_vertices
-        } else {
-            moved = self
-                .preview_vertices
-                .iter()
-                .map(|v| PreviewVertex {
-                    pos: self.relative_point(v.pos),
-                    ..*v
-                })
-                .collect();
-            &moved
-        };
         let bytes: &[u8] = bytemuck::cast_slice(triangles);
         let fits = self
             .preview
@@ -2747,6 +2734,12 @@ impl Renderer {
             }
             preview.count = triangles.len() as u32;
         }
+    }
+
+    /// The point the scene's positions (and the preview's) are relative to: zero for a model
+    /// near the world origin (see `SceneBase::origin`).
+    pub fn origin(&self) -> DVec3 {
+        self.origin
     }
 
     /// True when the glass drawn last is in a held order that is not exact for the camera:
@@ -3132,20 +3125,22 @@ impl Renderer {
                 };
                 if self.print || self.transparent || self.hide_ground {
                     sun_ground(&mut pass);
-                } else if self.origin != DVec3::ZERO {
-                    // The grid lies at the world origin, a long way from this model.
-                    sun_ground(&mut pass);
-                    draw(
-                        &mut pass,
-                        &self.ground_pipeline,
-                        self.vertical_axis.as_ref(),
-                    );
                 } else {
-                    draw(
-                        &mut pass,
-                        &self.flat_ground_pipeline,
-                        Some(&self.flat_ground),
-                    );
+                    // The grid is built around the world origin whatever the axes' frame, so
+                    // away from the origin only the flat axes (in the scene's frame) are drawn.
+                    if self.origin == DVec3::ZERO {
+                        draw(
+                            &mut pass,
+                            &self.flat_ground_pipeline,
+                            Some(&self.flat_ground),
+                        );
+                    } else {
+                        draw(
+                            &mut pass,
+                            &self.flat_ground_pipeline,
+                            self.flat_axes.as_ref(),
+                        );
+                    }
                     if self.style.wide_axes
                         && let Some(flat) = &self.flat_axes
                     {
