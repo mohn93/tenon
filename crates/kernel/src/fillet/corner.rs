@@ -1432,14 +1432,15 @@ pub(super) fn saddle(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> O
     if faces.len() != 3 || m.edges_at(v).len() != 3 {
         return None;
     }
-    if cuts
-        .iter()
-        .any(|(_, c)| !matches!(c.profile, Profile::Fillet { .. }))
-    {
-        return None;
-    }
     let convex = cuts.iter().filter(|(_, c)| c.convex).count();
     if convex == 0 || convex == 3 {
+        return None;
+    }
+    // Chamfers alone have no axis to turn about: they keep the crossed cuts.
+    if cuts
+        .iter()
+        .all(|(_, c)| matches!(c.profile, Profile::Chamfer { .. }))
+    {
         return None;
     }
     // The odd one out, and the pair of the other kind.
@@ -1465,6 +1466,16 @@ pub(super) fn saddle(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> O
         return None;
     }
     let (ca, cb) = (&cuts[a].1, &cuts[b].1);
+    // The pair's sections must have as many sides each; a chamfer's chord is cut into as many
+    // equal ones as the round beside it has (two chamfers: one).
+    let (sa, sb) = (ca.profile.profile(ca).len() - 1, cb.profile.profile(cb).len() - 1);
+    let sides = match (&ca.profile, &cb.profile) {
+        (Profile::Chamfer { .. }, Profile::Chamfer { .. }) => 1,
+        (Profile::Chamfer { .. }, _) => sb,
+        (_, Profile::Chamfer { .. }) => sa,
+        _ if sa == sb => sa,
+        _ => return None,
+    };
     let away = |c: &EdgeCut| if c.va == v { c.u } else { -c.u };
     let (ua, ub, uc) = (away(ca), away(cb), away(t));
     let s = t.setback;
@@ -1489,12 +1500,17 @@ pub(super) fn saddle(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> O
     }
     // Each pair member's section starting on its face beside the third round, with the sides
     // widened past the faces by `reach` (less beside the third round, which the axis is near).
-    let section = |c: &EdgeCut, own: FaceId, foot: DVec3| -> (Vec<DVec3>, usize) {
+    let section = |c: &EdgeCut, own: FaceId, foot: DVec3| -> Vec<DVec3> {
         let mut points = c.profile.profile(c);
         if c.f1 != own {
             points.reverse();
         }
-        let sides = points.len() - 1;
+        if points.len() - 1 != sides {
+            let (first, last) = (points[0], points[points.len() - 1]);
+            points = (0..=sides)
+                .map(|i| first.lerp(last, i as f64 / sides as f64))
+                .collect();
+        }
         let (n_own, n_z) = (normal(c, own), normal(c, z));
         let widen = if c.convex { 1.0 } else { -1.0 };
         let reach = c.setback;
@@ -1505,13 +1521,12 @@ pub(super) fn saddle(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> O
             n_own * widen * r_own + n_z * widen * r_z,
             first + n_own * widen * r_own,
         ]);
-        (points.into_iter().map(|o| foot + o).collect(), sides)
+        points.into_iter().map(|o| foot + o).collect()
     };
-    let (pa, sides) = section(ca, x, vertex + ua * da);
-    let (pb, sides_b) = section(cb, y, vertex + ub * db);
-    if sides != sides_b {
-        return None;
-    }
+    let (pa, pb) = (
+        section(ca, x, vertex + ua * da),
+        section(cb, y, vertex + ub * db),
+    );
     let start = vertex + ua * da - axis_at;
     let finish = vertex + ub * db - axis_at;
     let axis = uc;
@@ -1597,9 +1612,18 @@ pub(super) fn saddle(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> O
             }
         }
     }
+    // A chamfer's strip keeps its creases with the faces, so beside one only the points between
+    // them are seams.
+    let (from, to) = if matches!(ca.profile, Profile::Chamfer { .. })
+        || matches!(cb.profile, Profile::Chamfer { .. })
+    {
+        (1.min(sides), sides.saturating_sub(1).max(1.min(sides)))
+    } else {
+        (0, sides)
+    };
     let seams: Vec<DVec3> = rings
         .iter()
-        .flat_map(|r| r[..=sides].iter().copied())
+        .flat_map(|r| r[from..=to].iter().copied())
         .collect();
     let plane_of = |u: DVec3, d: f64| End::Plane(vertex + u * d, u);
     Some(Saddle {

@@ -3957,7 +3957,7 @@ mod tests {
             }
         }
         let mut table: BTreeMap<String, (usize, usize)> = BTreeMap::new();
-        for (_, m, scale) in shapes {
+        for (shape_name, m, scale) in shapes {
             for (v, _) in m.vertices() {
                 let at: Vec<EdgeId> = m.edges_at(v).to_vec();
                 if at.len() != 3 || at.iter().any(|e| m.edge(*e).unwrap().soft) {
@@ -4004,6 +4004,10 @@ mod tests {
                         let entry = table.entry(kind.to_string()).or_default();
                         entry.1 += 1;
                         entry.0 += usize::from(patched.contains(&v));
+                        if std::env::var("DBGSWEEP").is_ok() && !patched.contains(&v) && kind.starts_with("inside") {
+                            let flags: Vec<bool> = at.iter().map(|e| analyze(&m, *e, 1.0, fillet(0.01)).unwrap().convex).collect();
+                            eprintln!("UNPATCHED {shape_name} {:?} chamfers {chamfers} seg {segments} convex {flags:?}", m.pos(v));
+                        }
                     }
                 }
             }
@@ -4070,7 +4074,7 @@ mod tests {
     }
 
     #[test]
-    fn a_concave_edge_beside_convex_ones_gets_a_saddle_only_with_three_rounds() {
+    fn a_concave_edge_beside_convex_ones_gets_a_saddle_unless_all_three_are_chamfers() {
         // The inside corner of an L: one concave and two convex edges meet at (1, 0, 1).
         let m = l_shape();
         let before = signed_volume(&m);
@@ -4079,21 +4083,18 @@ mod tests {
         let up = edge_at(&m, at, [1.0, 0.0, 3.0]);
         let along = edge_at(&m, at, [4.0, 0.0, 1.0]);
         let r = 0.2;
-        for (a, b, c) in [
-            (fillet(r), fillet(r), fillet(r)),
-            (chamfer(r), fillet(r), fillet(r)),
-            (fillet(r), chamfer(r), chamfer(r)),
-            (chamfer(r), chamfer(r), chamfer(r)),
-        ] {
+        for kinds in 0..8 {
+            let pick = |bit: usize| if kinds >> bit & 1 == 0 { fillet(r) } else { chamfer(r) };
+            let (a, b, c) = (pick(0), pick(1), pick(2));
             let each = [(concave, a), (up, b), (along, c)];
             let (out, patched) = bevel_core(&m, &each).unwrap();
             closed(&out);
-            // Three rounds get the swept saddle; with a chamfer the crossed cuts stay.
+            // The swept saddle, chamfers in it included; three chamfers keep the crossed cuts.
             let rounds = [a, b, c]
                 .iter()
                 .filter(|p| matches!(p, Profile::Fillet { .. }))
                 .count();
-            assert_eq!(patched.len(), usize::from(rounds == 3), "{a:?} {b:?} {c:?}");
+            assert_eq!(patched.len(), usize::from(rounds > 0), "{a:?} {b:?} {c:?}");
             // The material the concave edge adds less what the convex ones take, as if cut
             // separately (a corner's worth, under r cubed, differs).
             let gain = signed_volume(&bevelled_mixed(&m, &[(concave, a)]).unwrap()) - before;
