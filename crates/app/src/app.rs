@@ -3188,7 +3188,8 @@ impl State {
                 .map(|id| (id, theme::hover_look(ui_theme, tool, id, paint, sampling))),
         );
         let origin = self.renderer.origin();
-        self.renderer.set_preview(&self.editor.solid_preview_from(origin));
+        self.renderer
+            .set_preview(&self.editor.solid_preview_from(origin));
         // The view follows the panels' theme; render_view keeps its own renderer's classic look.
         self.renderer.set_style(theme::view_style(self.gui.theme()));
         // The view's widths in points follow the UI scale, as the panels' do.
