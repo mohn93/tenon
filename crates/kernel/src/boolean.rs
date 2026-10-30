@@ -7,7 +7,7 @@
 //! interior point by ray parity, the faces the operation needs are kept (a subtracted solid's
 //! turned over), and they are welded into one mesh, which must be closed.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
 use glam::{DAffine3, DVec3};
@@ -435,35 +435,14 @@ pub(crate) fn stacked_edge(m: &Model) -> Option<EdgeId> {
     })
 }
 
-/// The two faces of the edge a-b of `m` that bound the empty space outside the solid, when more
-/// than two faces meet there inside one shell (a void touching the skin): they face each other
-/// across an interval round the edge with no face in it. `outward` is 1 when the faces point out
-/// of the material, -1 when in. A void's faces bound such an interval too; the two are told
-/// apart by the surface each belongs to, the faces of the shell joined across ordinary edges and
-/// across such intervals at the others: the outside's encloses a positive volume, a void's a
-/// negative one. Only the shell of the edge is looked at. Err says why there is no such pair.
-pub(crate) fn skin_pair(
-    m: &Model,
-    a: VertexId,
-    b: VertexId,
-    outward: f64,
-) -> Result<[FaceId; 2], String> {
-    let on = m.faces_on_side(a, b);
-    let shells = shells_of(m);
-    let Some(shell) = shells.iter().find(|s| s.contains(&on[0])) else {
-        return Err("it bounds no shell".into());
-    };
+/// The surfaces of `shell` of `m`: its faces joined across ordinary edges and, at an edge of
+/// more than two faces, across the empty intervals round it (see `empty_intervals`), so a void
+/// touching the skin is a surface of its own. `outward` is 1 when the faces point out of the
+/// material, -1 when in. Err when faces lie on each other.
+fn shell_surfaces(m: &Model, shell: &[FaceId], outward: f64) -> Result<Vec<Vec<FaceId>>, String> {
     let own: HashSet<FaceId> = shell.iter().copied().collect();
-    let here: Vec<FaceId> = on.iter().copied().filter(|f| own.contains(f)).collect();
-    let round = round_edge(m, a, b, &here, outward);
-    if coincide(&round) {
-        return Err("solids stacked face to face share it".into());
-    }
-    let candidates = empty_intervals(&round);
-    // The surfaces of the shell.
-    let ids: Vec<FaceId> = shell.clone();
-    let at: HashMap<FaceId, usize> = ids.iter().enumerate().map(|(i, f)| (*f, i)).collect();
-    let mut parent: Vec<usize> = (0..ids.len()).collect();
+    let at: HashMap<FaceId, usize> = shell.iter().enumerate().map(|(i, f)| (*f, i)).collect();
+    let mut parent: Vec<usize> = (0..shell.len()).collect();
     fn root(parent: &mut [usize], mut i: usize) -> usize {
         while parent[i] != i {
             parent[i] = parent[parent[i]];
@@ -472,7 +451,7 @@ pub(crate) fn skin_pair(
         i
     }
     let mut seen: HashSet<(VertexId, VertexId)> = HashSet::new();
-    for id in &ids {
+    for id in shell {
         let f = m.face(*id).expect("face");
         for l in std::iter::once(&f.outer).chain(&f.holes) {
             for k in 0..l.len() {
@@ -500,14 +479,80 @@ pub(crate) fn skin_pair(
             }
         }
     }
+    let mut groups: BTreeMap<usize, Vec<FaceId>> = BTreeMap::new();
+    for (i, f) in shell.iter().enumerate() {
+        groups.entry(root(&mut parent, i)).or_default().push(*f);
+    }
+    Ok(groups.into_values().collect())
+}
+
+/// Why the shells of `m` with edges of more than two faces are not one solid with voids: some
+/// surface is not closed, or none or more than one encloses positive volume (a part inside facing
+/// outward overlaps the solid). `outward` is the sign of the volume of `m`.
+pub(crate) fn surface_problem(m: &Model, outward: f64) -> Option<String> {
+    let mut positive = 0;
+    let mut any = false;
+    for shell in shells_of(m) {
+        let shared = shell.iter().any(|f| {
+            let face = m.face(*f).expect("face");
+            std::iter::once(&face.outer).chain(&face.holes).any(|l| {
+                (0..l.len()).any(|k| m.faces_on_side(l[k], l[(k + 1) % l.len()]).len() > 2)
+            })
+        });
+        if !shared {
+            continue;
+        }
+        any = true;
+        let groups = match shell_surfaces(m, &shell, outward) {
+            Ok(g) => g,
+            Err(why) => return Some(why),
+        };
+        for g in &groups {
+            let part = subset(m, g);
+            if let Some(why) = open_reason(&part) {
+                return Some(why);
+            }
+            if signed_volume(&part) * outward > 0.0 {
+                positive += 1;
+            }
+        }
+    }
+    (any && positive != 1)
+        .then(|| "a part of it inside the solid faces outward, or it has no outside".to_string())
+}
+
+/// The two faces of the edge a-b of `m` that bound the empty space outside the solid, when more
+/// than two faces meet there inside one shell (a void touching the skin): they face each other
+/// across an interval round the edge with no face in it. `outward` is 1 when the faces point out
+/// of the material, -1 when in. A void's faces bound such an interval too; the two are told
+/// apart by the surface each belongs to (see `shell_surfaces`): the outside's encloses a
+/// positive volume, a void's a negative one. Only the shell of the edge is looked at. Err says
+/// why there is no such pair.
+pub(crate) fn skin_pair(
+    m: &Model,
+    a: VertexId,
+    b: VertexId,
+    outward: f64,
+) -> Result<[FaceId; 2], String> {
+    let on = m.faces_on_side(a, b);
+    let shells = shells_of(m);
+    let Some(shell) = shells.iter().find(|s| s.contains(&on[0])) else {
+        return Err("it bounds no shell".into());
+    };
+    let own: HashSet<FaceId> = shell.iter().copied().collect();
+    let here: Vec<FaceId> = on.iter().copied().filter(|f| own.contains(f)).collect();
+    let round = round_edge(m, a, b, &here, outward);
+    if coincide(&round) {
+        return Err("solids stacked face to face share it".into());
+    }
+    let candidates = empty_intervals(&round);
+    let surfaces = shell_surfaces(m, shell, outward)?;
     let mut outside: Vec<[FaceId; 2]> = Vec::new();
     for (f, g) in candidates {
-        let r = root(&mut parent, at[&f]);
-        let surface: Vec<FaceId> = (0..ids.len())
-            .filter(|i| root(&mut parent, *i) == r)
-            .map(|i| ids[i])
-            .collect();
-        let part = subset(m, &surface);
+        let Some(surface) = surfaces.iter().find(|s| s.contains(&f)) else {
+            continue;
+        };
+        let part = subset(m, surface);
         if open_reason(&part).is_none() && signed_volume(&part) * outward > 0.0 {
             outside.push([f, g]);
         }

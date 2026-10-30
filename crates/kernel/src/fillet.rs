@@ -22,7 +22,7 @@ use glam::{DAffine3, DVec2, DVec3};
 
 use crate::boolean::{
     BooleanError, BooleanOp, Shared, apart, combine, combine_shared, copy_sharing, nested_shells,
-    placed_copy, shells_of, skin_pair, stacked_edge, subset,
+    placed_copy, shells_of, skin_pair, stacked_edge, subset, surface_problem,
 };
 use crate::geom::{LENGTH_TOL, vector_area};
 use crate::ids::{CurveId, EdgeId, FaceId, MaterialId, VertexId};
@@ -489,6 +489,11 @@ fn bevel_with(
             return Err(BevelError::NotSolid("it encloses no volume".into()));
         }
         let outward = volume.signum();
+        if has_shared_edges(&work)
+            && let Some(why) = surface_problem(&work, outward)
+        {
+            return Err(BevelError::NotSolid(why));
+        }
         // A concave edge adds material (a filler) near it: shells there join the target.
         let mut more = false;
         for (e, own) in edges {
@@ -573,9 +578,10 @@ fn bevel_with(
     let mut convex_ends: HashMap<VertexId, usize> = HashMap::new();
     let mut cut_faces: HashMap<VertexId, Vec<FaceId>> = HashMap::new();
     // Per vertex, the chosen convex edges ending there: the direction away from it, the normals
-    // of the two faces cut and the profile. An edge continuing straight on from another
-    // between faces turned the same way and with the same profile runs on past the end.
-    let mut leaving: HashMap<VertexId, Vec<(DVec3, [DVec3; 2], Profile)>> = HashMap::new();
+    // of the two faces cut, the profile and the length. An edge continuing straight on from
+    // another between faces turned the same way and with the same profile runs on past the end,
+    // by no more than half the next one's length.
+    let mut leaving: HashMap<VertexId, Vec<Leaving>> = HashMap::new();
     for e in &edges {
         if m.edge(*e).is_none() {
             return Err(BevelError::Edge(
@@ -589,10 +595,12 @@ fn bevel_with(
                 *convex_ends.entry(v).or_default() += 1;
                 cut_faces.entry(v).or_default().extend([cut.f1, cut.f2]);
                 let away = if v == cut.va { cut.u } else { -cut.u };
-                leaving
-                    .entry(v)
-                    .or_default()
-                    .push((away, [cut.n1, cut.n2], cut.profile));
+                leaving.entry(v).or_default().push((
+                    away,
+                    [cut.n1, cut.n2],
+                    cut.profile,
+                    cut.a.distance(cut.b),
+                ));
             }
         }
         cuts.push((*e, cut));
@@ -622,13 +630,16 @@ fn bevel_with(
             cut: &|v, f| cut_faces.get(&v).is_some_and(|fs| fs.contains(&f)),
             straight: &|v, away, normals, profile| {
                 let same = |x: DVec3, y: DVec3| x.dot(y) > 1.0 - 1e-9;
-                leaving.get(&v).is_some_and(|l| {
-                    l.iter().any(|(d, n, p)| {
-                        d.dot(away) > 1.0 - 1e-9
-                            && *p == profile
-                            && ((same(n[0], normals[0]) && same(n[1], normals[1]))
-                                || (same(n[0], normals[1]) && same(n[1], normals[0])))
-                    })
+                leaving.get(&v).and_then(|l| {
+                    l.iter()
+                        .filter(|(d, n, p, _)| {
+                            d.dot(away) > 1.0 - 1e-9
+                                && *p == profile
+                                && ((same(n[0], normals[0]) && same(n[1], normals[1]))
+                                    || (same(n[0], normals[1]) && same(n[1], normals[0])))
+                        })
+                        .map(|(_, _, _, length)| *length)
+                        .min_by(f64::total_cmp)
                 })
             },
         };
@@ -968,13 +979,18 @@ fn overlap(p: &[DVec3; 4], q: &[DVec3; 4]) -> bool {
     })
 }
 
+/// A chosen convex edge ending at a vertex: the direction away from it, the normals of its two
+/// faces, its profile and its length.
+type Leaving = (DVec3, [DVec3; 2], Profile, f64);
+
 /// What the other chosen edges do at a vertex.
 struct Corner<'a> {
     /// Another chosen convex edge ends there.
     run_on: &'a dyn Fn(VertexId) -> bool,
     /// A chosen convex edge ends there and leaves it along the given direction (it continues
-    /// the edge straight on) between faces turned the same ways, with the same profile.
-    straight: &'a dyn Fn(VertexId, DVec3, [DVec3; 2], Profile) -> bool,
+    /// the edge straight on) between faces turned the same ways, with the same profile: its
+    /// length.
+    straight: &'a dyn Fn(VertexId, DVec3, [DVec3; 2], Profile) -> Option<f64>,
     /// A chosen convex edge ending there lies beside this face, cutting it there.
     cut: &'a dyn Fn(VertexId, FaceId) -> bool,
 }
@@ -1009,8 +1025,17 @@ fn close_ends(
         });
         // The faces of a void touching a straight run only at its middle do not stop the cut
         // running on.
-        let straight = cut.convex && (at.straight)(v, along, [cut.n1, cut.n2], cut.profile);
-        if cut.convex && (at.run_on)(v) && (leaves || straight) {
+        let straight = if cut.convex {
+            (at.straight)(v, along, [cut.n1, cut.n2], cut.profile)
+        } else {
+            None
+        };
+        if cut.convex && (at.run_on)(v) && (leaves || straight.is_some()) {
+            // Past a straight neighbour the cut covers it only as far as it can overlap its own
+            // cut, never to its far end (a step or a corner there is the neighbour's to close).
+            if let (Some(length), End::Extend(reach)) = (straight, cut.ends[k]) {
+                cut.ends[k] = End::Extend(reach.min(length / 2.0));
+            }
             continue;
         }
         let Some(first) = others.first() else {
@@ -4748,14 +4773,13 @@ mod tests {
         let s = 0.25f64;
         let tilt = std::f64::consts::PI - (1.0 / 5f64.sqrt()).acos();
         let want = signed_volume(&m) - 2.0 * 0.5 * s * s - 2.0 * 0.5 * s * s * tilt.sin();
-        // As before (refused) or exactly the two chamfers, never more.
-        if let Ok(r) = bevelled(&m, &[left, right], chamfer(s)) {
-            assert!(
-                (signed_volume(&r) - want).abs() < 1e-9,
-                "{}",
-                signed_volume(&r)
-            );
-        }
+        // Refused at the bend, as before: the cutter of one piece does not run on into the
+        // other, which is cut at another angle (it gave 17.849 for the 17.882 of the two cuts).
+        assert!(matches!(
+            bevelled(&m, &[left, right], chamfer(s)),
+            Err(BevelError::Edge(..))
+        ));
+        let _ = want;
     }
 
     #[test]
@@ -4789,15 +4813,11 @@ mod tests {
         let r = bevelled(&m, &[left, right], chamfer(0.25)).unwrap();
         closed(&r);
         assert!((signed_volume(&r) - (16.0 - 4.0 * 0.03125)).abs() < 1e-9);
-        // A chamfer and a round side by side: whatever comes out loses exactly their volumes.
-        if let Ok((r, _)) = bevel_core(&m, &[(left, chamfer(0.25)), (right, fillet(0.25))]) {
-            let want = 16.0 - 2.0 * 0.03125 - 2.0 * quarter_loss(0.25, DEFAULT_SEGMENTS as usize);
-            assert!(
-                (signed_volume(&r) - want).abs() < 1e-9,
-                "{}",
-                signed_volume(&r)
-            );
-        }
+        // A chamfer beside a round has no common end: refused as before.
+        assert!(matches!(
+            bevel_core(&m, &[(left, chamfer(0.25)), (right, fillet(0.25))]),
+            Err(BevelError::Edge(..))
+        ));
     }
 
     #[test]
@@ -4935,5 +4955,169 @@ mod tests {
             assert_eq!(open_reason(&part), None);
             assert!((signed_volume(&part) - (8.0 - 0.0625)).abs() < 1e-9);
         }
+    }
+
+    /// The polygon through `pts`, wound to face `out`.
+    fn facing(pts: &[[f64; 3]], out: [f64; 3]) -> Vec<DVec3> {
+        let mut v: Vec<DVec3> = pts.iter().map(|p| DVec3::from_array(*p)).collect();
+        if vector_area(&v).dot(DVec3::from_array(out)) < 0.0 {
+            v.reverse();
+        }
+        v
+    }
+
+    /// A block x 0..6, y 0..2, 2 m tall for x < `step` and 3 m beyond; with `split` the front
+    /// faces are split at x = 2, the top front edge into pieces 0..2 and 2..`step`.
+    fn step_block(step: f64, split: bool) -> Model {
+        let x = step;
+        let mut f = vec![
+            facing(
+                &[[0., 0., 0.], [0., 2., 0.], [6., 2., 0.], [6., 0., 0.]],
+                [0., 0., -1.],
+            ),
+            facing(
+                &[[0., 0., 0.], [0., 2., 0.], [0., 2., 2.], [0., 0., 2.]],
+                [-1., 0., 0.],
+            ),
+            facing(
+                &[[6., 0., 0.], [6., 2., 0.], [6., 2., 3.], [6., 0., 3.]],
+                [1., 0., 0.],
+            ),
+            facing(
+                &[[x, 0., 2.], [x, 2., 2.], [x, 2., 3.], [x, 0., 3.]],
+                [-1., 0., 0.],
+            ),
+            facing(
+                &[[x, 0., 3.], [6., 0., 3.], [6., 2., 3.], [x, 2., 3.]],
+                [0., 0., 1.],
+            ),
+            facing(
+                &[
+                    [0., 2., 0.],
+                    [6., 2., 0.],
+                    [6., 2., 3.],
+                    [x, 2., 3.],
+                    [x, 2., 2.],
+                    [0., 2., 2.],
+                ],
+                [0., 1., 0.],
+            ),
+            facing(
+                &[
+                    [0., 0., 2.],
+                    [2., 0., 2.],
+                    [x, 0., 2.],
+                    [x, 2., 2.],
+                    [0., 2., 2.],
+                ],
+                [0., 0., 1.],
+            ),
+        ];
+        if split {
+            f[0] = facing(
+                &[
+                    [0., 0., 0.],
+                    [0., 2., 0.],
+                    [6., 2., 0.],
+                    [6., 0., 0.],
+                    [2., 0., 0.],
+                ],
+                [0., 0., -1.],
+            );
+            f.push(facing(
+                &[[0., 0., 0.], [2., 0., 0.], [2., 0., 2.], [0., 0., 2.]],
+                [0., -1., 0.],
+            ));
+            f.push(facing(
+                &[
+                    [2., 0., 0.],
+                    [6., 0., 0.],
+                    [6., 0., 3.],
+                    [x, 0., 3.],
+                    [x, 0., 2.],
+                    [2., 0., 2.],
+                ],
+                [0., -1., 0.],
+            ));
+        } else {
+            f.push(facing(
+                &[
+                    [0., 0., 0.],
+                    [6., 0., 0.],
+                    [6., 0., 3.],
+                    [x, 0., 3.],
+                    [x, 0., 2.],
+                    [2., 0., 2.],
+                    [0., 0., 2.],
+                ],
+                [0., -1., 0.],
+            ));
+        }
+        from_faces(&f)
+    }
+
+    #[test]
+    fn a_run_on_past_a_split_edge_stops_short_of_the_next_pieces_far_end() {
+        // The pieces 0..2 and 2..step of the top front edge, then a step up: the cutter used to
+        // run on past x = 2 by a fixed reach and cut the step's face.
+        for (step, s) in [(4.0, 0.5), (4.0, 0.25), (2.6, 0.25)] {
+            for split in [true, false] {
+                let m = step_block(step, split);
+                assert_eq!(open_reason(&m), None);
+                let l = edge_at(&m, [0., 0., 2.], [2., 0., 2.]);
+                let r = edge_at(&m, [2., 0., 2.], [step, 0., 2.]);
+                let want = signed_volume(&m) - step * 0.5 * s * s;
+                let got = signed_volume(&bevelled(&m, &[l, r], chamfer(s)).unwrap());
+                assert!(
+                    (got - want).abs() < 1e-9,
+                    "step {step} s {s} split {split}: {got} {want}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_void_with_its_faces_turned_the_wrong_way_is_not_a_solid() {
+        // Its faces point out of the void: a second solid overlapping the first, as before
+        // refused, whatever edge is bevelled.
+        let base = cube_with_void_on_an_edge();
+        let flipped: Vec<Vec<DVec3>> = {
+            let mut out = Vec::new();
+            for (_, f) in base.faces() {
+                let ring: Vec<DVec3> = f.outer.iter().map(|p| base.pos(*p)).collect();
+                // The void's faces are the ones between z = 1 and 3 away from the far sides.
+                let inside = ring
+                    .iter()
+                    .all(|p| p.x < 3.9 && p.y < 3.9 && p.z > 0.9 && p.z < 3.1);
+                out.push(if inside {
+                    ring.into_iter().rev().collect()
+                } else {
+                    ring
+                });
+            }
+            out
+        };
+        let m = from_faces(&flipped);
+        let void_volume = 0.5 * 1.5 * 1.5 * 50f64.to_radians().sin() * 2.0;
+        assert!(
+            (signed_volume(&m) - (64.0 + void_volume)).abs() < 1e-9,
+            "{}",
+            signed_volume(&m)
+        );
+        let far = edge_at(&m, [4., 0., 4.], [4., 4., 4.]);
+        assert!(matches!(
+            bevel_core(&m, &[(far, chamfer(0.3))]),
+            Err(BevelError::NotSolid(_))
+        ));
+        let pieces = [
+            ([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+            ([0.0, 0.0, 1.0], [0.0, 0.0, 3.0]),
+            ([0.0, 0.0, 3.0], [0.0, 0.0, 4.0]),
+        ];
+        let edges: Vec<(EdgeId, Profile)> = pieces
+            .iter()
+            .map(|(p, q)| (edge_at(&m, *p, *q), chamfer(0.3)))
+            .collect();
+        assert!(bevel_core(&m, &edges).is_err());
     }
 }
