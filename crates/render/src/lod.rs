@@ -27,8 +27,9 @@
 //! open edges (those one of its triangles uses alone: where its surface goes on in another chunk)
 //! are put in grids, every edge of every chunk is looked up among them, and a point of another
 //! chunk lying on the edge is pinned with the edge's ends. The tolerance is 0.5 mm and positions
-//! are f32, so it stops working a few km from the origin. A dense model is searched up to a bound
-//! of work and then left as it is (with a line on stderr).
+//! are f32, so past a few km from the origin the tolerance grows with the coordinates (twice the
+//! f32 step), and a vertex is then pinned when within a few steps of an edge. A dense model is
+//! searched up to a bound of work and then left as it is (with a line on stderr).
 //!
 //! The simplified levels have their own small vertex (`LodVertex`): nothing in them is
 //! textured, glowing or see-through, and a chunk with something selected or hovered is drawn
@@ -464,9 +465,18 @@ fn par_map<T: Send>(count: usize, threads: usize, f: &(dyn Fn(usize) -> T + Sync
 pub type Seg = [[f32; 3]; 2];
 
 /// How far from an edge a vertex may be and still count as on it, in meters. Positions are
-/// f32, so this stops working a few km from the origin (a step of the last bit is then
-/// 0.5 mm and more): vertices there are not found on edges.
+/// f32, so the tolerance used grows with the coordinates (see `tolerance`).
 const ON_EDGE: f64 = 5e-4;
+
+/// How far from the edge from `a` to `b` a vertex may be and still count as on it. At least
+/// `ON_EDGE`; far from the origin the f32 positions themselves are off by up to half a step of
+/// their last bit (`EPSILON` times the coordinate, at most), in the vertex and in both ends of
+/// the edge, so the tolerance grows with the largest coordinate involved. Depends on the edge
+/// alone, so the grid an edge is looked up in and the test agree.
+fn tolerance(a: [f32; 3], b: [f32; 3]) -> f32 {
+    let m = a.iter().chain(&b).fold(0.0f32, |m, v| m.max(v.abs()));
+    (ON_EDGE as f32).max(2.0 * f32::EPSILON * m)
+}
 
 /// The smallest cell of the grids T-junctions are looked up in, in meters, and how many
 /// grids there are (each cell four times the one before: the last is about 17 km). An edge is
@@ -482,8 +492,8 @@ const WORK_LIMIT: u64 = 400_000_000;
 const CHECK_EVERY: u64 = 65_536;
 
 /// The grid for an edge with a box of `extent` m at most: `LEVELS` for one too long for any.
-fn level_of(extent: f32) -> usize {
-    let need = extent + 2.0 * ON_EDGE as f32;
+fn level_of(extent: f32, tolerance: f32) -> usize {
+    let need = extent + 2.0 * tolerance;
     let mut cell = FINEST;
     for level in 0..LEVELS {
         if cell >= need {
@@ -498,8 +508,8 @@ fn cell_size(level: usize) -> f32 {
     FINEST * 4f32.powi(level as i32)
 }
 
-fn cell_at(p: f32, size: f32) -> i32 {
-    (p / size).floor() as i32
+fn cell_at(p: f32, size: f32) -> i64 {
+    (f64::from(p) / f64::from(size)).floor() as i64
 }
 
 /// The edges of the triangles whose corners are `corners` that only one triangle uses (by
@@ -542,7 +552,7 @@ fn ends_and_levels(corners: &[[f32; 3]]) -> (Vec<[f32; 3]>, u32) {
         for i in 0..3 {
             let (a, b) = (t[i], t[(i + 1) % 3]);
             let extent = (0..3).map(|k| (a[k] - b[k]).abs()).fold(0.0f32, f32::max);
-            levels |= 1 << level_of(extent);
+            levels |= 1 << level_of(extent, tolerance(a, b));
         }
     }
     (ends, levels)
@@ -576,7 +586,7 @@ fn t_junctions(
         return Vec::new();
     }
     // Every point in each grid some edge is looked up in.
-    let mut grids: Vec<Map<[i32; 3], Vec<u32>>> = (0..LEVELS).map(|_| Map::default()).collect();
+    let mut grids: Vec<Map<[i64; 3], Vec<u32>>> = (0..LEVELS).map(|_| Map::default()).collect();
     for (level, grid) in grids.iter_mut().enumerate() {
         if levels & (1 << level) != 0 {
             let size = cell_size(level);
@@ -615,7 +625,11 @@ fn t_junctions(
             if tested.get() >= CHECK_EVERY && flush() {
                 return;
             }
-            if c as usize != k && p != a && p != b && distance_to_segment(p, [a, b]) <= ON_EDGE {
+            if c as usize != k
+                && p != a
+                && p != b
+                && distance_to_segment(p, [a, b]) <= f64::from(tolerance(a, b))
+            {
                 pins.extend([bits(p), bits(a), bits(b)]);
             }
         };
@@ -629,7 +643,7 @@ fn t_junctions(
                     continue;
                 }
                 let extent = (0..3).map(|k| (a[k] - b[k]).abs()).fold(0.0f32, f32::max);
-                let level = level_of(extent);
+                let level = level_of(extent, tolerance(a, b));
                 if level == LEVELS {
                     // Longer than any grid: every point is looked at.
                     for n in 0..points.len() as u32 {
@@ -641,7 +655,7 @@ fn t_junctions(
                     continue;
                 }
                 let size = cell_size(level);
-                let reach = ON_EDGE as f32;
+                let reach = tolerance(a, b);
                 let lo = [0, 1, 2].map(|i| cell_at(a[i].min(b[i]) - reach, size));
                 let hi = [0, 1, 2].map(|i| cell_at(a[i].max(b[i]) + reach, size));
                 for x in lo[0]..=hi[0] {
@@ -1345,6 +1359,71 @@ mod tests {
             WORK_LIMIT,
         );
         assert!(pins.is_empty());
+    }
+
+    #[test]
+    fn a_vertex_on_an_edge_is_pinned_far_from_the_origin() {
+        // The two-triangle wall scene, moved in f64 and then rounded to f32 as the scene's
+        // vertices are, so the vertices are off the edge by up to a step of the last bit.
+        let base: [[f64; 3]; 21] = [
+            [10.0, 0.0, 0.0],
+            [20.0, 0.0, 0.0],
+            [20.0, 5.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [20.0, 5.0, 0.0],
+            [10.0, 5.0, 0.0],
+            [20.0, 0.0, 0.0],
+            [20.0, 0.0, 3.0],
+            [20.0, 5.0, 3.0],
+            [20.0, 0.0, 0.0],
+            [20.0, 5.0, 3.0],
+            [20.0, 5.0, 0.0],
+            [20.0, 0.0, 0.0],
+            [30.0, 0.0, 0.0],
+            [20.0, 1.0, 0.0],
+            [20.0, 1.0, 0.0],
+            [30.0, 0.0, 0.0],
+            [20.0, 2.5, 0.0],
+            [20.0, 2.5, 0.0],
+            [30.0, 0.0, 0.0],
+            [20.0, 5.0, 0.0],
+        ];
+        for far in [0.0, 1e3, 1e5, 1e6] {
+            // Sheared so the edge is oblique, and off by a fraction no f32 holds.
+            let far = if far > 0.0 { far + 0.123_456_7 } else { far };
+            let at = |p: &[f64; 3]| {
+                let (x, y) = (p[0] + 0.3 * p[1], p[1] + 0.2 * p[0]);
+                [(x + far) as f32, (y + far) as f32, (p[2] + far) as f32]
+            };
+            let a: Vec<[f32; 3]> = base[..12].iter().map(at).collect();
+            let b: Vec<[f32; 3]> = base[12..].iter().map(at).collect();
+            let pins = pins_of(&[a, b]);
+            for p in [
+                [20.0, 1.0, 0.0],
+                [20.0, 2.5, 0.0],
+                [20.0, 0.0, 0.0],
+                [20.0, 5.0, 0.0],
+            ] {
+                assert!(pins.contains(&bits(at(&p))), "{p:?} at {far}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_vertex_beside_an_edge_is_not_pinned_far_from_the_origin() {
+        // 5 cm off the edge is far more than the f32 step at 1e5 (8 mm): not on it.
+        let far = 1e5f32;
+        let a = vec![
+            [far, far, 0.0],
+            [far + 10.0, far, 0.0],
+            [far, far + 5.0, 0.0],
+        ];
+        let b = vec![
+            [far + 5.0, far + 0.05, 0.0],
+            [far + 5.0, far + 3.0, 0.0],
+            [far + 7.0, far + 3.0, 0.0],
+        ];
+        assert!(pins_of(&[a, b]).is_empty());
     }
 
     #[test]
