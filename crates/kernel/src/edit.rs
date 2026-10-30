@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 
 use glam::DVec3;
@@ -221,8 +221,8 @@ impl Model {
     pub(crate) fn draw_segments(&mut self, segments: &[(DVec3, DVec3)]) {
         let mut fresh: BTreeSet<EdgeId> = BTreeSet::new();
         let mut near = Nearby::for_batch(segments.len());
-        for (a, b) in segments {
-            self.insert_segment(*a, *b, &mut fresh, &mut near);
+        for (a, b) in one_point_per_end(segments) {
+            self.insert_segment(a, b, &mut fresh, &mut near);
         }
         let fresh: Vec<EdgeId> = fresh.into_iter().collect();
         self.create_faces(&fresh);
@@ -465,6 +465,42 @@ pub(crate) fn insert_between(l: &mut Vec<VertexId>, a: VertexId, b: VertexId, m:
             return;
         }
     }
+}
+
+/// How far apart two ends of segments can be and still be one point: the cuts of different
+/// face pairs meeting at a point compute it each their own way, and differ by far less than
+/// `LENGTH_TOL` where the faces are steep to each other, by a good part of it where shallow.
+const SAME_END: f64 = LENGTH_TOL;
+
+/// `segments` with the ends within `SAME_END` of each other made one point (the first met). A
+/// point near an existing vertex is taken by it or not by whether it lies within `LENGTH_TOL`
+/// of it, and a point right at that distance is on either side by the last bits of its
+/// coordinates: two cuts meeting at the point, each with its own value of it, were judged
+/// differently (one end taken by the vertex, the other not, leaving a sliver of that width and
+/// an edge of three faces). Made one point first, it is judged once.
+fn one_point_per_end(segments: &[(DVec3, DVec3)]) -> Vec<(DVec3, DVec3)> {
+    let cell = |p: DVec3| (p / (4.0 * SAME_END)).floor().as_i64vec3();
+    let mut seen: HashMap<glam::I64Vec3, Vec<DVec3>> = HashMap::new();
+    let mut one = |p: DVec3| -> DVec3 {
+        let c = cell(p);
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    let near = seen.get(&(c + glam::I64Vec3::new(dx, dy, dz)));
+                    if let Some(q) = near
+                        .into_iter()
+                        .flatten()
+                        .find(|q| q.distance(p) <= SAME_END)
+                    {
+                        return *q;
+                    }
+                }
+            }
+        }
+        seen.entry(c).or_default().push(p);
+        p
+    };
+    segments.iter().map(|(a, b)| (one(*a), one(*b))).collect()
 }
 
 #[cfg(test)]
@@ -729,5 +765,18 @@ mod tests {
             }
             assert!(s.root().is_empty(), "{what}");
         }
+    }
+    #[test]
+    fn ends_within_the_tolerance_of_each_other_become_one_point() {
+        use super::one_point_per_end;
+        let a = DVec3::new(1.699999, 3.0, 4.0);
+        let b = a + DVec3::new(2e-16, 1e-7, 0.0);
+        let far = DVec3::new(5.0, 0.0, 0.0);
+        let far2 = DVec3::new(0.0, 5.0, 0.0);
+        let out = one_point_per_end(&[(far, a), (b, far2), (a + DVec3::new(0.0, 3e-6, 0.0), far)]);
+        assert_eq!(out[0].1, a);
+        assert_eq!(out[1].0, a);
+        // 3e-6 away is another point.
+        assert_ne!(out[2].0, a);
     }
 }
