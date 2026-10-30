@@ -116,11 +116,78 @@ pub fn face_segments(a: &FaceShape, b: &FaceShape) -> Vec<(DVec3, DVec3)> {
         return Vec::new();
     }
     let on_b = line_intervals(&Flat::new(b, &b.plane), &b.plane, origin, dir);
+    // A stretch ends where the line leaves a face across one of its edges: the end is that
+    // edge's point in the other face's plane, so the two stretches that end at an edge two
+    // faces share (a crease) end at one point. The point of the line itself is off the edge by
+    // the planes' fit error, and along a shallow crease that error is magnified. Only a
+    // correction of fit-error size is taken, and only where the edge crosses the other plane
+    // at a slope of at least `MIN_SLOPE`: an edge nearly along the plane (so nearly along the
+    // line) meets it anywhere within the fit error, far along the line from the crossing, and
+    // the point of the line stands. The point must also lie within the other face's stretch
+    // (its ends `others`, to `LENGTH_TOL`): the correction may not carry the end out of it.
+    let place = |end: End, own: &FaceShape, other: &FaceShape, others: &[(End, End)]| -> DVec3 {
+        let on_line = origin + dir * end.t;
+        let Some((k, i)) = end.edge else {
+            return on_line;
+        };
+        let l = if k == 0 {
+            &own.outer
+        } else {
+            &own.holes[k - 1]
+        };
+        let (p, q) = (l[i], l[(i + 1) % l.len()]);
+        let within = |t: f64| {
+            others
+                .iter()
+                .any(|(lo, hi)| lo.t - LENGTH_TOL <= t && t <= hi.t + LENGTH_TOL)
+        };
+        match edge_in_plane(p, q, &other.plane, MIN_SLOPE) {
+            Some(x)
+                if x.distance(on_line) <= LENGTH_TOL / MIN_SLOPE
+                    && within((x - origin).dot(dir)) =>
+            {
+                x
+            }
+            _ => on_line,
+        }
+    };
     meet(&on_a, &on_b)
         .into_iter()
-        .filter(|(t0, t1)| t1 - t0 >= LENGTH_TOL)
-        .map(|(t0, t1)| (origin + dir * t0, origin + dir * t1))
+        .filter(|(lo, hi)| hi.0.t - lo.0.t >= LENGTH_TOL)
+        .map(|(lo, hi)| {
+            let end = |(e, from_b): (End, bool)| {
+                if from_b {
+                    place(e, b, a, &on_a)
+                } else {
+                    place(e, a, b, &on_b)
+                }
+            };
+            let (s, e) = (end(lo), end(hi));
+            // The ends keep their order and the stretch its length.
+            if (e - s).dot(dir) >= LENGTH_TOL {
+                (s, e)
+            } else {
+                (origin + dir * lo.0.t, origin + dir * hi.0.t)
+            }
+        })
         .collect()
+}
+
+/// The least sine of the angle between an edge and the other face's plane for the edge's point
+/// to end a stretch. The planes' fit error, `LENGTH_TOL`, is magnified by at most its inverse
+/// along the edge.
+const MIN_SLOPE: f64 = 0.01;
+
+/// Where the segment `p`-`q` meets `plane`; None when the sine of its angle to the plane is
+/// under `min_slope`.
+fn edge_in_plane(p: DVec3, q: DVec3, plane: &Plane, min_slope: f64) -> Option<DVec3> {
+    let d = q - p;
+    let slope = plane.normal.dot(d);
+    if slope.abs() < min_slope * d.length() {
+        return None;
+    }
+    let s = (-plane.distance(p) / slope).clamp(0.0, 1.0);
+    Some(p + d * s)
 }
 
 /// An upper bound on the work `face_segments(a, b)` does, in edge visits: the product of the two
@@ -192,65 +259,101 @@ impl Flat {
     }
 }
 
-/// The parameter ranges of the 3D line `origin + t * dir` (unit `dir`, in the plane) inside the
-/// face, boundary included, sorted and merged.
-fn line_intervals(flat: &Flat, plane: &Plane, origin: DVec3, dir: DVec3) -> Vec<(f64, f64)> {
-    let q0 = plane.project(origin);
-    let r = plane.project(origin + dir) - q0;
-    flat_intervals(flat, q0, r, f64::NEG_INFINITY, f64::INFINITY)
+/// Where a stretch of a line inside a face ends: the parameter along the line, and the face
+/// edge (loop, side) the line crosses there, if it crosses one.
+#[derive(Clone, Copy)]
+struct End {
+    t: f64,
+    edge: Option<(usize, usize)>,
 }
 
-/// The same in 2D: the ranges of `q0 + t * r` (r of unit length) inside the closed area, within
-/// `lo..=hi` (either may be infinite). Only the windows inside that range are classified.
+impl End {
+    fn at(t: f64) -> End {
+        End { t, edge: None }
+    }
+}
+
+/// The ranges of the 3D line `origin + t * dir` (unit `dir`, in the plane) inside the face,
+/// boundary included, sorted and merged.
+fn line_intervals(flat: &Flat, plane: &Plane, origin: DVec3, dir: DVec3) -> Vec<(End, End)> {
+    let q0 = plane.project(origin);
+    let r = plane.project(origin + dir) - q0;
+    flat_stretches(flat, q0, r, f64::NEG_INFINITY, f64::INFINITY)
+}
+
+/// The parameter ranges of `q0 + t * r` (r of unit length) inside the closed area, within
+/// `lo..=hi` (either may be infinite).
 fn flat_intervals(flat: &Flat, q0: DVec2, r: DVec2, lo: f64, hi: f64) -> Vec<(f64, f64)> {
+    flat_stretches(flat, q0, r, lo, hi)
+        .into_iter()
+        .map(|(a, b)| (a.t, b.t))
+        .collect()
+}
+
+/// The same with each end's edge. Only the windows inside the range are classified.
+fn flat_stretches(flat: &Flat, q0: DVec2, r: DVec2, lo: f64, hi: f64) -> Vec<(End, End)> {
     let param = |x: DVec2| (x - q0).dot(r);
-    let mut ts: Vec<f64> = Vec::new();
-    for l in flat.loops() {
+    let mut ts: Vec<End> = Vec::new();
+    for (k, l) in flat.loops().enumerate() {
         for i in 0..l.len() {
             let (p, q) = (l[i], l[(i + 1) % l.len()]);
             let (sp, sq) = (r.perp_dot(p - q0), r.perp_dot(q - q0));
             if sp.abs() < LENGTH_TOL {
-                ts.push(param(p));
+                ts.push(End::at(param(p)));
             }
             if sq.abs() < LENGTH_TOL {
-                ts.push(param(q));
+                ts.push(End::at(param(q)));
             }
-            if (sp > LENGTH_TOL && sq < -LENGTH_TOL) || (sp < -LENGTH_TOL && sq > LENGTH_TOL) {
-                ts.push(param(p + (q - p) * (sp / (sp - sq))));
+            // An edge that passes from one side of the line to the other crosses it, even
+            // when one end is within `LENGTH_TOL` of it: a shallow edge ending that near the
+            // line crosses it far from that end, and the line leaves the area there.
+            if sp * sq < 0.0 && sp.abs().max(sq.abs()) > LENGTH_TOL {
+                ts.push(End {
+                    t: param(p + (q - p) * (sp / (sp - sq))),
+                    edge: Some((k, i)),
+                });
             }
         }
     }
-    ts.retain(|t| t.is_finite() && *t > lo && *t < hi);
+    ts.retain(|e| e.t.is_finite() && e.t > lo && e.t < hi);
     for end in [lo, hi] {
         if end.is_finite() {
-            ts.push(end);
+            ts.push(End::at(end));
         }
     }
-    ts.sort_by(f64::total_cmp);
-    let mut out: Vec<(f64, f64)> = Vec::new();
+    ts.sort_by(|x, y| x.t.total_cmp(&y.t));
+    let mut out: Vec<(End, End)> = Vec::new();
     for w in ts.windows(2) {
-        let (t0, t1) = (w[0], w[1]);
-        if t1 > t0 && flat.inside_closed(q0 + r * ((t0 + t1) * 0.5)) {
+        let (e0, e1) = (w[0], w[1]);
+        if e1.t > e0.t && flat.inside_closed(q0 + r * ((e0.t + e1.t) * 0.5)) {
             match out.last_mut() {
-                Some(last) if last.1 >= t0 => last.1 = t1,
-                _ => out.push((t0, t1)),
+                Some(last) if last.1.t >= e0.t => last.1 = e1,
+                _ => out.push((e0, e1)),
             }
         }
     }
     out
 }
 
-/// The overlaps of two sorted interval lists.
-fn meet(a: &[(f64, f64)], b: &[(f64, f64)]) -> Vec<(f64, f64)> {
+/// The overlaps of two sorted interval lists, each end with whether it comes from `b`.
+fn meet(a: &[(End, End)], b: &[(End, End)]) -> Vec<((End, bool), (End, bool))> {
     let (mut i, mut j) = (0, 0);
     let mut out = Vec::new();
     while i < a.len() && j < b.len() {
-        let lo = a[i].0.max(b[j].0);
-        let hi = a[i].1.min(b[j].1);
-        if hi > lo {
+        let lo = if a[i].0.t >= b[j].0.t {
+            (a[i].0, false)
+        } else {
+            (b[j].0, true)
+        };
+        let hi = if a[i].1.t <= b[j].1.t {
+            (a[i].1, false)
+        } else {
+            (b[j].1, true)
+        };
+        if hi.0.t > lo.0.t {
             out.push((lo, hi));
         }
-        if a[i].1 < b[j].1 {
+        if a[i].1.t < b[j].1.t {
             i += 1;
         } else {
             j += 1;

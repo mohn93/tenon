@@ -2747,12 +2747,19 @@ mod tests {
     }
     /// The corner (by bits of `k`) of the unit cube with its three edges sized `radii`.
     fn unit_corner(k: usize, radii: [f64; 3]) -> (Model, Vec<(EdgeId, f64)>) {
-        let m = cuboid([1.0; 3]);
-        let at: Vec<f64> = (0..3).map(|i| f64::from((k >> i & 1) as u8)).collect();
+        cube_corner(1.0, k, radii)
+    }
+
+    /// The same on a cube of side `size`.
+    fn cube_corner(size: f64, k: usize, radii: [f64; 3]) -> (Model, Vec<(EdgeId, f64)>) {
+        let m = cuboid([size; 3]);
+        let at: Vec<f64> = (0..3)
+            .map(|i| size * f64::from((k >> i & 1) as u8))
+            .collect();
         let corner = [at[0], at[1], at[2]];
         let end = |i: usize| {
             let mut v = corner;
-            v[i] = 1.0 - v[i];
+            v[i] = size - v[i];
             v
         };
         let sized = (0..3)
@@ -2809,33 +2816,12 @@ mod tests {
         for segments in [25, 31] {
             for radii in [[0.02, 0.03, 0.04], [0.03, 0.02, 0.04]] {
                 for k in 0..8 {
-                    if let Err(e) = round_unit_corner(k, radii, segments) {
-                        // Known: see `radii_of_two_to_four_percent_at_the_known_open_corners`.
-                        assert!(
-                            KNOWN_OPEN.contains(&(segments, radii[0] < radii[1], k)),
-                            "{segments} {radii:?} corner {k}: {e}"
-                        );
-                    }
+                    // At 31 segments, corners 4 to 7 once failed: a facet's cut ended a micron
+                    // short, and the cutter's neighbouring facets cut it at different points.
+                    round_unit_corner(k, radii, segments)
+                        .unwrap_or_else(|e| panic!("{segments} {radii:?} corner {k}: {e}"));
                 }
             }
-        }
-    }
-
-    /// (segments, first radius smaller, corner) of the rounds that stay refused.
-    const KNOWN_OPEN: [(u32, bool, usize); 4] =
-        [(31, true, 6), (31, true, 7), (31, false, 4), (31, false, 5)];
-
-    #[test]
-    #[ignore = "refused: the crossing of two facets ends 7e-7 off the facet it cuts, leaving that facet unsplit (not fixed)"]
-    fn radii_of_two_to_four_percent_at_the_known_open_corners() {
-        for (segments, ascending, k) in KNOWN_OPEN {
-            let radii = if ascending {
-                [0.02, 0.03, 0.04]
-            } else {
-                [0.03, 0.02, 0.04]
-            };
-            round_unit_corner(k, radii, segments)
-                .unwrap_or_else(|e| panic!("{segments} {radii:?} corner {k}: {e}"));
         }
     }
 
@@ -2926,10 +2912,12 @@ mod tests {
         // Two edges, not at a corner: each edge's own cut.
         let two = [(edges[0], fillet(0.2)), (edges[1], chamfer(0.35))];
         closed(&bevelled_mixed(&m, &two).unwrap());
-        // Sizes snap within a kind, not across kinds.
+        // Sizes snap within a kind, not across kinds. The chamfer is 2e-6 from the round, not
+        // 1e-6: faces exactly `LENGTH_TOL` apart are judged coplanar or not by the last bit of
+        // their fitted planes (a change of 1e-15 flips whether this closes, on dev too).
         let near = [
             (edges[0], fillet(0.3)),
-            (edges[1], chamfer(0.3 + 1e-6)),
+            (edges[1], chamfer(0.3 + 2e-6)),
             (edges[2], fillet(0.3 + 1e-6)),
         ];
         closed(&bevelled_mixed(&m, &near).unwrap());
@@ -2938,6 +2926,117 @@ mod tests {
         match bevelled_mixed(&m, &bad) {
             Err(BevelError::Invalid(why)) => assert!(why.contains("distance"), "{why}"),
             other => panic!("{other:?}"),
+        }
+    }
+
+    /// Rounds every edge of the shape, three radii by colour (times `scale`), at `segments`.
+    fn round_three_radii(
+        m: &Model,
+        scale: f64,
+        radii: [f64; 3],
+        segments: u32,
+    ) -> Result<(Model, usize), BevelError> {
+        let ids: Vec<EdgeId> = m
+            .edges()
+            .filter(|(_, e)| !e.soft && e.curve.is_none_or(|_| e.polygon))
+            .map(|(id, _)| id)
+            .collect();
+        let colour = three_colours(m, &ids).expect("3-colourable");
+        let each: Vec<(EdgeId, Profile)> = ids
+            .iter()
+            .zip(&colour)
+            .map(|(e, c)| {
+                let profile = Profile::Fillet {
+                    radius: radii[*c] * scale,
+                    segments,
+                };
+                (*e, profile)
+            })
+            .collect();
+        bevel_core(m, &each).map(|(out, patched)| (out, patched.len()))
+    }
+
+    #[test]
+    fn a_half_sheared_box_with_three_radii_rounds_at_many_segments() {
+        // Once refused as "would not be a solid": the cuts across a facet's shallow edge or a
+        // crease did not meet (see the cases in `tests/integration/intersect.rs`).
+        let m = sheared_box(2.0, 0.5);
+        let (out, patched) = round_three_radii(&m, 1.0, [0.1, 0.12, 0.14], 24).unwrap();
+        closed(&out);
+        assert!(signed_volume(&out) < signed_volume(&m));
+        assert!(patched > 0);
+    }
+
+    #[test]
+    #[ignore = "sweep, slow: cargo test --release -p kernel sweep_of_corner_rounds -- --ignored --nocapture"]
+    fn sweep_of_corner_rounds() {
+        // Cubes of side 1 and 3, 3 to 32 segments, six radius sets, all 8 corners.
+        let sets = [
+            [0.05, 0.06, 0.07],
+            [0.06, 0.05, 0.07],
+            [0.5, 0.6, 0.7],
+            [0.02, 0.03, 0.04],
+            [0.03, 0.02, 0.04],
+            [0.1, 0.12, 0.14],
+        ];
+        let (mut total, mut refused, mut unpatched) = (0, Vec::new(), 0);
+        for size in [1.0, 3.0] {
+            for segments in 3..=32 {
+                for radii in sets {
+                    for k in 0..8 {
+                        total += 1;
+                        let (m, sized) = cube_corner(size, k, radii);
+                        let profile = Profile::Fillet {
+                            radius: 0.1,
+                            segments,
+                        };
+                        let each: Vec<(EdgeId, Profile)> =
+                            sized.iter().map(|(e, r)| (*e, profile.sized(*r))).collect();
+                        match bevel_core(&m, &each) {
+                            Ok((out, patched)) => {
+                                assert_eq!(open_reason(&out), None);
+                                unpatched += usize::from(patched.len() != 1);
+                            }
+                            Err(_) => refused.push(format!("{size} {segments} {radii:?} {k}")),
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "SWEEP corners {total}: refused {} unpatched {unpatched}",
+            refused.len()
+        );
+        for r in &refused {
+            eprintln!("SWEEP refused {r}");
+        }
+    }
+
+    #[test]
+    #[ignore = "sweep, slow: cargo test --release -p kernel sweep_of_mixed_shapes -- --ignored --nocapture"]
+    fn sweep_of_mixed_shapes() {
+        let (mut total, mut refused, mut corners, mut patched_all) = (0, Vec::new(), 0, 0);
+        for (name, m, scale) in mixed_shapes() {
+            for segments in [2, 3, 8, 24] {
+                for radii in [[0.1, 0.12, 0.14], [0.1, 0.15, 0.2], [0.05, 0.06, 0.07]] {
+                    total += 1;
+                    match round_three_radii(&m, scale, radii, segments) {
+                        Ok((out, patched)) => {
+                            assert_eq!(open_reason(&out), None);
+                            corners += m.vertices().count();
+                            patched_all += patched;
+                        }
+                        Err(_) => refused.push(format!("{name} {segments} {radii:?}")),
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "SWEEP mixed {total}: refused {} patched {patched_all} of {corners} corners",
+            refused.len()
+        );
+        for r in &refused {
+            eprintln!("SWEEP refused {r}");
         }
     }
 
