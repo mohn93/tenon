@@ -629,6 +629,7 @@ impl Shared {
 /// already has stays as it is (its attributes win): a part touching what is in `m` along an edge
 /// or at a vertex keeps sharing it. Where the two then overlap along a line, edges are split at
 /// the other's vertices lying inside them so they conform (no T-junctions).
+#[cfg(test)]
 pub(crate) fn copy_merged(src: &Model, m: &mut Model) {
     copy_sharing(src, m, None);
 }
