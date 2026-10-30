@@ -11,21 +11,51 @@
 //!
 //! A corner of rounds and chamfers uses the star-shaped patch of rounds of different radii, a
 //! chamfer standing in as the round with the same setback: its strip is that round's chord, so
-//! the patch is held below the strip's plane. A corner of inside and outside edges is never
-//! patched: its surface would be a saddle between the ball outside the material and the ball in
-//! the empty corner, which no sphere or ring of rounds bounds.
+//! the patch is held below the strip's plane. Concave corners of different radii or kinds get
+//! the same patches for the empty corner: it is a convex corner of the empty space, so the
+//! faces' normals are turned round and the cutter is added instead of subtracted.
+//!
+//! A corner of inside and outside edges is a saddle between the ball outside the material and
+//! the ball in the empty corner, which no sphere or ring of rounds bounds. Two rounds of one
+//! kind and one of the other, on three square faces, get a `Saddle`: the pair stop at the
+//! planes through the unlike round's axis, and the body swept about that axis between their end
+//! sections is a cutter (outside pair) or a filler (inside pair); its surface is the
+//! rolling-ball blend round the unlike round.
 
 use std::collections::HashSet;
 
-use glam::DMat3;
+use glam::{DMat3, DQuat};
 
 use super::*;
 
 /// The largest crease (radians) left soft across a face beside a patch of unequal rounds.
 const SLIGHT: f64 = 0.17;
 
+/// How near a vertex of a finished solid must be to a patch vertex to count as it, given the
+/// least distance between the patch's vertices: a fraction of it, so a neighbour never does.
+fn mark_tol(spacing: f64) -> f64 {
+    0.25 * spacing
+}
+
+/// The least distance between two of `points`.
+fn spacing_of(points: &[DVec3]) -> f64 {
+    let mut least = f64::INFINITY;
+    for (i, p) in points.iter().enumerate() {
+        for q in &points[i + 1..] {
+            least = least.min(p.distance(*q));
+        }
+    }
+    least
+}
+
 /// Caps of the cutter lie this fraction of the radius outside the faces.
 const CAP: f64 = 0.25;
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: no corner patches, to see the crossed cuts.
+    pub(super) static OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 /// One corner's cutter and where its sphere is.
 pub(super) struct Patch {
@@ -45,6 +75,8 @@ pub(super) struct Patch {
     pub concave: bool,
     /// For a patch of rounds of different radii, the positions of its vertices.
     pub marks: Vec<DVec3>,
+    /// And the least distance between two of them.
+    pub spacing: f64,
     /// And the sides of its boundary that lie on the rounds' end arcs (the others lie across
     /// the faces).
     pub arc_sides: Vec<[DVec3; 2]>,
@@ -54,6 +86,10 @@ pub(super) struct Patch {
 
 /// The patches for the fillets `cuts` (already closed at their ends) of `m`.
 pub(super) fn patches(m: &Model, cuts: &[(EdgeId, EdgeCut)]) -> Vec<Patch> {
+    #[cfg(test)]
+    if OFF.with(|o| o.get()) {
+        return Vec::new();
+    }
     // Convex edges running on past the vertex; concave edges (which stop in the third face).
     let mut at: BTreeMap<(VertexId, bool), Vec<usize>> = BTreeMap::new();
     for (i, (_, cut)) in cuts.iter().enumerate() {
@@ -74,13 +110,11 @@ pub(super) fn patches(m: &Model, cuts: &[(EdgeId, EdgeCut)]) -> Vec<Patch> {
                 .count();
             match rounds {
                 3 => patch(m, v, three, concave),
-                // Three concave chamfers meet in a point of their own: a cone of empty space.
-                0 if !concave => flat(m, v, three),
-                0 => None,
+                // Chamfers meet in a point of their own (concave: a cone of empty space).
+                0 => flat(m, v, three, concave),
                 // Rounds and chamfers: the ringed patch, a chamfer standing in as the round
-                // with its setback. Concave corners of mixed kinds keep the crossed cuts.
-                _ if !concave => patch_mixed(m, v, three),
-                _ => None,
+                // with its setback.
+                _ => patch_mixed(m, v, three, concave),
             }
         })
         .collect();
@@ -116,11 +150,7 @@ fn patch(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3], concave: bool) -
         .iter()
         .any(|(_, c)| (c.profile.size() - radius).abs() > 1e-9 * radius)
     {
-        return if concave {
-            None
-        } else {
-            patch_mixed(m, v, cuts)
-        };
+        return patch_mixed(m, v, cuts, concave);
     }
     let faces: Vec<FaceId> = m.faces_at(v).collect();
     if faces.len() != 3 || m.edges_at(v).len() != 3 {
@@ -194,6 +224,7 @@ fn patch(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3], concave: bool) -
         flat: None,
         concave,
         marks: Vec::new(),
+        spacing: f64::INFINITY,
         arc_sides: Vec::new(),
         chord_sides: Vec::new(),
     })
@@ -204,7 +235,12 @@ fn patch(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3], concave: bool) -
 /// the three end arcs (each at its own depth along its edge) and a straight segment across each
 /// face from one arc's end to the next arc's start. None when the corner is not a plain
 /// trihedral one or the pieces do not close.
-fn patch_mixed(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<Patch> {
+fn patch_mixed(
+    m: &Model,
+    v: VertexId,
+    cuts: [&(EdgeId, EdgeCut); 3],
+    concave: bool,
+) -> Option<Patch> {
     let faces: Vec<FaceId> = m.faces_at(v).collect();
     if faces.len() != 3 || m.edges_at(v).len() != 3 {
         return None;
@@ -216,7 +252,10 @@ fn patch_mixed(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<
             normal[faces.iter().position(|g| *g == f)?] = Some(n);
         }
     }
-    let n = [normal[0]?, normal[1]?, normal[2]?];
+    // Concave: the empty corner is the convex one, with the faces' normals turned round, and
+    // the patch is a filler for it.
+    let flip = if concave { -1.0 } else { 1.0 };
+    let n = [normal[0]?, normal[1]?, normal[2]?].map(|x| x * flip);
     // Edge k lies between the faces k + 1 and k + 2.
     let mut edge: Vec<&(EdgeId, EdgeCut)> = Vec::new();
     for k in 0..3 {
@@ -295,7 +334,7 @@ fn patch_mixed(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<
         ring.pop();
     }
     let count = ring.len();
-    if count < 6 {
+    if count < 4 {
         return None;
     }
     let c = (centres[0] + centres[1] + centres[2]) / 3.0;
@@ -601,7 +640,8 @@ fn patch_mixed(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<
             (edge[2].0, depth[2]),
         ],
         flat: None,
-        concave: false,
+        concave,
+        spacing: spacing_of(&marks),
         marks,
         // A chamfer's strip keeps its crease, so its end is not softened.
         arc_sides: (0..count)
@@ -679,7 +719,7 @@ fn hexahedron(planes: &[(DVec3, DVec3); 6]) -> Option<Model> {
 
 /// The flat closure of three chamfers of `distance` at `v`, or None when the corner is not a
 /// plain trihedral one.
-fn flat(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<Patch> {
+fn flat(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3], concave: bool) -> Option<Patch> {
     let distance = cuts.iter().map(|(_, c)| c.setback).fold(0.0, f64::max);
     // A distance more than the other two together leaves the corner crossed.
     let total: f64 = cuts.iter().map(|(_, c)| c.setback).sum();
@@ -705,7 +745,8 @@ fn flat(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<Patch> 
         let [a, b] = beside[..] else {
             return None;
         };
-        normal[k] = if a.f1 == *f { a.n1 } else { a.n2 };
+        // Concave: the empty corner is the convex one, its normals turned round.
+        normal[k] = if a.f1 == *f { a.n1 } else { a.n2 } * if concave { -1.0 } else { 1.0 };
         let (ea, eb) = (away(a), away(b));
         let (da, db) = (into(a, *f), into(b, *f));
         let (ca, cb) = (db.dot(ea), da.dot(eb));
@@ -797,8 +838,9 @@ fn flat(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<Patch> 
             (cuts[2].0, reach_on(2)),
         ],
         flat: Some(meet),
-        concave: false,
+        concave,
         marks: Vec::new(),
+        spacing: f64::INFINITY,
         arc_sides: Vec::new(),
         chord_sides: Vec::new(),
     })
@@ -1223,9 +1265,17 @@ fn took(m: &Model, p: &Patch) -> bool {
         return false;
     }
     if !p.marks.is_empty() {
+        // A mark standing in the air needs no cut: the patch lies above the material there
+        // (a vertex near a chamfer's plane), so nothing of it shows.
+        let strict = (5.0 * LENGTH_TOL).min(1e-3 * p.radius);
         return p.marks.iter().all(|c| {
-            m.vertices()
-                .any(|(_, v)| v.pos.distance(*c) < (5.0 * LENGTH_TOL).min(1e-3 * p.radius))
+            let near = m
+                .vertices()
+                .map(|(_, v)| v.pos.distance(*c))
+                .fold(f64::INFINITY, f64::min);
+            near < strict
+                || (near < mark_tol(p.spacing)
+                    && crate::boolean::point_inside(*c, m) == Some(false))
         });
     }
     if let Some(corners) = p.flat {
@@ -1238,7 +1288,11 @@ fn took(m: &Model, p: &Patch) -> bool {
 }
 
 fn on_sphere<'a>(m: &'a Model, p: &'a Patch) -> impl Iterator<Item = VertexId> + 'a {
-    let tol = (5.0 * LENGTH_TOL).min(1e-3 * p.radius);
+    let tol = if p.marks.is_empty() {
+        (5.0 * LENGTH_TOL).min(1e-3 * p.radius)
+    } else {
+        mark_tol(p.spacing)
+    };
     m.vertices()
         .filter(move |(_, v)| {
             if p.marks.is_empty() {
@@ -1278,7 +1332,11 @@ pub(super) fn soften(m: &mut Model, patches: &[Patch], done: &[usize], step: f64
                 // A patch of unequal rounds softens along its arcs whatever the angle, and
                 // across a face only where the crease is slight.
                 let (pa, pb) = (m.pos(a), m.pos(b));
-                let tol = 1e-7 * p.radius.max(1e-3);
+                let tol = (1e-7 * p.radius.max(1e-3)).max(if p.marks.is_empty() {
+                    0.0
+                } else {
+                    mark_tol(p.spacing)
+                });
                 let on = |sides: &[[DVec3; 2]]| {
                     sides.iter().any(|[u, w]| {
                         (u.distance(pa) < tol && w.distance(pb) < tol)
@@ -1307,4 +1365,269 @@ pub(super) fn soften(m: &mut Model, patches: &[Patch], done: &[usize], step: f64
         m.set_edge(e, curve, true, polygon);
     }
     m.take_changes();
+}
+
+/// A corner where two rounds of one kind (both convex or both concave) and a round of the
+/// other kind meet: the surface there is a saddle, which no sphere or ring of rounds bounds.
+pub(super) struct Saddle {
+    pub vertex: VertexId,
+    /// How each edge at the corner ends: the like pair stop at the planes through the unlike
+    /// round's axis, the unlike round runs through to the third face.
+    pub ends: [(EdgeId, End); 3],
+    /// The swept body between the like pair's end sections: a cutter when the pair is convex
+    /// (the rounds of two outside edges turning round an inside one), a filler when it is
+    /// concave (insides turning round an outside).
+    pub sweep: Model,
+    pub add: bool,
+    /// Vertices of the swept surface between its ends, to check that it took.
+    pub marks: Vec<DVec3>,
+    /// And those at its ends too, to soften its edges.
+    pub seams: Vec<DVec3>,
+    /// The least distance between neighbouring ones.
+    pub spacing: f64,
+}
+
+/// The saddle at `v`, or None when the corner is not one: three rounds (two of one kind, one
+/// of the other) at a vertex of three mutually square faces, the like pair with as many
+/// segments each. The like pair's sections, swept about the unlike round's axis from one's end
+/// plane to the other's, give the body; its surface is the rolling-ball blend about the unlike
+/// round, a torus piece when the like radii are equal and a loft between them when not.
+pub(super) fn saddle(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<Saddle> {
+    let faces: Vec<FaceId> = m.faces_at(v).collect();
+    if faces.len() != 3 || m.edges_at(v).len() != 3 {
+        return None;
+    }
+    if cuts
+        .iter()
+        .any(|(_, c)| !matches!(c.profile, Profile::Fillet { .. }))
+    {
+        return None;
+    }
+    let convex = cuts.iter().filter(|(_, c)| c.convex).count();
+    if convex == 0 || convex == 3 {
+        return None;
+    }
+    // The odd one out, and the pair of the other kind.
+    let third = (0..3).find(|i| cuts[*i].1.convex == (convex == 1))?;
+    let like: Vec<usize> = (0..3).filter(|i| *i != third).collect();
+    let (t, add) = (&cuts[third].1, !cuts[like[0]].1.convex);
+    let normal = |c: &EdgeCut, f: FaceId| if c.f1 == f { c.n1 } else { c.n2 };
+    // The third round's faces x and y; z is the face both of the pair lie on.
+    let (x, y) = (t.f1, t.f2);
+    let z = *faces.iter().find(|f| **f != x && **f != y)?;
+    let (nx, ny, nz) = (normal(t, x), normal(t, y), normal(&cuts[like[0]].1, z));
+    if nx.dot(ny).abs() > 1e-6 || nx.dot(nz).abs() > 1e-6 || ny.dot(nz).abs() > 1e-6 {
+        return None;
+    }
+    // The pair: `a` beside x, `b` beside y.
+    let beside = |f: FaceId| {
+        like.iter()
+            .copied()
+            .find(|i| cuts[*i].1.f1 == f || cuts[*i].1.f2 == f)
+    };
+    let (a, b) = (beside(x)?, beside(y)?);
+    if a == b {
+        return None;
+    }
+    let (ca, cb) = (&cuts[a].1, &cuts[b].1);
+    let away = |c: &EdgeCut| if c.va == v { c.u } else { -c.u };
+    let (ua, ub, uc) = (away(ca), away(cb), away(t));
+    let s = t.setback;
+    // The axis: parallel to the third edge, `s` from both of its faces (in the empty corner of
+    // an inside edge, in the material of an outside one).
+    let sign = if t.convex { -1.0 } else { 1.0 };
+    let vertex = m.pos(v);
+    let axis_at = vertex + sign * s * (nx + ny);
+    let depth = |u: DVec3| (axis_at - vertex).dot(u);
+    let (da, db) = (depth(ua), depth(ub));
+    if da <= 10.0 * LENGTH_TOL || db <= 10.0 * LENGTH_TOL {
+        return None;
+    }
+    // The pair must be long enough to hold the saddle's depth and the round at their far
+    // ends, and the third round too.
+    let length = |c: &EdgeCut| c.a.distance(c.b);
+    if length(ca) < da + 2.0 * ca.setback
+        || length(cb) < db + 2.0 * cb.setback
+        || length(t) < 3.0 * s
+    {
+        return None;
+    }
+    // Each pair member's section starting on its face beside the third round, with the sides
+    // widened past the faces by `reach` (less beside the third round, which the axis is near).
+    let section = |c: &EdgeCut, own: FaceId, foot: DVec3| -> (Vec<DVec3>, usize) {
+        let mut points = c.profile.profile(c);
+        if c.f1 != own {
+            points.reverse();
+        }
+        let sides = points.len() - 1;
+        let (n_own, n_z) = (normal(c, own), normal(c, z));
+        let widen = if c.convex { 1.0 } else { -1.0 };
+        let reach = c.setback;
+        let (r_own, r_z) = ((0.5 * s).min(reach), reach);
+        let (first, last) = (points[0], points[sides]);
+        points.extend([
+            last + n_z * widen * r_z,
+            n_own * widen * r_own + n_z * widen * r_z,
+            first + n_own * widen * r_own,
+        ]);
+        (points.into_iter().map(|o| foot + o).collect(), sides)
+    };
+    let (pa, sides) = section(ca, x, vertex + ua * da);
+    let (pb, sides_b) = section(cb, y, vertex + ub * db);
+    if sides != sides_b {
+        return None;
+    }
+    let start = vertex + ua * da - axis_at;
+    let finish = vertex + ub * db - axis_at;
+    let axis = uc;
+    let angle = f64::atan2(axis.dot(start.cross(finish)), start.dot(finish));
+    if (angle.abs() - std::f64::consts::FRAC_PI_2).abs() > 1e-6 {
+        return None;
+    }
+    let turn = |p: DVec3, by: f64| axis_at + DQuat::from_axis_angle(axis, by) * (p - axis_at);
+    let steps = sides.max(2);
+    let n = pa.len();
+    let rings: Vec<Vec<DVec3>> = (0..=steps)
+        .map(|k| {
+            let t = k as f64 / steps as f64;
+            (0..n)
+                .map(|i| {
+                    let back = turn(pb[i], -angle);
+                    turn(pa[i].lerp(back, t), angle * t)
+                })
+                .collect()
+        })
+        .collect();
+    let mut sweep = Model::new();
+    let ids: Vec<Vec<VertexId>> = rings
+        .iter()
+        .map(|r| r.iter().map(|p| sweep.insert_vertex(*p)).collect())
+        .collect();
+    let mut loops: Vec<Vec<VertexId>> = Vec::new();
+    let mut surface: Vec<bool> = Vec::new();
+    for k in 0..steps {
+        for i in 0..n {
+            let j = (i + 1) % n;
+            loops.push(vec![ids[k][i], ids[k][j], ids[k + 1][j]]);
+            loops.push(vec![ids[k][i], ids[k + 1][j], ids[k + 1][i]]);
+            surface.extend([i < sides; 2]);
+        }
+    }
+    loops.push(ids[0].iter().rev().copied().collect());
+    loops.push(ids[steps].clone());
+    surface.extend([false; 2]);
+    let mut seen: HashSet<(VertexId, VertexId)> = HashSet::new();
+    for l in &loops {
+        for i in 0..l.len() {
+            let (p, q) = (l[i], l[(i + 1) % l.len()]);
+            if seen.insert((p.min(q), p.max(q))) {
+                sweep.insert_edge(p, q);
+            }
+        }
+    }
+    let mut made: Vec<FaceId> = Vec::new();
+    for l in loops {
+        let pts: Vec<DVec3> = l.iter().map(|w| sweep.pos(*w)).collect();
+        let normal = vector_area(&pts).try_normalize()?;
+        made.push(sweep.insert_face(Face::new(l, Vec::new(), normal)));
+    }
+    if signed_volume(&sweep) < 0.0 {
+        sweep.reverse_faces(&made);
+    }
+    let [outer, inner] = ca.paint;
+    for (f, on) in made.iter().zip(&surface) {
+        if *on {
+            let mut face = sweep.face(*f).expect("face").clone();
+            face.front = outer;
+            face.back = inner;
+            sweep.replace_face(*f, face);
+        }
+    }
+    sweep.take_changes();
+    if open_reason(&sweep).is_some() || signed_volume(&sweep) <= 0.0 {
+        return None;
+    }
+    let marks: Vec<DVec3> = (1..steps)
+        .flat_map(|k| (0..=sides).map(move |i| (k, i)))
+        .map(|(k, i)| rings[k][i])
+        .collect();
+    let mut spacing = f64::INFINITY;
+    for k in 0..=steps {
+        for i in 0..=sides {
+            if i < sides {
+                spacing = spacing.min(rings[k][i].distance(rings[k][i + 1]));
+            }
+            if k < steps {
+                spacing = spacing.min(rings[k][i].distance(rings[k + 1][i]));
+            }
+        }
+    }
+    let seams: Vec<DVec3> = rings
+        .iter()
+        .flat_map(|r| r[..=sides].iter().copied())
+        .collect();
+    let plane_of = |u: DVec3, d: f64| End::Plane(vertex + u * d, u);
+    Some(Saddle {
+        vertex: v,
+        ends: [
+            (cuts[a].0, plane_of(ua, da)),
+            (cuts[b].0, plane_of(ub, db)),
+            // The third round runs to the plane of the face the pair lie on.
+            (cuts[third].0, End::Plane(vertex, nz)),
+        ],
+        sweep,
+        add,
+        marks,
+        seams,
+        spacing,
+    })
+}
+
+/// Softens the edges of `m` between vertices of the swept surfaces `saddles` (the sweeps'
+/// facets, their seams with the straight rounds, the third round and the flat faces).
+pub(super) fn soften_saddles(m: &mut Model, saddles: &[&Saddle]) {
+    let mut soft = Vec::new();
+    for s in saddles {
+        let tol = mark_tol(s.spacing);
+        let on = |p: DVec3| s.seams.iter().any(|c| c.distance(p) < tol);
+        for (id, e) in m.edges() {
+            if !e.soft && on(m.pos(e.v[0])) && on(m.pos(e.v[1])) {
+                soft.push((id, e.curve, e.polygon));
+            }
+        }
+    }
+    for (id, curve, polygon) in soft {
+        m.set_edge(id, curve, true, polygon);
+    }
+    m.take_changes();
+}
+
+impl Saddle {
+    /// Whether `m` is a closed solid with the swept surface in it.
+    pub fn took(&self, m: &Model) -> bool {
+        open_reason(m).is_none()
+            && signed_volume(m) > 0.0
+            && self.marks.iter().all(|c| {
+                m.vertices()
+                    .any(|(_, v)| v.pos.distance(*c) < mark_tol(self.spacing))
+            })
+    }
+}
+
+/// The saddles at the vertices where exactly three of `cuts` end.
+pub(super) fn saddles(m: &Model, cuts: &[(EdgeId, EdgeCut)]) -> Vec<Saddle> {
+    #[cfg(test)]
+    if OFF.with(|o| o.get()) {
+        return Vec::new();
+    }
+    let mut at: BTreeMap<VertexId, Vec<usize>> = BTreeMap::new();
+    for (i, (_, cut)) in cuts.iter().enumerate() {
+        for v in [cut.va, cut.vb] {
+            at.entry(v).or_default().push(i);
+        }
+    }
+    at.into_iter()
+        .filter(|(_, list)| list.len() == 3)
+        .filter_map(|(v, list)| saddle(m, v, [&cuts[list[0]], &cuts[list[1]], &cuts[list[2]]]))
+        .collect()
 }
