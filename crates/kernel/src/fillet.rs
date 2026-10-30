@@ -3176,6 +3176,89 @@ mod tests {
         }
     }
 
+    /// The inside corner of an L sheared along x by `by` per unit of height: its faces are not
+    /// square to each other, and the edges there are slanted to the corner's inside edge.
+    fn sheared_l_corner(by: f64) -> (Model, [EdgeId; 3]) {
+        let m = shear_x(&l_shape(), by);
+        let at = |p: [f64; 3]| [p[0] + by * p[2], p[1], p[2]];
+        let corner = at([1.0, 0.0, 1.0]);
+        let edges = [
+            edge_at(&m, corner, at([1.0, 2.0, 1.0])),
+            edge_at(&m, corner, at([1.0, 0.0, 3.0])),
+            edge_at(&m, corner, at([4.0, 0.0, 1.0])),
+        ];
+        (m, edges)
+    }
+
+    #[test]
+    fn a_sheared_inside_corner_gets_a_saddle_of_rounds_and_chamfers() {
+        // Faces not square to each other: the pair stop at planes through the axis square to
+        // their directions across it, and the sweep is slid along the axis to stay on the
+        // face. Each kind of edge in each place, against the cuts made one edge at a time.
+        let r = 0.2;
+        for by in [0.5, -0.8] {
+            let (m, [concave, up, along]) = sheared_l_corner(by);
+            let before = signed_volume(&m);
+            for kinds in 0..7 {
+                let pick = |bit: usize| if kinds >> bit & 1 == 0 { fillet(r) } else { chamfer(r) };
+                let (a, b, c) = (pick(0), pick(1), pick(2));
+                let each = [(concave, a), (up, b), (along, c)];
+                let (out, patched) = bevel_core(&m, &each).unwrap();
+                closed(&out);
+                assert_eq!(patched.len(), 1, "{by} {a:?} {b:?} {c:?}");
+                let gain = signed_volume(&bevelled_mixed(&m, &[(concave, a)]).unwrap()) - before;
+                let loss =
+                    before - signed_volume(&bevelled_mixed(&m, &[(up, b), (along, c)]).unwrap());
+                let v = signed_volume(&out) - before;
+                assert!(
+                    (v - (gain - loss)).abs() < 2.0 * r * r * r,
+                    "{by} {v} {gain} {loss}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_saddle_pair_of_rounds_with_different_segment_counts_is_lofted() {
+        // Rounds at a wider angle get more segments, and the pair may be given different ones:
+        // the finer section is matched by cutting the other's facets.
+        let m = l_shape();
+        let at = [1.0, 0.0, 1.0];
+        let each = [
+            (edge_at(&m, at, [1.0, 2.0, 1.0]), rounded(0.2)),
+            (
+                edge_at(&m, at, [1.0, 0.0, 3.0]),
+                Profile::Fillet {
+                    radius: 0.2,
+                    segments: 5,
+                },
+            ),
+            (
+                edge_at(&m, at, [4.0, 0.0, 1.0]),
+                Profile::Fillet {
+                    radius: 0.2,
+                    segments: 8,
+                },
+            ),
+        ];
+        let (out, patched) = bevel_core(&m, &each).unwrap();
+        closed(&out);
+        assert_eq!(patched.len(), 1);
+    }
+
+    #[test]
+    fn a_polyline_is_cut_into_equal_parts_where_its_facets_are_longest() {
+        let line = [DVec3::ZERO, DVec3::new(3.0, 0.0, 0.0)];
+        let cut = corner::subdivided(&line, 3);
+        assert_eq!(cut.len(), 4);
+        assert!((cut[1].x - 1.0).abs() < 1e-12 && (cut[2].x - 2.0).abs() < 1e-12);
+        let bent = [DVec3::ZERO, DVec3::new(1.0, 0.0, 0.0), DVec3::new(4.0, 0.0, 0.0)];
+        let cut = corner::subdivided(&bent, 4);
+        // The long facet gets the extra parts: 1 + 3 facets of length 1.
+        assert_eq!(cut.len(), 5);
+        assert!((cut[2].x - 2.0).abs() < 1e-12);
+    }
+
     #[test]
     fn edges_of_different_sizes_in_one_call_stay_closed() {
         let m = cuboid([2.0, 3.0, 4.0]);
@@ -3906,8 +3989,8 @@ mod tests {
     }
 
     /// Calls the sweeps may see refused as a whole (by the boolean on the rounds, as on `dev`).
-    const REFUSED_FAST: usize = 10;
-    const REFUSED_FULL: usize = 22;
+    const REFUSED_FAST: usize = 2;
+    const REFUSED_FULL: usize = 2;
 
     /// Per kind of corner, (patched, total) over shapes with convex, concave and mixed corners:
     /// the three edges at each corner bevelled alone, with three sizes, three sets of kinds and
@@ -3957,7 +4040,7 @@ mod tests {
             }
         }
         let mut table: BTreeMap<String, (usize, usize)> = BTreeMap::new();
-        for (shape_name, m, scale) in shapes {
+        for (_, m, scale) in shapes {
             for (v, _) in m.vertices() {
                 let at: Vec<EdgeId> = m.edges_at(v).to_vec();
                 if at.len() != 3 || at.iter().any(|e| m.edge(*e).unwrap().soft) {
@@ -4004,10 +4087,6 @@ mod tests {
                         let entry = table.entry(kind.to_string()).or_default();
                         entry.1 += 1;
                         entry.0 += usize::from(patched.contains(&v));
-                        if std::env::var("DBGSWEEP").is_ok() && !patched.contains(&v) && kind.starts_with("inside") {
-                            let flags: Vec<bool> = at.iter().map(|e| analyze(&m, *e, 1.0, fillet(0.01)).unwrap().convex).collect();
-                            eprintln!("UNPATCHED {shape_name} {:?} chamfers {chamfers} seg {segments} convex {flags:?}", m.pos(v));
-                        }
                     }
                 }
             }
@@ -4029,8 +4108,8 @@ mod tests {
         assert!(share("convex, round and chamfer") > 0.9);
         assert!(share("concave, rounds") > 0.9);
         assert!(share("concave, round and chamfer") > 0.9);
-        assert!(share("inside and outside, rounds") > 0.8);
-        assert_eq!(share("inside and outside, with chamfer"), 0.0);
+        assert!(share("inside and outside, rounds") > 0.9);
+        assert!(share("inside and outside, with chamfer") > 0.9);
         let none = (0, 0);
         assert!(table.get("refused").unwrap_or(&none).1 <= refused);
     }
