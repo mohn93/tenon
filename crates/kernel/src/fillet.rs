@@ -21,8 +21,8 @@ use std::fmt;
 use glam::{DAffine3, DVec2, DVec3};
 
 use crate::boolean::{
-    BooleanError, BooleanOp, apart, combine, copy_into, copy_merged, nested_shells, placed_copy,
-    shells_of, subset,
+    BooleanError, BooleanOp, apart, combine, copy_merged, nested_shells, placed_copy, shells_of,
+    subset,
 };
 use crate::geom::{LENGTH_TOL, vector_area};
 use crate::ids::{CurveId, EdgeId, FaceId, MaterialId, VertexId};
@@ -1203,6 +1203,7 @@ fn face_key(loops: &[Vec<VertexId>]) -> Vec<Vec<VertexId>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::boolean::copy_into;
     use crate::primitives::Solid;
     use crate::scene::DefinitionKind;
 
