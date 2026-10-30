@@ -213,7 +213,9 @@ impl Model {
 
     /// Inserts every segment (with the rules of `add_edge`), then updates the faces of each
     /// plane the new edges reach, once. Faces come out as if the segments were drawn one by
-    /// one, except that a region closed only by these segments is never treated as an
+    /// one, except that ends within `LENGTH_TOL` of each other are first made one point (drawn
+    /// one by one, each would be judged against the vertices alone, and ends at that distance
+    /// from a vertex could fall either side of it), and that a region closed only by these segments is never treated as an
     /// existing face by a later one (it matters only inside an opening; see `rebuild_plane`).
     /// A batch that cuts a face open to an opening leaves the opening open; drawn one by one,
     /// a later line can fill it once an earlier one has cut the face open to it (a known
@@ -490,7 +492,7 @@ fn one_point_per_end(segments: &[(DVec3, DVec3)]) -> Vec<(DVec3, DVec3)> {
                     if let Some(q) = near
                         .into_iter()
                         .flatten()
-                        .find(|q| q.distance(p) <= SAME_END)
+                        .find(|q| q.distance(p) < SAME_END)
                     {
                         return *q;
                     }
@@ -778,5 +780,11 @@ mod tests {
         assert_eq!(out[1].0, a);
         // 3e-6 away is another point.
         assert_ne!(out[2].0, a);
+    }
+    #[test]
+    fn a_segment_of_the_tolerance_length_is_drawn_like_any_other() {
+        let mut m = crate::model::Model::new();
+        m.add_edge(DVec3::ZERO, DVec3::new(1e-6, 0.0, 0.0)).unwrap();
+        assert_eq!(m.edges().count(), 1);
     }
 }
