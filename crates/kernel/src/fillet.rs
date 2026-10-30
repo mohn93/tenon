@@ -3693,6 +3693,16 @@ mod tests {
     }
 
     #[test]
+    fn a_four_sided_prism_with_three_small_radii_rounds_at_24_segments() {
+        // Once refused as "would not be a solid" at one of its corners.
+        let p = Solid::prism(1.0, 2.0, 4, 0.0).unwrap().to_model();
+        let (out, patched) = round_three_radii(&p, 0.3, [0.05, 0.06, 0.07], 24).unwrap();
+        closed(&out);
+        assert!(signed_volume(&out) < signed_volume(&p));
+        assert!(patched > 0);
+    }
+
+    #[test]
     #[ignore = "sweep, slow: cargo test --release -p kernel sweep_of_corner_rounds -- --ignored --nocapture"]
     fn sweep_of_corner_rounds() {
         // Cubes of side 1 and 3, 3 to 32 segments, six radius sets, all 8 corners.
