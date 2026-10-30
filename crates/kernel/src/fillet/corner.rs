@@ -1314,13 +1314,10 @@ fn hovers(m: &Model, c: DVec3, height: f64) -> bool {
         let flat = |p: DVec3| glam::DVec2::new(u.dot(p), w.dot(p));
         let ring: Vec<glam::DVec2> = f.outer.iter().map(|v| flat(m.pos(*v))).collect();
         crate::geom::point_in_polygon(flat(c), &ring)
-            && !f
-                .holes
-                .iter()
-                .any(|h| {
-                    let hole: Vec<glam::DVec2> = h.iter().map(|v| flat(m.pos(*v))).collect();
-                    crate::geom::point_in_polygon(flat(c), &hole)
-                })
+            && !f.holes.iter().any(|h| {
+                let hole: Vec<glam::DVec2> = h.iter().map(|v| flat(m.pos(*v))).collect();
+                crate::geom::point_in_polygon(flat(c), &hole)
+            })
     })
 }
 
@@ -1475,7 +1472,10 @@ pub(super) fn saddle(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> O
     // The pair's sections must have as many points each: the finer one's count, the other's
     // facets cut into equal parts as needed (a chamfer's chord, or the arc of a round at a
     // wider angle, which has more segments).
-    let (sa, sb) = (ca.profile.profile(ca).len() - 1, cb.profile.profile(cb).len() - 1);
+    let (sa, sb) = (
+        ca.profile.profile(ca).len() - 1,
+        cb.profile.profile(cb).len() - 1,
+    );
     let sides = sa.max(sb);
     let away = |c: &EdgeCut| if c.va == v { c.u } else { -c.u };
     let (ua, ub, uc) = (away(ca), away(cb), away(t));

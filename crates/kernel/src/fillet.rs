@@ -3200,7 +3200,13 @@ mod tests {
             let (m, [concave, up, along]) = sheared_l_corner(by);
             let before = signed_volume(&m);
             for kinds in 0..7 {
-                let pick = |bit: usize| if kinds >> bit & 1 == 0 { fillet(r) } else { chamfer(r) };
+                let pick = |bit: usize| {
+                    if kinds >> bit & 1 == 0 {
+                        fillet(r)
+                    } else {
+                        chamfer(r)
+                    }
+                };
                 let (a, b, c) = (pick(0), pick(1), pick(2));
                 let each = [(concave, a), (up, b), (along, c)];
                 let (out, patched) = bevel_core(&m, &each).unwrap();
@@ -3252,7 +3258,11 @@ mod tests {
         let cut = corner::subdivided(&line, 3);
         assert_eq!(cut.len(), 4);
         assert!((cut[1].x - 1.0).abs() < 1e-12 && (cut[2].x - 2.0).abs() < 1e-12);
-        let bent = [DVec3::ZERO, DVec3::new(1.0, 0.0, 0.0), DVec3::new(4.0, 0.0, 0.0)];
+        let bent = [
+            DVec3::ZERO,
+            DVec3::new(1.0, 0.0, 0.0),
+            DVec3::new(4.0, 0.0, 0.0),
+        ];
         let cut = corner::subdivided(&bent, 4);
         // The long facet gets the extra parts: 1 + 3 facets of length 1.
         assert_eq!(cut.len(), 5);
@@ -4163,7 +4173,13 @@ mod tests {
         let along = edge_at(&m, at, [4.0, 0.0, 1.0]);
         let r = 0.2;
         for kinds in 0..8 {
-            let pick = |bit: usize| if kinds >> bit & 1 == 0 { fillet(r) } else { chamfer(r) };
+            let pick = |bit: usize| {
+                if kinds >> bit & 1 == 0 {
+                    fillet(r)
+                } else {
+                    chamfer(r)
+                }
+            };
             let (a, b, c) = (pick(0), pick(1), pick(2));
             let each = [(concave, a), (up, b), (along, c)];
             let (out, patched) = bevel_core(&m, &each).unwrap();
