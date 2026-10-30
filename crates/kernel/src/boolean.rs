@@ -19,9 +19,7 @@ use crate::index::{Index, Shape};
 use crate::intersect::{FaceShape, face_segments, face_segments_cost, face_shape};
 use crate::model::{Edge, Face, Instance, Model};
 use crate::scene::{DefinitionKind, MeshId, Scene, SceneChange};
-use crate::solid::{
-    instance_volume, internal_faces, open_reason, open_reason_shared, signed_volume, skin_volume,
-};
+use crate::solid::{instance_volume, open_reason, open_reason_shared, signed_volume};
 use crate::texture::{TexturePlacement, is_level};
 
 /// What a boolean keeps.
@@ -328,7 +326,6 @@ pub(crate) fn shells_of(m: &Model) -> Vec<Vec<FaceId>> {
         i
     }
     let mut seen: HashSet<(VertexId, VertexId)> = HashSet::new();
-    let inside = internal_faces(m);
     for id in &ids {
         let f = m.face(*id).expect("face");
         for l in std::iter::once(&f.outer).chain(&f.holes) {
@@ -338,12 +335,7 @@ pub(crate) fn shells_of(m: &Model) -> Vec<Vec<FaceId>> {
                 let pairs: Vec<(FaceId, FaceId)> = if on.len() <= 2 {
                     on.iter().map(|g| (*id, *g)).collect()
                 } else if seen.insert((a.min(b), a.max(b))) {
-                    let mut pairs = wedges(m, a, b, &on);
-                    // A wall inside a solid belongs to every face it meets there.
-                    for h in on.iter().filter(|h| inside.contains(h)) {
-                        pairs.extend(on.iter().filter(|g| *g != h).map(|g| (*h, *g)));
-                    }
-                    pairs
+                    wedges(m, a, b, &on)
                 } else {
                     Vec::new()
                 };
@@ -367,15 +359,16 @@ pub(crate) fn shells_of(m: &Model) -> Vec<Vec<FaceId>> {
     groups
 }
 
-/// The two faces of the edge a-b of `m` that bound the empty space beside it, when more than
-/// two faces meet there inside one solid (an internal wall seen from both sides, a void
-/// touching the skin): each faces the other across an interval round the edge with no face in
-/// it. `outward` is 1 when the faces point out of the material, -1 when in. Where a void's
-/// faces bound such an interval too, the one a ray along its middle leaves through the fewest
-/// faces is the outside. None when there is no such pair, or no telling.
-pub(crate) fn skin_pair(m: &Model, a: VertexId, b: VertexId, outward: f64) -> Option<[FaceId; 2]> {
-    use std::f64::consts::TAU;
-    let on = m.faces_on_side(a, b);
+/// The faces of `on` round the edge a-b of `m`: each with the angle about the edge of the
+/// direction it runs from the edge into itself, and the way round (+1 or -1) its empty side
+/// lies. `outward` is 1 when the faces point out of the material, -1 when in.
+fn round_edge(
+    m: &Model,
+    a: VertexId,
+    b: VertexId,
+    on: &[FaceId],
+    outward: f64,
+) -> Vec<(FaceId, f64, f64)> {
     let runs_forward = |f: FaceId| {
         let face = m.face(f).expect("face");
         std::iter::once(&face.outer)
@@ -385,77 +378,145 @@ pub(crate) fn skin_pair(m: &Model, a: VertexId, b: VertexId, outward: f64) -> Op
     let d = (m.pos(b) - m.pos(a)).normalize_or_zero();
     let basis = d.any_orthonormal_vector();
     let basis2 = d.cross(basis);
-    // Per face: the angle about d of the direction it runs from the edge into itself, and the
-    // way round (+1 or -1) the empty side lies.
-    let faces: Vec<(FaceId, f64, f64)> = on
-        .iter()
+    on.iter()
         .map(|f| {
             let along = if runs_forward(*f) { 1.0 } else { -1.0 };
             let u = m.face(*f).expect("face").normal.cross(d * along);
             (*f, u.dot(basis2).atan2(u.dot(basis)), along * outward)
         })
-        .collect();
-    // The next face from `of`, going the way its empty side lies, and the turn to it; a face at
-    // the same angle (back to back) is skipped.
-    let next = |of: usize| -> Option<(usize, f64)> {
+        .collect()
+}
+
+/// Whether two of `faces` (see `round_edge`) lie on each other: solids stacked face to face, or
+/// a face drawn twice.
+fn coincide(faces: &[(FaceId, f64, f64)]) -> bool {
+    use std::f64::consts::TAU;
+    faces.iter().enumerate().any(|(i, x)| {
+        faces[i + 1..].iter().any(|y| {
+            let turn = (x.1 - y.1).rem_euclid(TAU);
+            turn.min(TAU - turn) < 1e-9
+        })
+    })
+}
+
+/// The pairs of `faces` (see `round_edge`) that face each other across an interval round the
+/// edge with no face in it.
+fn empty_intervals(faces: &[(FaceId, f64, f64)]) -> Vec<(FaceId, FaceId)> {
+    use std::f64::consts::TAU;
+    let next = |of: usize| -> Option<usize> {
         let (_, alpha, way) = faces[of];
         (0..faces.len())
             .filter(|i| *i != of)
             .map(|i| (i, (way * (faces[i].1 - alpha)).rem_euclid(TAU)))
             .filter(|(_, g)| *g > 1e-9)
             .min_by(|x, y| x.1.total_cmp(&y.1))
+            .map(|(i, _)| i)
     };
-    let mut found: Vec<(usize, usize, f64)> = Vec::new();
+    let mut found = Vec::new();
     for i in 0..faces.len() {
-        if let Some((j, gap)) = next(i)
+        if let Some(j) = next(i)
             && i < j
             && faces[j].2 == -faces[i].2
-            && next(j).is_some_and(|(k, _)| k == i)
+            && next(j) == Some(i)
         {
-            found.push((i, j, gap));
+            found.push((faces[i].0, faces[j].0));
         }
     }
-    let pick = |i: usize, j: usize| [faces[i].0, faces[j].0];
-    match found[..] {
-        [] => None,
-        [(i, j, _)] => Some(pick(i, j)),
-        _ => {
-            // Cast a ray from the middle of each empty interval and count the faces it crosses.
-            let origin = (m.pos(a) + m.pos(b)) / 2.0;
-            let triangles: Vec<[DVec3; 3]> = m
-                .faces()
-                .flat_map(|(id, _)| m.triangulate(id).unwrap_or_default())
-                .collect();
-            let mut scored: Vec<(usize, [FaceId; 2])> = found
-                .iter()
-                .map(|(i, j, gap)| {
-                    let mid = faces[*i].1 + faces[*i].2 * gap / 2.0;
-                    let dir = basis * mid.cos() + basis2 * mid.sin();
-                    let start = origin + dir * 1e-4;
-                    let hits = triangles.iter().filter(|t| ray_hits(start, dir, t)).count();
-                    (hits, pick(*i, *j))
-                })
-                .collect();
-            scored.sort_by_key(|s| s.0);
-            (scored[0].0 < scored[1].0).then_some(scored[0].1)
-        }
-    }
+    found
 }
 
-/// Whether the ray from `o` along `d` crosses triangle `t`.
-fn ray_hits(o: DVec3, d: DVec3, t: &[DVec3; 3]) -> bool {
-    let (e1, e2) = (t[1] - t[0], t[2] - t[0]);
-    let p = d.cross(e2);
-    let det = e1.dot(p);
-    if det.abs() < 1e-12 {
-        return false;
+/// An edge of `m` with more than two faces, two of which lie on each other (solids stacked face
+/// to face, a face drawn twice).
+pub(crate) fn stacked_edge(m: &Model) -> Option<EdgeId> {
+    m.edges().find_map(|(id, e)| {
+        let [a, b] = e.v;
+        let on = m.faces_on_side(a, b);
+        (on.len() > 2 && coincide(&round_edge(m, a, b, &on, 1.0))).then_some(id)
+    })
+}
+
+/// The two faces of the edge a-b of `m` that bound the empty space outside the solid, when more
+/// than two faces meet there inside one shell (a void touching the skin): they face each other
+/// across an interval round the edge with no face in it. `outward` is 1 when the faces point out
+/// of the material, -1 when in. A void's faces bound such an interval too; the two are told
+/// apart by the surface each belongs to, the faces of the shell joined across ordinary edges and
+/// across such intervals at the others: the outside's encloses a positive volume, a void's a
+/// negative one. Only the shell of the edge is looked at. Err says why there is no such pair.
+pub(crate) fn skin_pair(
+    m: &Model,
+    a: VertexId,
+    b: VertexId,
+    outward: f64,
+) -> Result<[FaceId; 2], String> {
+    let on = m.faces_on_side(a, b);
+    let shells = shells_of(m);
+    let Some(shell) = shells.iter().find(|s| s.contains(&on[0])) else {
+        return Err("it bounds no shell".into());
+    };
+    let own: HashSet<FaceId> = shell.iter().copied().collect();
+    let here: Vec<FaceId> = on.iter().copied().filter(|f| own.contains(f)).collect();
+    let round = round_edge(m, a, b, &here, outward);
+    if coincide(&round) {
+        return Err("solids stacked face to face share it".into());
     }
-    let s = o - t[0];
-    let u = s.dot(p) / det;
-    let q = s.cross(e1);
-    let v = d.dot(q) / det;
-    let at = e2.dot(q) / det;
-    u >= 0.0 && v >= 0.0 && u + v <= 1.0 && at > 0.0
+    let candidates = empty_intervals(&round);
+    // The surfaces of the shell.
+    let ids: Vec<FaceId> = shell.clone();
+    let at: HashMap<FaceId, usize> = ids.iter().enumerate().map(|(i, f)| (*f, i)).collect();
+    let mut parent: Vec<usize> = (0..ids.len()).collect();
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    let mut seen: HashSet<(VertexId, VertexId)> = HashSet::new();
+    for id in &ids {
+        let f = m.face(*id).expect("face");
+        for l in std::iter::once(&f.outer).chain(&f.holes) {
+            for k in 0..l.len() {
+                let (x, y) = (l[k], l[(k + 1) % l.len()]);
+                let around: Vec<FaceId> = m
+                    .faces_on_side(x, y)
+                    .into_iter()
+                    .filter(|g| own.contains(g))
+                    .collect();
+                let pairs: Vec<(FaceId, FaceId)> = if around.len() <= 2 {
+                    around.iter().map(|g| (*id, *g)).collect()
+                } else if seen.insert((x.min(y), x.max(y))) {
+                    let r = round_edge(m, x, y, &around, outward);
+                    if coincide(&r) {
+                        return Err("solids stacked face to face share an edge".into());
+                    }
+                    empty_intervals(&r)
+                } else {
+                    Vec::new()
+                };
+                for (p, q) in pairs {
+                    let (u, v) = (root(&mut parent, at[&p]), root(&mut parent, at[&q]));
+                    parent[u] = v;
+                }
+            }
+        }
+    }
+    let mut outside: Vec<[FaceId; 2]> = Vec::new();
+    for (f, g) in candidates {
+        let r = root(&mut parent, at[&f]);
+        let surface: Vec<FaceId> = (0..ids.len())
+            .filter(|i| root(&mut parent, *i) == r)
+            .map(|i| ids[i])
+            .collect();
+        let part = subset(m, &surface);
+        if open_reason(&part).is_none() && signed_volume(&part) * outward > 0.0 {
+            outside.push([f, g]);
+        }
+    }
+    match outside[..] {
+        [pair] => Ok(pair),
+        [] => Err("no pair of its faces bounds the outside".into()),
+        _ => Err("more than one pair of its faces bounds the outside".into()),
+    }
 }
 
 /// The pairs of faces at the edge a-b that bound one wedge of material each: `forward` run a to
@@ -1009,12 +1070,7 @@ impl<'a> Cut<'a> {
         } else {
             welded.model
         };
-        let volume = if shared {
-            skin_volume(&result)
-        } else {
-            signed_volume(&result)
-        };
-        if volume <= 0.0 {
+        if signed_volume(&result) <= 0.0 {
             return Err(BooleanError::NotClosed);
         }
         Ok(Some(result))

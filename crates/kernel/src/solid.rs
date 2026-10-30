@@ -1,9 +1,9 @@
 //! Solids: whether a mesh is a closed, consistently oriented 2-manifold, and its volume.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
-use crate::ids::{EdgeId, FaceId, VertexId};
-use crate::model::{Face, Instance, Model};
+use crate::ids::{EdgeId, VertexId};
+use crate::model::{Instance, Model};
 use crate::scene::Scene;
 
 /// Why `m` is not closed (every edge bounds exactly two faces, one traversing it each way, and
@@ -53,41 +53,12 @@ pub fn open_reason(m: &Model) -> Option<String> {
     None
 }
 
-/// The faces of `m` that lie inside a solid: every side of the face is shared by at least three
-/// faces (a wall between two chambers, drawn once or from both sides).
-pub fn internal_faces(m: &Model) -> BTreeSet<FaceId> {
-    let mut users: BTreeMap<(VertexId, VertexId), u32> = BTreeMap::new();
-    let sides = |f: &Face| {
-        std::iter::once(&f.outer)
-            .chain(&f.holes)
-            .flat_map(|l| (0..l.len()).map(|i| (l[i], l[(i + 1) % l.len()])))
-            .collect::<Vec<_>>()
-    };
-    for (_, f) in m.faces() {
-        for (a, b) in sides(f) {
-            *users.entry((a.min(b), a.max(b))).or_default() += 1;
-        }
-    }
-    m.faces()
-        .filter(|(_, f)| {
-            sides(f)
-                .into_iter()
-                .all(|(a, b)| users[&(a.min(b), a.max(b))] >= 3)
-        })
-        .map(|(id, _)| id)
-        .collect()
-}
-
-/// As [`open_reason`], but an edge may bound more than two faces (a void or part touching it,
-/// an internal wall, see [`internal_faces`]): without the internal faces every side must be
-/// traversed as often one way as the other, so the skin has no boundary.
+/// As [`open_reason`], but an edge may bound more than two faces (a void touching the skin along
+/// it) as long as as many faces traverse each side one way as the other: every part of the
+/// surface is closed.
 pub fn open_reason_shared(m: &Model) -> Option<String> {
-    let inside = internal_faces(m);
     let mut sides: BTreeMap<(VertexId, VertexId), u32> = BTreeMap::new();
-    for (id, f) in m.faces() {
-        if inside.contains(&id) {
-            continue;
-        }
+    for (_, f) in m.faces() {
         for l in std::iter::once(&f.outer).chain(&f.holes) {
             for i in 0..l.len() {
                 *sides.entry((l[i], l[(i + 1) % l.len()])).or_default() += 1;
@@ -99,7 +70,7 @@ pub fn open_reason_shared(m: &Model) -> Option<String> {
     }
     for (id, e) in m.edges() {
         let [a, b] = e.v;
-        if m.faces_on_side(a, b).is_empty() {
+        if !sides.contains_key(&(a, b)) && !sides.contains_key(&(b, a)) {
             return Some(format!("edge e{} bounds no face", id.0));
         }
     }
@@ -113,21 +84,6 @@ pub fn open_reason_shared(m: &Model) -> Option<String> {
         }
     }
     None
-}
-
-/// [`signed_volume`] without the internal faces, which enclose nothing.
-pub fn skin_volume(m: &Model) -> f64 {
-    let inside = internal_faces(m);
-    let mut six = 0.0;
-    for (id, _) in m.faces() {
-        if inside.contains(&id) {
-            continue;
-        }
-        for [a, b, c] in m.triangulate(id).unwrap_or_default() {
-            six += a.dot(b.cross(c));
-        }
-    }
-    six / 6.0
 }
 
 /// The signed volume enclosed by the faces of `m`, in its own coordinates: positive when the
