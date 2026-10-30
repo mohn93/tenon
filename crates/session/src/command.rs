@@ -1239,8 +1239,9 @@ pub enum Command {
     /// Chamfers of convex edges meeting at an outside corner overlap and close it; at any
     /// other end (no other chosen edge, next to a concave edge, or an inside corner) the cut
     /// stops in the plane of the face there. A concave edge whose two faces are both cut away
-    /// at an end starts `distance` back from that end. Three chamfers meeting at an outside
-    /// corner of three faces close it with a flat triangle. Faces and edges the cut does not
+    /// at an end starts `distance` back from that end (not so for a round at a saddle corner,
+    /// see `fillet_edges`). Three chamfers meeting at a corner of three faces close it with a
+    /// flat triangle (at an inside corner, a filler). Faces and edges the cut does not
     /// touch keep their ids. `distances`, when given, has one distance per edge (same order as
     /// `edges`) in place of `distance`, which stays the required default.
     ChamferEdges {
@@ -1259,9 +1260,14 @@ pub enum Command {
     /// from the edge, `angle` the angle between the faces inside the solid (for a concave
     /// edge, outside it). Everything else is as `chamfer_edges`, with that setback in place of
     /// the distance. `radii`, when given, has one radius per edge (same order as `edges`) in
-    /// place of `radius`, which stays the required default; three convex rounds of different
-    /// radii at a vertex of three faces get a ringed patch between their end arcs, and three
-    /// concave rounds of one radius get a concave sphere piece.
+    /// place of `radius`, which stays the required default. At a vertex of three faces, three
+    /// convex rounds of different radii get a ringed patch between their end arcs; three
+    /// concave rounds get a concave sphere piece (one radius) or the same ringed patch built as
+    /// a filler (different radii). Two rounds of one kind and one of the other (an L's inside
+    /// corner with the two rim rounds, a boss's foot with the column's rounded edge) on three
+    /// square faces get a swept saddle: the pair stop at the planes through the third round's
+    /// axis and the third round runs through to the face they lie on, instead of starting
+    /// `radius` back when it is the concave one. Otherwise such a corner keeps the crossed cuts.
     FilletEdges {
         #[serde(default)]
         instance: Option<EntityId>,
@@ -1278,8 +1284,9 @@ pub enum Command {
     /// quarter turn (default 8, 1 to 90). Everything else is as `fillet_edges` and
     /// `chamfer_edges`, sizes snapping together within each kind. A convex corner of three
     /// faces where rounds and chamfers meet gets a ringed patch between the strips' ends, a
-    /// chamfer standing in as the round with the same setback; a corner with inside and
-    /// outside rounds keeps the crossed cuts.
+    /// chamfer standing in as the round with the same setback (an inside corner, the same
+    /// patch as a filler). A corner with inside and outside edges gets the swept saddle of
+    /// `fillet_edges` when all three are rounds, else it keeps the crossed cuts.
     BevelEdges {
         #[serde(default)]
         instance: Option<EntityId>,

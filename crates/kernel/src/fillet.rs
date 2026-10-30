@@ -21,8 +21,8 @@ use std::fmt;
 use glam::{DAffine3, DVec2, DVec3};
 
 use crate::boolean::{
-    BooleanError, BooleanOp, apart, combine, copy_into, nested_shells, placed_copy, shells_of,
-    subset,
+    BooleanError, BooleanOp, Shared, apart, combine, copy_sharing, nested_shells, placed_copy,
+    shells_of, subset,
 };
 use crate::geom::{LENGTH_TOL, vector_area};
 use crate::ids::{CurveId, EdgeId, FaceId, MaterialId, VertexId};
@@ -321,11 +321,28 @@ pub fn bevelled_mixed(m: &Model, edges: &[(EdgeId, Profile)]) -> Result<Model, B
     bevel_core(m, edges).map(|(acc, _)| acc)
 }
 
-/// [`bevelled_each`] and the corners of `m` that got a patch.
+/// [`bevelled_each`] and the corners of `m` that got a patch. Saddle corners are tried first; a
+/// call they make fail, or a saddle that does not take, is run again without them.
 fn bevel_core(
     m: &Model,
     edges: &[(EdgeId, Profile)],
 ) -> Result<(Model, Vec<VertexId>), BevelError> {
+    let mut built = 0;
+    match bevel_with(m, edges, Some(&mut built)) {
+        Ok((acc, patched, true)) => Ok((acc, patched)),
+        // Only a call that built a saddle can have failed because of one.
+        first if built == 0 => first.map(|(acc, patched, _)| (acc, patched)),
+        _ => bevel_with(m, edges, None).map(|(acc, patched, _)| (acc, patched)),
+    }
+}
+
+/// [`bevel_core`] with saddle corners (`saddle_count` given, and set to how many were built) or
+/// without; gives whether every saddle took.
+fn bevel_with(
+    m: &Model,
+    edges: &[(EdgeId, Profile)],
+    saddle_count: Option<&mut usize>,
+) -> Result<(Model, Vec<VertexId>, bool), BevelError> {
     let all_round = edges
         .iter()
         .all(|(_, p)| matches!(p, Profile::Fillet { .. }));
@@ -371,11 +388,18 @@ fn bevel_core(
             ));
         };
         let [a, b] = edge.v;
-        let at = m
-            .faces_on_side(a, b)
-            .into_iter()
-            .chain(m.faces_on_side(b, a))
-            .next();
+        let on = m.faces_on_side(a, b);
+        if on.len() > 2 {
+            return Err(BevelError::Edge(
+                *e,
+                format!(
+                    "edge e{} is shared by {} faces (solids meet along it)",
+                    e.0,
+                    on.len()
+                ),
+            ));
+        }
+        let at = on.first().copied();
         let shell = at.and_then(|f| shells.iter().position(|s| s.contains(&f)));
         match shell {
             Some(i) => hit[i] = true,
@@ -469,6 +493,8 @@ fn bevel_core(
     };
     // What stays as it is, with the loose edges (no face).
     let mut rest = subset(m, &faces_of(&hit, false));
+    // What the carried-over shells were joined to the bevelled ones by in `m`.
+    let shared = Shared::of(m, &faces_of(&hit, true), &faces_of(&hit, false));
     let mut curves: HashMap<CurveId, CurveId> = HashMap::new();
     for (_, e) in m.edges() {
         let [a, b] = e.v;
@@ -540,6 +566,14 @@ fn bevel_core(
             format!("{noun} too large for edges e{} and e{}", x.0, y.0),
         ));
     }
+    let saddles = if saddle_count.is_some() {
+        corner::saddles(m, &cuts)
+    } else {
+        Vec::new()
+    };
+    if let Some(count) = saddle_count {
+        *count = saddles.len();
+    }
     let mut cutters = Vec::new();
     let mut fillers = Vec::new();
     let mut cores = Vec::new();
@@ -551,6 +585,14 @@ fn bevel_core(
             cut: &|v, f| cut_faces.get(&v).is_some_and(|fs| fs.contains(&f)),
         };
         close_ends(m, &mut cut, e, outward, &at).map_err(|why| BevelError::Edge(e, why))?;
+        // A saddle corner sets its own ends.
+        for s in &saddles {
+            for (id, end) in &s.ends {
+                if *id == e {
+                    cut.ends[usize::from(cut.va != s.vertex)] = *end;
+                }
+            }
+        }
         let own = cut.profile;
         let too_large =
             || BevelError::Edge(e, format!("{} too large for edge e{}", own.noun(), e.0));
@@ -593,7 +635,19 @@ fn bevel_core(
     }
     let corners = corner::patches(m, &closed_cuts);
     let (mut acc, done) = corner::apply(acc, &corners);
+    // The saddles' swept bodies, last: a cutter takes the filled corner round, a filler adds to
+    // what the cutters left.
+    for s in &saddles {
+        let op = if s.add {
+            BooleanOp::Union
+        } else {
+            BooleanOp::Subtract
+        };
+        acc = combine(&acc, &s.sweep, op)?.ok_or(BooleanError::NotClosed)?;
+    }
     soften_rounds(&mut acc, &rounds);
+    let held: Vec<&corner::Saddle> = saddles.iter().filter(|s| s.took(&acc)).collect();
+    corner::soften_saddles(&mut acc, &held);
     // The finest round's step.
     let finest = by_edge
         .values()
@@ -606,10 +660,12 @@ fn bevel_core(
         let step = std::f64::consts::FRAC_PI_2 / segments as f64;
         corner::soften(&mut acc, &corners, &done, step);
     }
-    let patched = done.iter().map(|i| corners[*i].vertex).collect();
-    copy_into(&rest, &mut acc);
+    let mut patched: Vec<VertexId> = done.iter().map(|i| corners[*i].vertex).collect();
+    patched.extend(held.iter().map(|s| s.vertex));
+    let all_held = held.len() == saddles.len();
+    copy_sharing(&rest, &mut acc, Some(&shared));
     acc.take_changes();
-    Ok((acc, patched))
+    Ok((acc, patched, all_held))
 }
 
 /// Where a fillet's surface lies, to soften the edges along it.
@@ -1156,6 +1212,7 @@ fn face_key(loops: &[Vec<VertexId>]) -> Vec<Vec<VertexId>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::boolean::{copy_into, copy_merged};
     use crate::primitives::Solid;
     use crate::scene::DefinitionKind;
 
@@ -1273,6 +1330,270 @@ mod tests {
         let r = bevelled(&m, &[e], round).unwrap();
         assert_eq!(open_reason(&r), None);
         assert!(has_vertex(&r, [0.0, 0.0, 3.0]) && has_vertex(&r, [0.0, 0.0, 2.0]));
+    }
+
+    /// Cuboid `a` and a neighbour of the same size touching it only along the vertical edge
+    /// x = 2, y = 2 (`by` = [2, 2, 0]) or only at the corner (2, 2, 2) (`by` = [2, 2, 2]).
+    fn touching(by: [f64; 3]) -> (Model, Model) {
+        let a = cuboid([2.0, 2.0, 2.0]);
+        let b = moved(&cuboid([2.0, 2.0, 2.0]), by);
+        let mut m = Model::new();
+        copy_merged(&a, &mut m);
+        copy_merged(&b, &mut m);
+        m.take_changes();
+        (m, b)
+    }
+
+    #[test]
+    fn a_part_sharing_only_an_edge_is_its_own_shell() {
+        let (m, _) = touching([2.0, 2.0, 0.0]);
+        assert_eq!(shells_of(&m).len(), 2);
+        let (m, _) = touching([2.0, 2.0, 2.0]);
+        assert_eq!(shells_of(&m).len(), 2);
+    }
+
+    #[test]
+    fn a_part_sharing_only_an_edge_is_not_cut() {
+        for by in [[2.0, 2.0, 0.0], [2.0, 2.0, 2.0]] {
+            let (m, _) = touching(by);
+            // An edge of the first box away from the contact, and one ending at it.
+            for (p, q) in [
+                ([0.0, 0.0, 2.0], [2.0, 0.0, 2.0]),
+                ([2.0, 0.0, 2.0], [2.0, 2.0, 2.0]),
+            ] {
+                let e = edge_at(&m, p, q);
+                for profile in [chamfer(0.5), fillet(0.5)] {
+                    let (r, _) = bevel_core(&m, &[(e, profile)]).unwrap();
+                    let shells = shells_of(&r);
+                    assert_eq!(shells.len(), 2, "{by:?}");
+                    for faces in &shells {
+                        assert_eq!(open_reason(&subset(&r, faces)), None, "{by:?}");
+                    }
+                    // The neighbour keeps its 6 faces, 8 corners and volume.
+                    let far = |p: DVec3| p.cmpge(DVec3::from(by) - 1e-9).all();
+                    let other = shells
+                        .iter()
+                        .find(|s| {
+                            s.iter()
+                                .all(|f| r.face(*f).unwrap().outer.iter().all(|v| far(r.pos(*v))))
+                        })
+                        .unwrap_or_else(|| panic!("neighbour lost {by:?}"));
+                    assert_eq!(other.len(), 6, "{by:?}");
+                    assert!((signed_volume(&subset(&r, other)) - 8.0).abs() < 1e-9);
+                    // The first box lost material and is closed.
+                    let first = shells.iter().find(|s| *s != other).unwrap();
+                    let v = signed_volume(&subset(&r, first));
+                    assert!(v < 8.0 - 1e-3 && v > 7.0, "{by:?} {v}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_part_sharing_an_edge_is_kept_when_its_neighbour_is_cut() {
+        // The second box is the one chamfered: the first stays whole.
+        let (m, _) = touching([2.0, 2.0, 0.0]);
+        let e = edge_at(&m, [4.0, 2.0, 2.0], [4.0, 4.0, 2.0]);
+        let (r, _) = bevel_core(&m, &[(e, chamfer(0.5))]).unwrap();
+        let shells = shells_of(&r);
+        assert_eq!(shells.len(), 2);
+        let mut volumes: Vec<f64> = shells
+            .iter()
+            .map(|f| {
+                let part = subset(&r, f);
+                assert_eq!(open_reason(&part), None);
+                signed_volume(&part)
+            })
+            .collect();
+        volumes.sort_by(f64::total_cmp);
+        assert!((volumes[0] - (8.0 - 0.125 * 2.0)).abs() < 1e-9);
+        assert!((volumes[1] - 8.0).abs() < 1e-9);
+        let first = r
+            .vertices()
+            .filter(|(_, v)| v.pos.max_element() < 2.0 + 1e-9)
+            .count();
+        assert_eq!(first, 8);
+    }
+
+    fn joined(parts: &[&Model]) -> Model {
+        let mut m = Model::new();
+        for p in parts {
+            copy_merged(p, &mut m);
+        }
+        m.take_changes();
+        m
+    }
+
+    /// The shell of `r` that has exactly the vertex positions and face count of `part`.
+    fn shell_like(r: &Model, part: &Model) -> Option<Vec<FaceId>> {
+        let key = |m: &Model, faces: &[FaceId]| {
+            let mut ps: Vec<[i64; 3]> = faces
+                .iter()
+                .flat_map(|f| m.face(*f).unwrap().outer.clone())
+                .map(|v| m.pos(v).to_array().map(|x| (x * 1e6).round() as i64))
+                .collect();
+            ps.sort();
+            ps.dedup();
+            ps
+        };
+        let all: Vec<FaceId> = part.faces().map(|(id, _)| id).collect();
+        let want = key(part, &all);
+        shells_of(r)
+            .into_iter()
+            .find(|s| s.len() == all.len() && key(r, s) == want)
+    }
+
+    fn no_t_junctions(m: &Model) {
+        for (_, e) in m.edges() {
+            let (pa, pb) = (m.pos(e.v[0]), m.pos(e.v[1]));
+            let len = pa.distance(pb);
+            for (v, vertex) in m.vertices() {
+                if e.v.contains(&v) {
+                    continue;
+                }
+                let (t, dist) = crate::geom::project_on_segment(vertex.pos, pa, pb);
+                assert!(
+                    !(dist < LENGTH_TOL && t * len > LENGTH_TOL && (1.0 - t) * len > LENGTH_TOL),
+                    "vertex {:?} lies inside edge {pa:?} {pb:?}",
+                    vertex.pos
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_edge_two_solids_share_cannot_be_bevelled() {
+        let (m, _) = touching([2.0, 2.0, 0.0]);
+        let e = edge_at(&m, [2.0, 2.0, 0.0], [2.0, 2.0, 2.0]);
+        for profile in [chamfer(0.25), fillet(0.25)] {
+            match bevel_core(&m, &[(e, profile)]) {
+                Err(BevelError::Edge(id, why)) => {
+                    assert_eq!(id, e);
+                    assert!(why.contains("shared by 4 faces"), "{why}");
+                }
+                other => panic!("{:?}", other.map(|_| ())),
+            }
+        }
+    }
+
+    #[test]
+    fn a_partly_consumed_contact_edge_leaves_no_t_junction() {
+        let (m, _) = touching([2.0, 2.0, 0.0]);
+        let e = edge_at(&m, [2.0, 0.0, 2.0], [2.0, 2.0, 2.0]);
+        for profile in [chamfer(0.5), fillet(0.5)] {
+            let (r, _) = bevel_core(&m, &[(e, profile)]).unwrap();
+            no_t_junctions(&r);
+            // The neighbour's edge is split where the first box's is cut: still 6 faces, whole.
+            let shells = shells_of(&r);
+            assert_eq!(shells.len(), 2);
+            let mut volumes: Vec<(f64, usize)> = shells
+                .iter()
+                .map(|s| {
+                    let part = subset(&r, s);
+                    assert_eq!(open_reason(&part), None);
+                    (signed_volume(&part), s.len())
+                })
+                .collect();
+            volumes.sort_by(|x, y| x.0.total_cmp(&y.0));
+            assert!(volumes[0].0 < 8.0 - 1e-3 && volumes[0].0 > 7.0);
+            assert!((volumes[1].0 - 8.0).abs() < 1e-9 && volumes[1].1 == 6);
+        }
+    }
+
+    #[test]
+    fn a_contact_edge_consumed_at_both_ends_leaves_no_t_junction() {
+        let (m, _) = touching([2.0, 2.0, 0.0]);
+        let top = edge_at(&m, [2.0, 0.0, 2.0], [2.0, 2.0, 2.0]);
+        let bottom = edge_at(&m, [2.0, 0.0, 0.0], [2.0, 2.0, 0.0]);
+        for profile in [chamfer(0.5), fillet(0.5)] {
+            let (r, _) = bevel_core(&m, &[(top, profile), (bottom, profile)]).unwrap();
+            no_t_junctions(&r);
+            let shells = shells_of(&r);
+            assert_eq!(shells.len(), 2);
+            let mut volumes: Vec<f64> = shells
+                .iter()
+                .map(|s| {
+                    let part = subset(&r, s);
+                    assert_eq!(open_reason(&part), None);
+                    signed_volume(&part)
+                })
+                .collect();
+            volumes.sort_by(f64::total_cmp);
+            assert!(volumes[0] < 8.0 - 1e-3 && volumes[0] > 6.0);
+            assert!((volumes[1] - 8.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn a_sheet_on_a_solid_edge_is_left_alone() {
+        // A fin: one face sharing the edge x = 2, y = 2 with the box, so three faces meet there.
+        let a = cuboid([2.0, 2.0, 2.0]);
+        let mut fin = Model::new();
+        fin.add_polygon(&[
+            DVec3::new(2.0, 2.0, 0.0),
+            DVec3::new(2.0, 2.0, 2.0),
+            DVec3::new(3.0, 3.0, 2.0),
+            DVec3::new(3.0, 3.0, 0.0),
+        ])
+        .unwrap();
+        fin.take_changes();
+        let m = joined(&[&a, &fin]);
+        assert_eq!(shells_of(&m).len(), 2);
+        // The shared edge is refused; another edge is bevelled and the fin stays.
+        let shared = edge_at(&m, [2.0, 2.0, 0.0], [2.0, 2.0, 2.0]);
+        assert!(matches!(
+            bevel_core(&m, &[(shared, chamfer(0.25))]),
+            Err(BevelError::Edge(..))
+        ));
+        let e = edge_at(&m, [0.0, 0.0, 2.0], [2.0, 0.0, 2.0]);
+        let (r, _) = bevel_core(&m, &[(e, chamfer(0.5))]).unwrap();
+        no_t_junctions(&r);
+        assert!(shell_like(&r, &fin).is_some());
+        assert!(shell_like(&r, &a).is_none());
+        let first = shells_of(&r)
+            .into_iter()
+            .find(|s| Some(s) != shell_like(&r, &fin).as_ref())
+            .unwrap();
+        let part = subset(&r, &first);
+        assert_eq!(open_reason(&part), None);
+        assert!((signed_volume(&part) - (8.0 - 0.25)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn three_solids_on_one_edge_keep_the_two_others_unchanged() {
+        // A box in one quadrant of the line x = 2, y = 2, another in the opposite one, and a
+        // triangular prism in a 60 degree wedge between them, its corner on the line.
+        let a = cuboid([2.0, 2.0, 2.0]);
+        let b = moved(&cuboid([2.0, 2.0, 2.0]), [2.0, 2.0, 0.0]);
+        let first = -std::f64::consts::FRAC_PI_4;
+        let wedge = Solid::prism(1.0, 2.0, 3, first).unwrap().to_model();
+        let corner = DVec3::new(first.cos(), first.sin(), 0.0);
+        let wedge = placed_copy(
+            &wedge,
+            DAffine3::from_translation(DVec3::new(2.0, 2.0, 0.0) - corner),
+            None,
+        );
+        let m = joined(&[&a, &b, &wedge]);
+        assert_eq!(shells_of(&m).len(), 3);
+        let e = edge_at(&m, [0.0, 0.0, 2.0], [2.0, 0.0, 2.0]);
+        for profile in [chamfer(0.5), fillet(0.5)] {
+            let (r, _) = bevel_core(&m, &[(e, profile)]).unwrap();
+            no_t_junctions(&r);
+            assert_eq!(shells_of(&r).len(), 3);
+            assert!(shell_like(&r, &b).is_some());
+            assert!(shell_like(&r, &wedge).is_some());
+            assert!(shell_like(&r, &a).is_none());
+            let cut = shells_of(&r)
+                .into_iter()
+                .find(|s| {
+                    Some(s) != shell_like(&r, &b).as_ref()
+                        && Some(s) != shell_like(&r, &wedge).as_ref()
+                })
+                .unwrap();
+            let part = subset(&r, &cut);
+            assert_eq!(open_reason(&part), None);
+            assert!(signed_volume(&part) < 8.0 - 1e-3);
+        }
     }
 
     #[test]
@@ -2483,8 +2804,8 @@ mod tests {
 
     #[test]
     fn mixed_concave_and_convex_corners_stay_closed() {
-        // Ruling: a corner of one or two concave fillets with convex ones keeps the crossed
-        // result (a closed solid, no patch); only three of a kind get a sphere.
+        // A corner of one or two concave edges with convex ones stays closed and local: with
+        // chamfers it keeps the crossed cuts, with rounds on square faces it gets a saddle.
         let r = 0.1;
         let l = l_shape();
         let c = [1.0, 0.0, 1.0];
@@ -2502,6 +2823,356 @@ mod tests {
             let out = bevelled(&notch, &all, profile).unwrap();
             closed(&out);
             assert!(signed_volume(&out) < signed_volume(&notch));
+        }
+    }
+
+    /// The three edges at the notch's inside corner, from the vertex to the far ends.
+    fn notch_edges(m: &Model) -> [EdgeId; 3] {
+        let c = [1.5, 1.5, 1.5];
+        [
+            edge_at(m, c, [3.0, 1.5, 1.5]),
+            edge_at(m, c, [1.5, 3.0, 1.5]),
+            edge_at(m, c, [1.5, 1.5, 3.0]),
+        ]
+    }
+
+    /// `bevel_core` with the corner patches and saddles switched off: the crossed cuts, or the
+    /// error they give.
+    fn crossed_result(m: &Model, each: &[(EdgeId, Profile)]) -> Result<Model, BevelError> {
+        corner::OFF.with(|o| o.set(true));
+        let out = bevel_core(m, each).map(|(out, _)| out);
+        corner::OFF.with(|o| o.set(false));
+        out
+    }
+
+    fn crossed(m: &Model, each: &[(EdgeId, Profile)]) -> Model {
+        crossed_result(m, each).unwrap()
+    }
+
+    fn rounded(radius: f64) -> Profile {
+        Profile::Fillet {
+            radius,
+            segments: 8,
+        }
+    }
+
+    /// Hard edges of `out` within `reach` of `at` that lie between two faces neither of which
+    /// has a normal of `m`'s flat faces: creases between curved faces.
+    fn hard_between_curved(m: &Model, out: &Model, at: DVec3, reach: f64) -> usize {
+        let flat = |n: DVec3| m.faces().any(|(_, f)| f.normal.dot(n) > 1.0 - 1e-9);
+        out.edges()
+            .filter(|(_, e)| {
+                let (p, q) = (out.pos(e.v[0]), out.pos(e.v[1]));
+                let [f, g] = out.faces_on_side(e.v[0], e.v[1])[..] else {
+                    return false;
+                };
+                let (nf, ng) = (out.face(f).unwrap().normal, out.face(g).unwrap().normal);
+                !e.soft
+                    && p.distance(at) < reach
+                    && q.distance(at) < reach
+                    && !flat(nf)
+                    && !flat(ng)
+            })
+            .count()
+    }
+
+    /// The edge of `out` square to `axis` from `d` in along one other axis to `d` in along the
+    /// third, from `from` (a point on the axis' line), at a distance along the axis of more
+    /// than 1e-6 and less than `near` from it: the end of a chamfer strip at a patch.
+    fn chord_past(
+        out: &Model,
+        from: [f64; 3],
+        axis: usize,
+        d: f64,
+        near: f64,
+    ) -> Option<crate::Edge> {
+        let (b, c) = ((axis + 1) % 3, (axis + 2) % 3);
+        out.edges().map(|(_, e)| e.clone()).find(|e| {
+            let (p, q) = (out.pos(e.v[0]), out.pos(e.v[1]));
+            let at =
+                |x: DVec3, ub: f64, uc: f64| (x[b] - ub).abs() < 1e-9 && (x[c] - uc).abs() < 1e-9;
+            (p[axis] - q[axis]).abs() < 1e-9
+                && (p[axis] - from[axis]).abs() > 1e-6
+                && (p[axis] - from[axis]).abs() < near
+                && ((at(p, from[b] + d, from[c]) && at(q, from[b], from[c] + d))
+                    || (at(q, from[b] + d, from[c]) && at(p, from[b], from[c] + d)))
+        })
+    }
+
+    #[test]
+    fn concave_corners_of_unequal_sizes_or_mixed_kinds_get_a_filler_patch() {
+        let m = notched();
+        let edges = notch_edges(&m);
+        let corner = DVec3::splat(1.5);
+        let cases: [[Profile; 3]; 5] = [
+            [rounded(0.2), rounded(0.3), rounded(0.4)],
+            [chamfer(0.2), chamfer(0.3), chamfer(0.4)],
+            [chamfer(0.3), chamfer(0.3), chamfer(0.3)],
+            [rounded(0.3), chamfer(0.3), chamfer(0.3)],
+            [rounded(0.2), chamfer(0.35), rounded(0.4)],
+        ];
+        for kinds in cases {
+            let each: Vec<(EdgeId, Profile)> = edges.iter().copied().zip(kinds).collect();
+            let (out, patched) = bevel_core(&m, &each).unwrap();
+            closed(&out);
+            assert_eq!(patched.len(), 1, "{kinds:?}");
+            assert!(!has_vertex(&out, [1.5, 1.5, 1.5]), "{kinds:?}");
+            let before = crossed(&m, &each);
+            closed(&before);
+            // A filler: it adds material to the crossed cuts, less than the corner cube.
+            let extra = signed_volume(&out) - signed_volume(&before);
+            let big = kinds.iter().map(|p| p.size()).fold(0.0, f64::max);
+            assert!(
+                extra > 1e-6 && extra < big * big * big,
+                "{kinds:?}: {extra}"
+            );
+            assert!(signed_volume(&out) > signed_volume(&m));
+            // The patch has facets of its own, not the handful of the crossed cuts.
+            let facets = |x: &Model| {
+                x.faces()
+                    .filter(|(_, f)| {
+                        f.outer
+                            .iter()
+                            .all(|v| x.pos(*v).distance(corner) < 2.0 * big)
+                    })
+                    .count()
+            };
+            let rounds = kinds
+                .iter()
+                .filter(|p| matches!(p, Profile::Fillet { .. }))
+                .count();
+            // Three chamfers close with one flat triangle; any round makes a ringed patch.
+            if rounds > 0 {
+                assert!(facets(&out) > facets(&before) + 4, "{kinds:?}");
+            }
+            if rounds == 3 {
+                // Arcs soft whatever the angle: no hard crease between curved faces.
+                assert_eq!(
+                    hard_between_curved(&m, &out, corner, 2.0 * big),
+                    0,
+                    "{kinds:?}"
+                );
+                assert!(hard_between_curved(&m, &before, corner, 2.0 * big) > 0);
+            }
+            // Each chamfer strip keeps its crease at the patch: its end, square to the strip
+            // and past the third wall, is a hard edge (the crossed cuts end at the wall; the flat
+            // triangle of three chamfers ends them aslant).
+            for (axis, kind) in kinds.iter().enumerate() {
+                if let Profile::Chamfer { distance } = kind
+                    && rounds > 0
+                {
+                    let chord = chord_past(&out, [1.5, 1.5, 1.5], axis, *distance, 2.0 * big);
+                    let chord = chord.unwrap_or_else(|| panic!("{kinds:?}: no end on {axis}"));
+                    assert!(!chord.soft, "{kinds:?}: the strip's end on {axis} is soft");
+                    assert!(
+                        chord_past(&before, [1.5, 1.5, 1.5], axis, *distance, 2.0 * big).is_none()
+                    );
+                }
+            }
+        }
+    }
+
+    /// The distance from `q` to the quarter-plane region `x >= x0, z >= z0` and the like,
+    /// the three pieces of the region a round of radius `r` is turned about: the two rays
+    /// along the walls (`x >= x0 + r, z >= z0` and `x >= x0, z >= z0 + r`) and the disc.
+    fn distance_to_corner(q: glam::DVec2, o: glam::DVec2, r: f64) -> f64 {
+        let c = o + glam::DVec2::splat(r);
+        let along_x = glam::DVec2::new((o.x + r - q.x).max(0.0), (o.y - q.y).max(0.0));
+        let along_z = glam::DVec2::new((o.x - q.x).max(0.0), (o.y + r - q.y).max(0.0));
+        along_x
+            .length()
+            .min(along_z.length())
+            .min((q.distance(c) - r).max(0.0))
+    }
+
+    /// The height of a ball of radius `r` rolled `d` from a wall over the floor: the round's
+    /// profile.
+    fn ball_height(d: f64, r: f64) -> f64 {
+        if d < r {
+            r - (r * r - (r - d) * (r - d)).sqrt()
+        } else {
+            0.0
+        }
+    }
+
+    /// The L's inside corner at (1, 0, 1) with all three edges rounded by `r`, as an implicit
+    /// solid: the front face's rim goes along the lower arm, round the inside fillet and up
+    /// the upper arm, with a ball of radius `r` rolled round it. In the x-z plane the air is
+    /// the quarter-plane beyond the walls less the fillet's corner; a point of the solid has
+    /// `y` at least the ball's height over its distance from the air.
+    fn rounded_l_has(p: DVec3, r: f64) -> bool {
+        let q = glam::DVec2::new(p.x, p.z);
+        let d = distance_to_corner(q, glam::DVec2::new(1.0, 1.0), r);
+        d > 0.0 && p.y >= ball_height(d, r)
+    }
+
+    /// The boss's foot corner at (1.5, 1.5, 1) on the plate, its vertical edge and both foot
+    /// edges rounded by `r`: the column's footprint is rounded about the vertical edge, and
+    /// the foot fillet fills up to the ball's height over the distance outside it.
+    fn rounded_boss_has(p: DVec3, r: f64) -> bool {
+        if p.z <= 1.0 {
+            return true;
+        }
+        let q = glam::DVec2::new(p.x, p.y);
+        let d = distance_to_corner(q, glam::DVec2::new(1.5, 1.5), r);
+        // The column is inside the footprint: no distance from the air side. A point of the
+        // footprint's far side is past both walls.
+        let in_footprint = p.x >= 1.5
+            && p.y >= 1.5
+            && (p.x >= 1.5 + r
+                || p.y >= 1.5 + r
+                || q.distance(glam::DVec2::new(1.5 + r, 1.5 + r)) <= r);
+        in_footprint || (d < r && p.z <= 1.0 + ball_height(d, r))
+    }
+
+    /// How many of a grid of points `region` (lower corner, upper corner) of `out` and `ideal`
+    /// disagree on, not counting those within `band` of the ideal surface, and how many were
+    /// compared.
+    fn disagreements(
+        out: &Model,
+        ideal: &dyn Fn(DVec3) -> bool,
+        region: (DVec3, DVec3),
+        band: f64,
+    ) -> (usize, usize) {
+        let (mut wrong, mut total) = (0, 0);
+        let (lo, hi) = region;
+        let steps = [24, 24, 14];
+        for ix in 0..=steps[0] {
+            for iy in 0..=steps[1] {
+                for iz in 0..=steps[2] {
+                    let t = DVec3::new(
+                        ix as f64 / steps[0] as f64,
+                        iy as f64 / steps[1] as f64,
+                        iz as f64 / steps[2] as f64,
+                    );
+                    let p = lo + (hi - lo) * t;
+                    let near = [
+                        DVec3::X * band,
+                        -DVec3::X * band,
+                        DVec3::Y * band,
+                        -DVec3::Y * band,
+                        DVec3::Z * band,
+                        -DVec3::Z * band,
+                    ]
+                    .iter()
+                    .any(|d| ideal(p + *d) != ideal(p));
+                    if near {
+                        continue;
+                    }
+                    total += 1;
+                    let has = crate::boolean::point_inside(p, out).unwrap_or(false);
+                    wrong += usize::from(has != ideal(p));
+                }
+            }
+        }
+        (wrong, total)
+    }
+
+    fn l_corner_edges(m: &Model, radii: [f64; 3]) -> Vec<(EdgeId, Profile)> {
+        let at = [1.0, 0.0, 1.0];
+        vec![
+            (edge_at(m, at, [1.0, 2.0, 1.0]), rounded(radii[0])),
+            (edge_at(m, at, [1.0, 0.0, 3.0]), rounded(radii[1])),
+            (edge_at(m, at, [4.0, 0.0, 1.0]), rounded(radii[2])),
+        ]
+    }
+
+    fn boss_corner_edges(m: &Model, radii: [f64; 3]) -> Vec<(EdgeId, Profile)> {
+        let at = [1.5, 1.5, 1.0];
+        vec![
+            (edge_at(m, at, [1.5, 1.5, 2.5]), rounded(radii[0])),
+            (edge_at(m, at, [1.5, 2.5, 1.0]), rounded(radii[1])),
+            (edge_at(m, at, [2.5, 1.5, 1.0]), rounded(radii[2])),
+        ]
+    }
+
+    /// The edges of `out` with both ends on the circle of radius `r` about `centre` in the
+    /// plane `axis = at`, between `lo` and `hi` along the others' bounding box, and whether each
+    /// is soft: the seam of a round's end section.
+    fn circle_edges(out: &Model, axis: usize, at: f64, centre: [f64; 2], r: f64) -> Vec<bool> {
+        let (b, c) = ((axis + 1) % 3, (axis + 2) % 3);
+        let on = |p: DVec3| {
+            (p[axis] - at).abs() < 1e-9
+                && ((p[b] - centre[0]).hypot(p[c] - centre[1]) - r).abs() < 1e-9
+        };
+        out.edges()
+            .filter(|(_, e)| on(out.pos(e.v[0])) && on(out.pos(e.v[1])))
+            .map(|(_, e)| e.soft)
+            .collect()
+    }
+
+    #[test]
+    fn an_inside_edge_between_two_outside_rounds_gets_a_swept_saddle() {
+        // The L's inside corner: two convex rounds along the front face's rim turn round the
+        // inside fillet.
+        let m = l_shape();
+        let r = 0.2;
+        let each = l_corner_edges(&m, [r; 3]);
+        let (out, patched) = bevel_core(&m, &each).unwrap();
+        closed(&out);
+        assert_eq!(patched.len(), 1);
+        let before = crossed(&m, &each);
+        closed(&before);
+        let region = (DVec3::new(0.55, 0.004, 0.55), DVec3::new(1.65, 0.4, 1.65));
+        let (wrong, total) = disagreements(&out, &|p| rounded_l_has(p, r), region, 0.012);
+        assert_eq!(wrong, 0, "{wrong} of {total}");
+        let (wrong_before, _) = disagreements(&before, &|p| rounded_l_has(p, r), region, 0.012);
+        assert!(wrong_before > 10, "{wrong_before}");
+        // The surface is smooth: the end sections' edges are soft where the sweep meets the
+        // straight rounds (they do not exist in the crossed cuts), and so is the rim on the
+        // front face.
+        let ea = circle_edges(&out, 0, 1.0 + r, [r, 1.0 - r], r);
+        let eb = circle_edges(&out, 2, 1.0 + r, [1.0 - r, r], r);
+        let rim = circle_edges(&out, 1, 0.0, [1.0 + r, 1.0 + r], 2.0 * r);
+        for edges in [&ea, &eb, &rim] {
+            assert_eq!(edges.len(), 8);
+            assert!(edges.iter().all(|soft| *soft));
+        }
+        assert!(circle_edges(&before, 0, 1.0 + r, [r, 1.0 - r], r).is_empty());
+        // Unequal radii and other segment counts stay closed with the saddle.
+        for (radii, segments) in [([0.3, 0.15, 0.1], 8), ([0.1, 0.2, 0.3], 8), ([0.2; 3], 3)] {
+            let each: Vec<(EdgeId, Profile)> = l_corner_edges(&m, radii)
+                .into_iter()
+                .map(|(e, p)| {
+                    (
+                        e,
+                        Profile::Fillet {
+                            radius: p.size(),
+                            segments,
+                        },
+                    )
+                })
+                .collect();
+            let (out, patched) = bevel_core(&m, &each).unwrap();
+            closed(&out);
+            assert_eq!(patched.len(), 1, "{radii:?} at {segments}");
+        }
+    }
+
+    #[test]
+    fn an_outside_edge_between_two_inside_rounds_gets_a_swept_saddle() {
+        // The boss's foot corner: two fillets along the foot turn round the column's rounded
+        // vertical edge, a filler swept about it.
+        let m = boss_on_plate();
+        let r = 0.2;
+        let each = boss_corner_edges(&m, [r; 3]);
+        let (out, patched) = bevel_core(&m, &each).unwrap();
+        closed(&out);
+        assert_eq!(patched.len(), 1);
+        let region = (DVec3::new(0.95, 0.95, 0.9), DVec3::new(2.05, 2.05, 1.45));
+        let (wrong, total) = disagreements(&out, &|p| rounded_boss_has(p, r), region, 0.012);
+        assert_eq!(wrong, 0, "{wrong} of {total}");
+        // The crossed cuts differ from the ideal there, or (at these radii) the boolean refuses
+        // them.
+        if let Ok(before) = crossed_result(&m, &each) {
+            let (wrong_before, _) =
+                disagreements(&before, &|p| rounded_boss_has(p, r), region, 0.012);
+            assert!(wrong_before > 10, "{wrong_before}");
+        }
+        for radii in [[0.3, 0.15, 0.1], [0.1, 0.2, 0.3]] {
+            let (out, patched) = bevel_core(&m, &boss_corner_edges(&m, radii)).unwrap();
+            closed(&out);
+            assert_eq!(patched.len(), 1, "{radii:?}");
         }
     }
 
@@ -2747,12 +3418,19 @@ mod tests {
     }
     /// The corner (by bits of `k`) of the unit cube with its three edges sized `radii`.
     fn unit_corner(k: usize, radii: [f64; 3]) -> (Model, Vec<(EdgeId, f64)>) {
-        let m = cuboid([1.0; 3]);
-        let at: Vec<f64> = (0..3).map(|i| f64::from((k >> i & 1) as u8)).collect();
+        cube_corner(1.0, k, radii)
+    }
+
+    /// The same on a cube of side `size`.
+    fn cube_corner(size: f64, k: usize, radii: [f64; 3]) -> (Model, Vec<(EdgeId, f64)>) {
+        let m = cuboid([size; 3]);
+        let at: Vec<f64> = (0..3)
+            .map(|i| size * f64::from((k >> i & 1) as u8))
+            .collect();
         let corner = [at[0], at[1], at[2]];
         let end = |i: usize| {
             let mut v = corner;
-            v[i] = 1.0 - v[i];
+            v[i] = size - v[i];
             v
         };
         let sized = (0..3)
@@ -2809,33 +3487,12 @@ mod tests {
         for segments in [25, 31] {
             for radii in [[0.02, 0.03, 0.04], [0.03, 0.02, 0.04]] {
                 for k in 0..8 {
-                    if let Err(e) = round_unit_corner(k, radii, segments) {
-                        // Known: see `radii_of_two_to_four_percent_at_the_known_open_corners`.
-                        assert!(
-                            KNOWN_OPEN.contains(&(segments, radii[0] < radii[1], k)),
-                            "{segments} {radii:?} corner {k}: {e}"
-                        );
-                    }
+                    // At 31 segments, corners 4 to 7 once failed: a facet's cut ended a micron
+                    // short, and the cutter's neighbouring facets cut it at different points.
+                    round_unit_corner(k, radii, segments)
+                        .unwrap_or_else(|e| panic!("{segments} {radii:?} corner {k}: {e}"));
                 }
             }
-        }
-    }
-
-    /// (segments, first radius smaller, corner) of the rounds that stay refused.
-    const KNOWN_OPEN: [(u32, bool, usize); 4] =
-        [(31, true, 6), (31, true, 7), (31, false, 4), (31, false, 5)];
-
-    #[test]
-    #[ignore = "refused: the crossing of two facets ends 7e-7 off the facet it cuts, leaving that facet unsplit (not fixed)"]
-    fn radii_of_two_to_four_percent_at_the_known_open_corners() {
-        for (segments, ascending, k) in KNOWN_OPEN {
-            let radii = if ascending {
-                [0.02, 0.03, 0.04]
-            } else {
-                [0.03, 0.02, 0.04]
-            };
-            round_unit_corner(k, radii, segments)
-                .unwrap_or_else(|e| panic!("{segments} {radii:?} corner {k}: {e}"));
         }
     }
 
@@ -2926,10 +3583,12 @@ mod tests {
         // Two edges, not at a corner: each edge's own cut.
         let two = [(edges[0], fillet(0.2)), (edges[1], chamfer(0.35))];
         closed(&bevelled_mixed(&m, &two).unwrap());
-        // Sizes snap within a kind, not across kinds.
+        // Sizes snap within a kind, not across kinds. The chamfer is 2e-6 from the round, not
+        // 1e-6: faces exactly `LENGTH_TOL` apart are judged coplanar or not by the last bit of
+        // their fitted planes (a change of 1e-15 flips whether this closes, on dev too).
         let near = [
             (edges[0], fillet(0.3)),
-            (edges[1], chamfer(0.3 + 1e-6)),
+            (edges[1], chamfer(0.3 + 2e-6)),
             (edges[2], fillet(0.3 + 1e-6)),
         ];
         closed(&bevelled_mixed(&m, &near).unwrap());
@@ -2938,6 +3597,117 @@ mod tests {
         match bevelled_mixed(&m, &bad) {
             Err(BevelError::Invalid(why)) => assert!(why.contains("distance"), "{why}"),
             other => panic!("{other:?}"),
+        }
+    }
+
+    /// Rounds every edge of the shape, three radii by colour (times `scale`), at `segments`.
+    fn round_three_radii(
+        m: &Model,
+        scale: f64,
+        radii: [f64; 3],
+        segments: u32,
+    ) -> Result<(Model, usize), BevelError> {
+        let ids: Vec<EdgeId> = m
+            .edges()
+            .filter(|(_, e)| !e.soft && e.curve.is_none_or(|_| e.polygon))
+            .map(|(id, _)| id)
+            .collect();
+        let colour = three_colours(m, &ids).expect("3-colourable");
+        let each: Vec<(EdgeId, Profile)> = ids
+            .iter()
+            .zip(&colour)
+            .map(|(e, c)| {
+                let profile = Profile::Fillet {
+                    radius: radii[*c] * scale,
+                    segments,
+                };
+                (*e, profile)
+            })
+            .collect();
+        bevel_core(m, &each).map(|(out, patched)| (out, patched.len()))
+    }
+
+    #[test]
+    fn a_half_sheared_box_with_three_radii_rounds_at_many_segments() {
+        // Once refused as "would not be a solid": the cuts across a facet's shallow edge or a
+        // crease did not meet (see the cases in `tests/integration/intersect.rs`).
+        let m = sheared_box(2.0, 0.5);
+        let (out, patched) = round_three_radii(&m, 1.0, [0.1, 0.12, 0.14], 24).unwrap();
+        closed(&out);
+        assert!(signed_volume(&out) < signed_volume(&m));
+        assert!(patched > 0);
+    }
+
+    #[test]
+    #[ignore = "sweep, slow: cargo test --release -p kernel sweep_of_corner_rounds -- --ignored --nocapture"]
+    fn sweep_of_corner_rounds() {
+        // Cubes of side 1 and 3, 3 to 32 segments, six radius sets, all 8 corners.
+        let sets = [
+            [0.05, 0.06, 0.07],
+            [0.06, 0.05, 0.07],
+            [0.5, 0.6, 0.7],
+            [0.02, 0.03, 0.04],
+            [0.03, 0.02, 0.04],
+            [0.1, 0.12, 0.14],
+        ];
+        let (mut total, mut refused, mut unpatched) = (0, Vec::new(), 0);
+        for size in [1.0, 3.0] {
+            for segments in 3..=32 {
+                for radii in sets {
+                    for k in 0..8 {
+                        total += 1;
+                        let (m, sized) = cube_corner(size, k, radii);
+                        let profile = Profile::Fillet {
+                            radius: 0.1,
+                            segments,
+                        };
+                        let each: Vec<(EdgeId, Profile)> =
+                            sized.iter().map(|(e, r)| (*e, profile.sized(*r))).collect();
+                        match bevel_core(&m, &each) {
+                            Ok((out, patched)) => {
+                                assert_eq!(open_reason(&out), None);
+                                unpatched += usize::from(patched.len() != 1);
+                            }
+                            Err(_) => refused.push(format!("{size} {segments} {radii:?} {k}")),
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "SWEEP corners {total}: refused {} unpatched {unpatched}",
+            refused.len()
+        );
+        for r in &refused {
+            eprintln!("SWEEP refused {r}");
+        }
+    }
+
+    #[test]
+    #[ignore = "sweep, slow: cargo test --release -p kernel sweep_of_mixed_shapes -- --ignored --nocapture"]
+    fn sweep_of_mixed_shapes() {
+        let (mut total, mut refused, mut corners, mut patched_all) = (0, Vec::new(), 0, 0);
+        for (name, m, scale) in mixed_shapes() {
+            for segments in [2, 3, 8, 24] {
+                for radii in [[0.1, 0.12, 0.14], [0.1, 0.15, 0.2], [0.05, 0.06, 0.07]] {
+                    total += 1;
+                    match round_three_radii(&m, scale, radii, segments) {
+                        Ok((out, patched)) => {
+                            assert_eq!(open_reason(&out), None);
+                            corners += m.vertices().count();
+                            patched_all += patched;
+                        }
+                        Err(_) => refused.push(format!("{name} {segments} {radii:?}")),
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "SWEEP mixed {total}: refused {} patched {patched_all} of {corners} corners",
+            refused.len()
+        );
+        for r in &refused {
+            eprintln!("SWEEP refused {r}");
         }
     }
 
@@ -2993,8 +3763,197 @@ mod tests {
         );
     }
 
+    fn shear_x(m: &Model, by: f64) -> Model {
+        let matrix = glam::DMat3::from_cols(DVec3::X, DVec3::Y, DVec3::new(by, 0.0, 1.0));
+        placed_copy(
+            m,
+            DAffine3 {
+                matrix3: matrix,
+                translation: DVec3::ZERO,
+            },
+            None,
+        )
+    }
+
+    /// A 4 x 4 x 1 plate with a 1 x 1 x 2 boss standing on it: its foot corners meet one
+    /// convex and two concave edges.
+    fn boss_on_plate() -> Model {
+        let boss = placed_copy(
+            &cuboid([1.0, 1.0, 2.0]),
+            DAffine3::from_translation(DVec3::new(1.5, 1.5, 0.5)),
+            None,
+        );
+        combine(&cuboid([4.0, 4.0, 1.0]), &boss, BooleanOp::Union)
+            .unwrap()
+            .unwrap()
+    }
+
+    /// Calls the sweeps may see refused as a whole (by the boolean on the rounds, as on `dev`).
+    const REFUSED_FAST: usize = 10;
+    const REFUSED_FULL: usize = 22;
+
+    /// Per kind of corner, (patched, total) over shapes with convex, concave and mixed corners:
+    /// the three edges at each corner bevelled alone, with three sizes, three sets of kinds and
+    /// two segment counts. The refused calls are counted under "refused".
+    fn corner_sweep(full: bool) -> BTreeMap<String, (usize, usize)> {
+        let keep: &[&str] = if full {
+            &["box", "5-sided prism", "8-sided prism", "shear 0.5"]
+        } else {
+            &["8-sided prism"]
+        };
+        let mut shapes: Vec<(String, Model, f64)> = mixed_shapes()
+            .into_iter()
+            .filter(|(name, ..)| keep.contains(&name.as_str()))
+            .collect();
+        let offset_notch = combine(
+            &cuboid([3.0, 4.0, 5.0]),
+            &placed_copy(
+                &cuboid([1.8, 2.0, 2.0]),
+                DAffine3::from_translation(DVec3::new(1.2, 2.0, 3.0)),
+                None,
+            ),
+            BooleanOp::Subtract,
+        )
+        .unwrap()
+        .unwrap();
+        let extra = [
+            (
+                "notched cube",
+                notched(),
+                if full { vec![0.0, 0.8] } else { vec![0.0] },
+            ),
+            (
+                "offset notch",
+                offset_notch,
+                if full { vec![0.0] } else { vec![] },
+            ),
+            ("L", l_shape(), vec![0.0]),
+            ("boss on plate", boss_on_plate(), vec![0.0]),
+        ];
+        for (name, m, shears) in extra {
+            for by in shears {
+                if by == 0.0 {
+                    shapes.push((name.to_string(), m.clone(), 1.0));
+                } else {
+                    shapes.push((format!("{name}, sheared {by}"), shear_x(&m, by), 1.0));
+                }
+            }
+        }
+        let mut table: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+        for (_, m, scale) in shapes {
+            for (v, _) in m.vertices() {
+                let at: Vec<EdgeId> = m.edges_at(v).to_vec();
+                if at.len() != 3 || at.iter().any(|e| m.edge(*e).unwrap().soft) {
+                    continue;
+                }
+                let concave = at
+                    .iter()
+                    .filter(|e| !analyze(&m, **e, 1.0, fillet(0.01)).unwrap().convex)
+                    .count();
+                let sizes = [0.1, 0.12, 0.14].map(|s| s * scale);
+                for chamfers in 0..3 {
+                    for segments in if full { vec![3, 8] } else { vec![3] } {
+                        let each: Vec<(EdgeId, Profile)> = at
+                            .iter()
+                            .zip(sizes)
+                            .enumerate()
+                            .map(|(i, (e, size))| {
+                                if i < chamfers {
+                                    (*e, chamfer(size))
+                                } else {
+                                    (
+                                        *e,
+                                        Profile::Fillet {
+                                            radius: size,
+                                            segments,
+                                        },
+                                    )
+                                }
+                            })
+                            .collect();
+                        let kind = match (concave, chamfers) {
+                            (0, 0) => "convex, rounds",
+                            (0, _) => "convex, round and chamfer",
+                            (3, 0) => "concave, rounds",
+                            (3, _) => "concave, round and chamfer",
+                            (_, 0) => "inside and outside, rounds",
+                            _ => "inside and outside, with chamfer",
+                        };
+                        let Ok((out, patched)) = bevel_core(&m, &each) else {
+                            table.entry("refused".into()).or_default().1 += 1;
+                            continue;
+                        };
+                        closed(&out);
+                        let entry = table.entry(kind.to_string()).or_default();
+                        entry.1 += 1;
+                        entry.0 += usize::from(patched.contains(&v));
+                    }
+                }
+            }
+        }
+        table
+    }
+
+    /// Checks a corner sweep: the shares of each kind patched, and that no more calls are
+    /// refused (by the boolean, whatever the corners) than `refused`.
+    fn check_sweep(table: &BTreeMap<String, (usize, usize)>, refused: usize) {
+        for (kind, (patched, total)) in table {
+            eprintln!("{kind}: {patched} of {total}");
+        }
+        let share = |kind: &str| {
+            let (patched, total) = table[kind];
+            patched as f64 / total as f64
+        };
+        assert!(share("convex, rounds") > 0.9);
+        assert!(share("convex, round and chamfer") > 0.9);
+        assert!(share("concave, rounds") > 0.9);
+        assert!(share("concave, round and chamfer") > 0.9);
+        assert!(share("inside and outside, rounds") > 0.8);
+        assert_eq!(share("inside and outside, with chamfer"), 0.0);
+        let none = (0, 0);
+        assert!(table.get("refused").unwrap_or(&none).1 <= refused);
+    }
+
     #[test]
-    fn a_concave_round_beside_convex_rounds_keeps_the_crossed_cuts_closed() {
+    fn corners_are_patched_over_prisms_and_notched_shapes_of_every_kind() {
+        check_sweep(&corner_sweep(false), REFUSED_FAST);
+    }
+
+    /// The full sweep over boxes, prisms, shears, notches, L shapes and bosses: minutes in a
+    /// debug build. Run with
+    /// `cargo test -p kernel --lib corners_are_patched_over_every -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "slow: run with --ignored"]
+    fn corners_are_patched_over_every_shape_of_the_full_sweep() {
+        check_sweep(&corner_sweep(true), REFUSED_FULL);
+    }
+
+    #[test]
+    fn chamfers_with_one_distance_past_the_other_two_together_stay_crossed() {
+        // As before: no flat triangle and no ringed patch, convex or concave.
+        let size = [2.0, 3.0, 4.0];
+        let m = cuboid(size);
+        let edges = box_corner_edges(&m, size);
+        let each: Vec<(EdgeId, Profile)> = edges
+            .iter()
+            .copied()
+            .zip([chamfer(0.1), chamfer(0.1), chamfer(0.4)])
+            .collect();
+        let (out, patched) = bevel_core(&m, &each).unwrap();
+        closed(&out);
+        assert!(patched.is_empty());
+        let n = notched();
+        let each: Vec<(EdgeId, Profile)> = notch_edges(&n)
+            .into_iter()
+            .zip([chamfer(0.1), chamfer(0.1), chamfer(0.4)])
+            .collect();
+        let (out, patched) = bevel_core(&n, &each).unwrap();
+        closed(&out);
+        assert!(patched.is_empty());
+    }
+
+    #[test]
+    fn a_concave_edge_beside_convex_ones_gets_a_saddle_only_with_three_rounds() {
         // The inside corner of an L: one concave and two convex edges meet at (1, 0, 1).
         let m = l_shape();
         let before = signed_volume(&m);
@@ -3012,7 +3971,12 @@ mod tests {
             let each = [(concave, a), (up, b), (along, c)];
             let (out, patched) = bevel_core(&m, &each).unwrap();
             closed(&out);
-            assert!(patched.is_empty(), "{a:?} {b:?} {c:?}");
+            // Three rounds get the swept saddle; with a chamfer the crossed cuts stay.
+            let rounds = [a, b, c]
+                .iter()
+                .filter(|p| matches!(p, Profile::Fillet { .. }))
+                .count();
+            assert_eq!(patched.len(), usize::from(rounds == 3), "{a:?} {b:?} {c:?}");
             // The material the concave edge adds less what the convex ones take, as if cut
             // separately (a corner's worth, under r cubed, differs).
             let gain = signed_volume(&bevelled_mixed(&m, &[(concave, a)]).unwrap()) - before;

@@ -720,9 +720,9 @@ Where exactly three chosen convex edges meet at a vertex with exactly three face
 corner, a prism's, a sheared box's), the corner closes with a flat triangle instead of the three
 chamfer planes meeting in a point: the plane through the three points where the chamfer strips of
 each face meet cuts the tip off, and its corners are those points (a box corner with distance d:
-`d` in from two faces and on the third). Three concave chamfers meeting at an inside corner keep
-the three planes meeting in a point (a cone of empty space), as do corners of one or two chosen
-edges and non-trihedral vertices. `distances`, when given, is a list with one distance per entry
+`d` in from two faces and on the third). Three concave chamfers meeting at an inside corner close the same
+way, the triangle built as a filler across the cone of empty space; corners of one or two chosen
+edges and non-trihedral vertices keep the planes meeting in a point. `distances`, when given, is a list with one distance per entry
 of `edges` (same order, each more than 0.000001 m) in place of `distance`, which stays required
 and is the default for the schema; the triangle's corners then follow each edge's own strip
 width, but only when no distance at the corner is larger than the other two together; otherwise
@@ -787,9 +787,20 @@ a sharp pinch); so do corners with one or two chosen edges. A chamfer corner (`c
 closes with a flat triangle (see above). Where exactly three chosen concave edges (an inside
 corner, such as a notch cut from a cube's corner) meet at a vertex of three faces and have one
 radius, the corner is a concave sphere piece: the same patch built as a filler, a ball of
-`radius` in the empty corner tangent to the three faces. A corner of concave and convex rounds
-(an L's inside corner where the cove meets the rounded edges beside it) keeps the crossed cuts:
-a closed solid, but no patch. `radii`, when given, is a list with one radius per entry of
+`radius` in the empty corner tangent to the three faces. Three concave rounds of different radii
+get the star-shaped patch below, built as a filler for the empty corner. A corner of concave and
+convex rounds (an L's inside corner where the cove meets the two rounded edges beside it, or the
+foot of a boss on a plate, where the two foot fillets meet the column's rounded edge) gets a
+swept saddle when its three faces are square to each other, the two rounds of one kind have the
+same number of segments and all three are rounds: the pair stop at the planes through the
+axis of the third round (the third round runs through to the face the pair lie on; when it is
+the concave one it no longer starts a radius back from it) and the body between those two end sections, swept about the axis, is
+a cutter (two convex rounds turning round an inside fillet: the rim of the front face rounds
+as a ball rolls round it) or a filler (two foot fillets turning round an outside round). With
+equal radii the surface is a piece of a torus, with different radii a loft between the two end
+sections, the seams with the straight rounds and the front face soft. A saddle that cannot be
+built or cut keeps the crossed cuts (the call is run again without saddles), a closed solid
+with no patch, as do chamfers in such a corner and faces not square to each other. `radii`, when given, is a list with one radius per entry of
 `edges` (same order, each more than 0.000001 m) in place of `radius`, and must match the expanded
 edge count when `edges` holds a batch reference such as `"$0:e*"`; radii are snapped together as
 for `distances`. A corner whose three convex rounds have different radii has no common ball:
@@ -811,8 +822,7 @@ result would not be a solid", by the boolean on the rounds themselves, as it was
 mostly at 2 or 3 segments (coarse facets leave no room inside them), at the extreme ratio
 0.05:0.25:0.3, and on prisms with obtuse corners (6- and 8-sided). A few calls with very close
 radii (0.05, 0.06, 0.07 on a unit cube at 24 segments) are refused as a whole with "the result
-would not be a solid", by the boolean on the rounds themselves, before any corner. A corner whose radii are all equal still gets its sphere, and concave
-corners of different radii keep the crossed cuts. Rounds and chamfers in one call are `bevel_edges`
+would not be a solid", by the boolean on the rounds themselves, before any corner. A corner whose radii are all equal still gets its sphere. Rounds and chamfers in one call are `bevel_edges`
 (below). A second call whose edge ends at faces that are not flat and coplanar
 (beside an earlier round) is refused ("ends at v12, where the other faces do not lie in one
 plane"). The flat faces
@@ -824,7 +834,7 @@ rounds would overlap are "radius too large for edges e12 and e15". `segments` ou
 
 | Command | Effect |
 |---|---|
-| `{"type": "bevel_edges", "edges": ["e12", "e15"], "sizes": [0.005, 0.004], "kinds": ["round", "chamfer"], "segments": 4}` | Rounds some edges and chamfers others in one call, as one undo step labelled `bevel_edges`. `edges`, `sizes` (each more than 0.000001 m) and `kinds` (`round`, whose size is a radius, or `chamfer`, whose size is a distance) have one entry each, in the same order; a list of another length or a size out of range is `invalid_input`, and a kind other than `round` or `chamfer` does not parse (the request is refused as malformed, `-32602`). `instance` (as for `chamfer_edges`) and `segments` (rounds only, as for `fillet_edges`; checked only when some edge is a round) are optional. Ends, validation, snapping of near-equal sizes (within each kind) and batch references are as for the two commands. A convex corner where exactly three chosen edges meet at a vertex of three faces and at least one is a round and one a chamfer gets the ringed patch of three different radii (above), a chamfer standing in as the round with the same setback (its strip is that round's chord, so the patch lies below the strip's plane and the strip's end keeps its crease; the round ends stay soft). Over boxes, 3- to 8-sided prisms and sheared boxes with every corner meeting a chamfer and rounds (chamfer 0.1, 0.12 or 0.14 of the shape's scale, one or two kinds chamfered, 3 and 8 segments), 290 of 336 corners were patched; the rest kept the crossed cuts (closed, a pinch where the strips cross), mostly on 8-sided prisms with one chamfered kind (obtuse corners) and at 3 segments. A corner where inside (concave) and outside (convex) edges meet, whatever their kinds, keeps the crossed cuts: a closed solid, no patch. The surface there would have to turn from the ball that rolls on the outside of the material (convex rounds) to the ball that rolls in the empty corner (concave round), a saddle with no single sphere or ring of rounds to bound it, so no robust construction is attempted; the volume is that of the concave filler less the convex cuts, to within a corner's worth. |
+| `{"type": "bevel_edges", "edges": ["e12", "e15"], "sizes": [0.005, 0.004], "kinds": ["round", "chamfer"], "segments": 4}` | Rounds some edges and chamfers others in one call, as one undo step labelled `bevel_edges`. `edges`, `sizes` (each more than 0.000001 m) and `kinds` (`round`, whose size is a radius, or `chamfer`, whose size is a distance) have one entry each, in the same order; a list of another length or a size out of range is `invalid_input`, and a kind other than `round` or `chamfer` does not parse (the request is refused as malformed, `-32602`). `instance` (as for `chamfer_edges`) and `segments` (rounds only, as for `fillet_edges`; checked only when some edge is a round) are optional. Ends, validation, snapping of near-equal sizes (within each kind) and batch references are as for the two commands. A convex corner where exactly three chosen edges meet at a vertex of three faces and at least one is a round and one a chamfer gets the ringed patch of three different radii (above), a chamfer standing in as the round with the same setback (its strip is that round's chord, so the patch lies below the strip's plane and the strip's end keeps its crease; the round ends stay soft). Over boxes, 3- to 8-sided prisms and sheared boxes with every corner meeting a chamfer and rounds (chamfer 0.1, 0.12 or 0.14 of the shape's scale, one or two kinds chamfered, 3 and 8 segments), 332 of 336 corners are patched (290 when first measured: a patch vertex that stands a hair above a chamfer's plane is not in the result, since nothing is cut there, and the check for the patch took that as a failure; it now accepts a missing vertex that lies in the air within a quarter of the patch's least vertex spacing; rings of four or five points are also allowed); the rest, on 5-sided prisms with two chamfered kinds at 3 segments, keep the crossed cuts (closed, a pinch where the strips cross). Concave corners get the same patches built as fillers (a chamfer standing in as the round with its setback), and three concave chamfers close with the flat triangle as a filler. A corner where inside (concave) and outside (convex) edges meet gets the swept saddle (see `fillet_edges`) when all three are rounds on square faces; with a chamfer among them, or on faces that are not square to each other, it keeps the crossed cuts: a closed solid, no patch, the volume that of the concave filler less the convex cuts, to within a corner's worth. |
 
 ### Guides
 
