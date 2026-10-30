@@ -21,8 +21,8 @@ use std::fmt;
 use glam::{DAffine3, DVec2, DVec3};
 
 use crate::boolean::{
-    BooleanError, BooleanOp, apart, combine, copy_into, nested_shells, placed_copy, shells_of,
-    subset,
+    BooleanError, BooleanOp, Shared, apart, combine, copy_sharing, nested_shells, placed_copy,
+    shells_of, subset,
 };
 use crate::geom::{LENGTH_TOL, vector_area};
 use crate::ids::{CurveId, EdgeId, FaceId, MaterialId, VertexId};
@@ -388,11 +388,18 @@ fn bevel_with(
             ));
         };
         let [a, b] = edge.v;
-        let at = m
-            .faces_on_side(a, b)
-            .into_iter()
-            .chain(m.faces_on_side(b, a))
-            .next();
+        let on = m.faces_on_side(a, b);
+        if on.len() > 2 {
+            return Err(BevelError::Edge(
+                *e,
+                format!(
+                    "edge e{} is shared by {} faces (solids meet along it)",
+                    e.0,
+                    on.len()
+                ),
+            ));
+        }
+        let at = on.first().copied();
         let shell = at.and_then(|f| shells.iter().position(|s| s.contains(&f)));
         match shell {
             Some(i) => hit[i] = true,
@@ -486,6 +493,8 @@ fn bevel_with(
     };
     // What stays as it is, with the loose edges (no face).
     let mut rest = subset(m, &faces_of(&hit, false));
+    // What the carried-over shells were joined to the bevelled ones by in `m`.
+    let shared = Shared::of(m, &faces_of(&hit, true), &faces_of(&hit, false));
     let mut curves: HashMap<CurveId, CurveId> = HashMap::new();
     for (_, e) in m.edges() {
         let [a, b] = e.v;
@@ -654,7 +663,7 @@ fn bevel_with(
     let mut patched: Vec<VertexId> = done.iter().map(|i| corners[*i].vertex).collect();
     patched.extend(held.iter().map(|s| s.vertex));
     let all_held = held.len() == saddles.len();
-    copy_into(&rest, &mut acc);
+    copy_sharing(&rest, &mut acc, Some(&shared));
     acc.take_changes();
     Ok((acc, patched, all_held))
 }
@@ -1203,6 +1212,7 @@ fn face_key(loops: &[Vec<VertexId>]) -> Vec<Vec<VertexId>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::boolean::{copy_into, copy_merged};
     use crate::primitives::Solid;
     use crate::scene::DefinitionKind;
 
@@ -1320,6 +1330,270 @@ mod tests {
         let r = bevelled(&m, &[e], round).unwrap();
         assert_eq!(open_reason(&r), None);
         assert!(has_vertex(&r, [0.0, 0.0, 3.0]) && has_vertex(&r, [0.0, 0.0, 2.0]));
+    }
+
+    /// Cuboid `a` and a neighbour of the same size touching it only along the vertical edge
+    /// x = 2, y = 2 (`by` = [2, 2, 0]) or only at the corner (2, 2, 2) (`by` = [2, 2, 2]).
+    fn touching(by: [f64; 3]) -> (Model, Model) {
+        let a = cuboid([2.0, 2.0, 2.0]);
+        let b = moved(&cuboid([2.0, 2.0, 2.0]), by);
+        let mut m = Model::new();
+        copy_merged(&a, &mut m);
+        copy_merged(&b, &mut m);
+        m.take_changes();
+        (m, b)
+    }
+
+    #[test]
+    fn a_part_sharing_only_an_edge_is_its_own_shell() {
+        let (m, _) = touching([2.0, 2.0, 0.0]);
+        assert_eq!(shells_of(&m).len(), 2);
+        let (m, _) = touching([2.0, 2.0, 2.0]);
+        assert_eq!(shells_of(&m).len(), 2);
+    }
+
+    #[test]
+    fn a_part_sharing_only_an_edge_is_not_cut() {
+        for by in [[2.0, 2.0, 0.0], [2.0, 2.0, 2.0]] {
+            let (m, _) = touching(by);
+            // An edge of the first box away from the contact, and one ending at it.
+            for (p, q) in [
+                ([0.0, 0.0, 2.0], [2.0, 0.0, 2.0]),
+                ([2.0, 0.0, 2.0], [2.0, 2.0, 2.0]),
+            ] {
+                let e = edge_at(&m, p, q);
+                for profile in [chamfer(0.5), fillet(0.5)] {
+                    let (r, _) = bevel_core(&m, &[(e, profile)]).unwrap();
+                    let shells = shells_of(&r);
+                    assert_eq!(shells.len(), 2, "{by:?}");
+                    for faces in &shells {
+                        assert_eq!(open_reason(&subset(&r, faces)), None, "{by:?}");
+                    }
+                    // The neighbour keeps its 6 faces, 8 corners and volume.
+                    let far = |p: DVec3| p.cmpge(DVec3::from(by) - 1e-9).all();
+                    let other = shells
+                        .iter()
+                        .find(|s| {
+                            s.iter()
+                                .all(|f| r.face(*f).unwrap().outer.iter().all(|v| far(r.pos(*v))))
+                        })
+                        .unwrap_or_else(|| panic!("neighbour lost {by:?}"));
+                    assert_eq!(other.len(), 6, "{by:?}");
+                    assert!((signed_volume(&subset(&r, other)) - 8.0).abs() < 1e-9);
+                    // The first box lost material and is closed.
+                    let first = shells.iter().find(|s| *s != other).unwrap();
+                    let v = signed_volume(&subset(&r, first));
+                    assert!(v < 8.0 - 1e-3 && v > 7.0, "{by:?} {v}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_part_sharing_an_edge_is_kept_when_its_neighbour_is_cut() {
+        // The second box is the one chamfered: the first stays whole.
+        let (m, _) = touching([2.0, 2.0, 0.0]);
+        let e = edge_at(&m, [4.0, 2.0, 2.0], [4.0, 4.0, 2.0]);
+        let (r, _) = bevel_core(&m, &[(e, chamfer(0.5))]).unwrap();
+        let shells = shells_of(&r);
+        assert_eq!(shells.len(), 2);
+        let mut volumes: Vec<f64> = shells
+            .iter()
+            .map(|f| {
+                let part = subset(&r, f);
+                assert_eq!(open_reason(&part), None);
+                signed_volume(&part)
+            })
+            .collect();
+        volumes.sort_by(f64::total_cmp);
+        assert!((volumes[0] - (8.0 - 0.125 * 2.0)).abs() < 1e-9);
+        assert!((volumes[1] - 8.0).abs() < 1e-9);
+        let first = r
+            .vertices()
+            .filter(|(_, v)| v.pos.max_element() < 2.0 + 1e-9)
+            .count();
+        assert_eq!(first, 8);
+    }
+
+    fn joined(parts: &[&Model]) -> Model {
+        let mut m = Model::new();
+        for p in parts {
+            copy_merged(p, &mut m);
+        }
+        m.take_changes();
+        m
+    }
+
+    /// The shell of `r` that has exactly the vertex positions and face count of `part`.
+    fn shell_like(r: &Model, part: &Model) -> Option<Vec<FaceId>> {
+        let key = |m: &Model, faces: &[FaceId]| {
+            let mut ps: Vec<[i64; 3]> = faces
+                .iter()
+                .flat_map(|f| m.face(*f).unwrap().outer.clone())
+                .map(|v| m.pos(v).to_array().map(|x| (x * 1e6).round() as i64))
+                .collect();
+            ps.sort();
+            ps.dedup();
+            ps
+        };
+        let all: Vec<FaceId> = part.faces().map(|(id, _)| id).collect();
+        let want = key(part, &all);
+        shells_of(r)
+            .into_iter()
+            .find(|s| s.len() == all.len() && key(r, s) == want)
+    }
+
+    fn no_t_junctions(m: &Model) {
+        for (_, e) in m.edges() {
+            let (pa, pb) = (m.pos(e.v[0]), m.pos(e.v[1]));
+            let len = pa.distance(pb);
+            for (v, vertex) in m.vertices() {
+                if e.v.contains(&v) {
+                    continue;
+                }
+                let (t, dist) = crate::geom::project_on_segment(vertex.pos, pa, pb);
+                assert!(
+                    !(dist < LENGTH_TOL && t * len > LENGTH_TOL && (1.0 - t) * len > LENGTH_TOL),
+                    "vertex {:?} lies inside edge {pa:?} {pb:?}",
+                    vertex.pos
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_edge_two_solids_share_cannot_be_bevelled() {
+        let (m, _) = touching([2.0, 2.0, 0.0]);
+        let e = edge_at(&m, [2.0, 2.0, 0.0], [2.0, 2.0, 2.0]);
+        for profile in [chamfer(0.25), fillet(0.25)] {
+            match bevel_core(&m, &[(e, profile)]) {
+                Err(BevelError::Edge(id, why)) => {
+                    assert_eq!(id, e);
+                    assert!(why.contains("shared by 4 faces"), "{why}");
+                }
+                other => panic!("{:?}", other.map(|_| ())),
+            }
+        }
+    }
+
+    #[test]
+    fn a_partly_consumed_contact_edge_leaves_no_t_junction() {
+        let (m, _) = touching([2.0, 2.0, 0.0]);
+        let e = edge_at(&m, [2.0, 0.0, 2.0], [2.0, 2.0, 2.0]);
+        for profile in [chamfer(0.5), fillet(0.5)] {
+            let (r, _) = bevel_core(&m, &[(e, profile)]).unwrap();
+            no_t_junctions(&r);
+            // The neighbour's edge is split where the first box's is cut: still 6 faces, whole.
+            let shells = shells_of(&r);
+            assert_eq!(shells.len(), 2);
+            let mut volumes: Vec<(f64, usize)> = shells
+                .iter()
+                .map(|s| {
+                    let part = subset(&r, s);
+                    assert_eq!(open_reason(&part), None);
+                    (signed_volume(&part), s.len())
+                })
+                .collect();
+            volumes.sort_by(|x, y| x.0.total_cmp(&y.0));
+            assert!(volumes[0].0 < 8.0 - 1e-3 && volumes[0].0 > 7.0);
+            assert!((volumes[1].0 - 8.0).abs() < 1e-9 && volumes[1].1 == 6);
+        }
+    }
+
+    #[test]
+    fn a_contact_edge_consumed_at_both_ends_leaves_no_t_junction() {
+        let (m, _) = touching([2.0, 2.0, 0.0]);
+        let top = edge_at(&m, [2.0, 0.0, 2.0], [2.0, 2.0, 2.0]);
+        let bottom = edge_at(&m, [2.0, 0.0, 0.0], [2.0, 2.0, 0.0]);
+        for profile in [chamfer(0.5), fillet(0.5)] {
+            let (r, _) = bevel_core(&m, &[(top, profile), (bottom, profile)]).unwrap();
+            no_t_junctions(&r);
+            let shells = shells_of(&r);
+            assert_eq!(shells.len(), 2);
+            let mut volumes: Vec<f64> = shells
+                .iter()
+                .map(|s| {
+                    let part = subset(&r, s);
+                    assert_eq!(open_reason(&part), None);
+                    signed_volume(&part)
+                })
+                .collect();
+            volumes.sort_by(f64::total_cmp);
+            assert!(volumes[0] < 8.0 - 1e-3 && volumes[0] > 6.0);
+            assert!((volumes[1] - 8.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn a_sheet_on_a_solid_edge_is_left_alone() {
+        // A fin: one face sharing the edge x = 2, y = 2 with the box, so three faces meet there.
+        let a = cuboid([2.0, 2.0, 2.0]);
+        let mut fin = Model::new();
+        fin.add_polygon(&[
+            DVec3::new(2.0, 2.0, 0.0),
+            DVec3::new(2.0, 2.0, 2.0),
+            DVec3::new(3.0, 3.0, 2.0),
+            DVec3::new(3.0, 3.0, 0.0),
+        ])
+        .unwrap();
+        fin.take_changes();
+        let m = joined(&[&a, &fin]);
+        assert_eq!(shells_of(&m).len(), 2);
+        // The shared edge is refused; another edge is bevelled and the fin stays.
+        let shared = edge_at(&m, [2.0, 2.0, 0.0], [2.0, 2.0, 2.0]);
+        assert!(matches!(
+            bevel_core(&m, &[(shared, chamfer(0.25))]),
+            Err(BevelError::Edge(..))
+        ));
+        let e = edge_at(&m, [0.0, 0.0, 2.0], [2.0, 0.0, 2.0]);
+        let (r, _) = bevel_core(&m, &[(e, chamfer(0.5))]).unwrap();
+        no_t_junctions(&r);
+        assert!(shell_like(&r, &fin).is_some());
+        assert!(shell_like(&r, &a).is_none());
+        let first = shells_of(&r)
+            .into_iter()
+            .find(|s| Some(s) != shell_like(&r, &fin).as_ref())
+            .unwrap();
+        let part = subset(&r, &first);
+        assert_eq!(open_reason(&part), None);
+        assert!((signed_volume(&part) - (8.0 - 0.25)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn three_solids_on_one_edge_keep_the_two_others_unchanged() {
+        // A box in one quadrant of the line x = 2, y = 2, another in the opposite one, and a
+        // triangular prism in a 60 degree wedge between them, its corner on the line.
+        let a = cuboid([2.0, 2.0, 2.0]);
+        let b = moved(&cuboid([2.0, 2.0, 2.0]), [2.0, 2.0, 0.0]);
+        let first = -std::f64::consts::FRAC_PI_4;
+        let wedge = Solid::prism(1.0, 2.0, 3, first).unwrap().to_model();
+        let corner = DVec3::new(first.cos(), first.sin(), 0.0);
+        let wedge = placed_copy(
+            &wedge,
+            DAffine3::from_translation(DVec3::new(2.0, 2.0, 0.0) - corner),
+            None,
+        );
+        let m = joined(&[&a, &b, &wedge]);
+        assert_eq!(shells_of(&m).len(), 3);
+        let e = edge_at(&m, [0.0, 0.0, 2.0], [2.0, 0.0, 2.0]);
+        for profile in [chamfer(0.5), fillet(0.5)] {
+            let (r, _) = bevel_core(&m, &[(e, profile)]).unwrap();
+            no_t_junctions(&r);
+            assert_eq!(shells_of(&r).len(), 3);
+            assert!(shell_like(&r, &b).is_some());
+            assert!(shell_like(&r, &wedge).is_some());
+            assert!(shell_like(&r, &a).is_none());
+            let cut = shells_of(&r)
+                .into_iter()
+                .find(|s| {
+                    Some(s) != shell_like(&r, &b).as_ref()
+                        && Some(s) != shell_like(&r, &wedge).as_ref()
+                })
+                .unwrap();
+            let part = subset(&r, &cut);
+            assert_eq!(open_reason(&part), None);
+            assert!(signed_volume(&part) < 8.0 - 1e-3);
+        }
     }
 
     #[test]

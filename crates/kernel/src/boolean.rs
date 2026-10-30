@@ -12,8 +12,9 @@ use std::fmt;
 
 use glam::{DAffine3, DVec3};
 
-use crate::geom::{LENGTH_TOL, Plane, point_in_polygon};
-use crate::ids::{CurveId, FaceId, InstanceId, MaterialId, VertexId};
+use crate::edit::insert_between;
+use crate::geom::{LENGTH_TOL, Plane, point_in_polygon, project_on_segment};
+use crate::ids::{CurveId, EdgeId, FaceId, InstanceId, MaterialId, VertexId};
 use crate::index::{Index, Shape};
 use crate::intersect::{FaceShape, face_segments, face_segments_cost, face_shape};
 use crate::model::{Edge, Face, Instance, Model};
@@ -310,7 +311,9 @@ pub(crate) fn nested_shells(m: &Model, shells: &[Vec<FaceId>]) -> Vec<[usize; 2]
     pairs
 }
 
-/// The faces of `m` grouped into shells: faces joined across the edges of their loops.
+/// The faces of `m` grouped into shells: faces joined across the edges of their loops. An edge
+/// that more than two faces meet at (two solids sharing it) joins each face only to the one
+/// that closes its solid there, so solids touching along an edge or at a vertex stay apart.
 pub(crate) fn shells_of(m: &Model) -> Vec<Vec<FaceId>> {
     let ids: Vec<FaceId> = m.faces().map(|(id, _)| id).collect();
     let at: HashMap<FaceId, usize> = ids.iter().enumerate().map(|(i, f)| (*f, i)).collect();
@@ -322,13 +325,23 @@ pub(crate) fn shells_of(m: &Model) -> Vec<Vec<FaceId>> {
         }
         i
     }
-    for (i, id) in ids.iter().enumerate() {
+    let mut seen: HashSet<(VertexId, VertexId)> = HashSet::new();
+    for id in &ids {
         let f = m.face(*id).expect("face");
         for l in std::iter::once(&f.outer).chain(&f.holes) {
             for k in 0..l.len() {
-                for g in m.faces_on_side(l[k], l[(k + 1) % l.len()]) {
-                    let (a, b) = (root(&mut parent, i), root(&mut parent, at[&g]));
-                    parent[a] = b;
+                let (a, b) = (l[k], l[(k + 1) % l.len()]);
+                let on = m.faces_on_side(a, b);
+                let pairs: Vec<(FaceId, FaceId)> = if on.len() <= 2 {
+                    on.iter().map(|g| (*id, *g)).collect()
+                } else if seen.insert((a.min(b), a.max(b))) {
+                    wedges(m, a, b, &on)
+                } else {
+                    Vec::new()
+                };
+                for (f, g) in pairs {
+                    let (x, y) = (root(&mut parent, at[&f]), root(&mut parent, at[&g]));
+                    parent[x] = y;
                 }
             }
         }
@@ -344,6 +357,65 @@ pub(crate) fn shells_of(m: &Model) -> Vec<Vec<FaceId>> {
         groups[g].push(*id);
     }
     groups
+}
+
+/// The pairs of faces at the edge a-b that bound one wedge of material each: `forward` run a to
+/// b, `back` run b to a. Going round the edge, the material of a face running a to b lies
+/// towards decreasing angle, and the next face met there (running b to a) closes it.
+fn wedges(m: &Model, a: VertexId, b: VertexId, on: &[FaceId]) -> Vec<(FaceId, FaceId)> {
+    let runs_forward = |f: FaceId| {
+        let face = m.face(f).expect("face");
+        std::iter::once(&face.outer)
+            .chain(&face.holes)
+            .any(|l| (0..l.len()).any(|i| (l[i], l[(i + 1) % l.len()]) == (a, b)))
+    };
+    let (forward, back): (Vec<FaceId>, Vec<FaceId>) = on.iter().partition(|f| runs_forward(**f));
+    let d = (m.pos(b) - m.pos(a)).normalize_or_zero();
+    let basis = d.any_orthonormal_vector();
+    let basis2 = d.cross(basis);
+    // The angle about d of the direction a face runs from the edge into itself.
+    let angle = |f: FaceId, along: f64| -> f64 {
+        let u = m.face(f).expect("face").normal.cross(d * along);
+        u.dot(basis2).atan2(u.dot(basis))
+    };
+    let back_angles: Vec<(FaceId, f64)> = back.iter().map(|g| (*g, angle(*g, -1.0))).collect();
+    let fwd_angles: Vec<(FaceId, f64)> = forward.iter().map(|f| (*f, angle(*f, 1.0))).collect();
+    // The turn from `from` down to `to`; a face at the same angle is a whole turn away.
+    let gap = |from: f64, to: f64| match (from - to).rem_euclid(std::f64::consts::TAU) {
+        g if g < 1e-9 => std::f64::consts::TAU,
+        g => g,
+    };
+    let nearest = |of: &[(FaceId, f64)], cost: &dyn Fn(f64) -> f64| {
+        of.iter()
+            .min_by(|x, y| cost(x.1).total_cmp(&cost(y.1)))
+            .map(|(g, _)| *g)
+    };
+    // A pair counts when each face is the other's neighbour round the edge; a sheet or fin
+    // with no wedge of its own joins nothing.
+    let mut pairs = Vec::new();
+    for (f, alpha) in &fwd_angles {
+        let Some(g) = nearest(&back_angles, &|t| gap(*alpha, t)) else {
+            continue;
+        };
+        let t = back_angles.iter().find(|x| x.0 == g).expect("back").1;
+        if nearest(&fwd_angles, &|a| gap(a, t)) == Some(*f) {
+            pairs.push((*f, g));
+        }
+    }
+    // Faces back to back (the same plane, facing apart) are one solid, as they are where
+    // the edge has no other faces: two solids stacked face to face.
+    for (f, alpha) in &fwd_angles {
+        for (g, t) in &back_angles {
+            if (alpha - t)
+                .rem_euclid(std::f64::consts::TAU)
+                .min((t - alpha).rem_euclid(std::f64::consts::TAU))
+                < 1e-9
+            {
+                pairs.push((*f, *g));
+            }
+        }
+    }
+    pairs
 }
 
 /// A copy of `m` holding only `faces` and their edges and vertices.
@@ -501,6 +573,188 @@ pub(crate) fn copy_into(src: &Model, m: &mut Model) {
             holes: f.holes.iter().map(map).collect(),
             ..f.clone()
         });
+    }
+}
+
+/// Where a part carried over was joined to the rest in the model it came from: the positions of
+/// the vertices they used in common and the segments of the edges they used in common.
+#[derive(Default)]
+pub(crate) struct Shared {
+    pub points: Vec<DVec3>,
+    pub lines: Vec<(DVec3, DVec3)>,
+}
+
+impl Shared {
+    /// What the faces `a` and `b` of `m` use in common (vertices, and edges both have a face on).
+    pub(crate) fn of(m: &Model, a: &[FaceId], b: &[FaceId]) -> Shared {
+        let used = |faces: &[FaceId]| -> HashSet<VertexId> {
+            faces
+                .iter()
+                .flat_map(|f| {
+                    let f = m.face(*f).expect("face");
+                    f.outer.iter().chain(f.holes.iter().flatten()).copied()
+                })
+                .collect()
+        };
+        let (ua, ub) = (used(a), used(b));
+        let mut shared = Shared::default();
+        let common: HashSet<VertexId> = ua.intersection(&ub).copied().collect();
+        shared.points = common.iter().map(|v| m.pos(*v)).collect();
+        let (fa, fb): (HashSet<FaceId>, HashSet<FaceId>) =
+            (a.iter().copied().collect(), b.iter().copied().collect());
+        for (_, e) in m.edges() {
+            let [x, y] = e.v;
+            if common.contains(&x) && common.contains(&y) {
+                let on = m.faces_on_side(x, y);
+                if on.iter().any(|f| fa.contains(f)) && on.iter().any(|f| fb.contains(f)) {
+                    shared.lines.push((m.pos(x), m.pos(y)));
+                }
+            }
+        }
+        shared
+    }
+
+    fn has_point(&self, p: DVec3) -> bool {
+        self.points.iter().any(|q| q.distance(p) < LENGTH_TOL)
+    }
+
+    fn on_line(&self, p: DVec3) -> bool {
+        self.lines
+            .iter()
+            .any(|(a, b)| project_on_segment(p, *a, *b).1 < LENGTH_TOL)
+    }
+}
+
+/// Like `copy_into`, but a vertex of `src` where `m` already has one joins it, and an edge `m`
+/// already has stays as it is (its attributes win): a part touching what is in `m` along an edge
+/// or at a vertex keeps sharing it. Where the two then overlap along a line, edges are split at
+/// the other's vertices lying inside them so they conform (no T-junctions).
+#[cfg(test)]
+pub(crate) fn copy_merged(src: &Model, m: &mut Model) {
+    copy_sharing(src, m, None);
+}
+
+/// `copy_merged` for a part that was joined to `m`'s content only as `shared` says: other
+/// vertices and edges that merely coincide stay apart, as `copy_into` leaves them.
+pub(crate) fn copy_sharing(src: &Model, m: &mut Model, shared: Option<&Shared>) {
+    let before: Vec<VertexId> = m.vertices().map(|(id, _)| id).collect();
+    let before_edges: Vec<EdgeId> = m.edges().map(|(id, _)| id).collect();
+    let mut vertices: HashMap<VertexId, VertexId> = HashMap::new();
+    for (id, v) in src.vertices() {
+        let found = if shared.is_none_or(|s| s.has_point(v.pos)) {
+            m.find_vertex(v.pos)
+        } else {
+            None
+        };
+        let at = found.unwrap_or_else(|| m.insert_vertex(v.pos));
+        vertices.insert(id, at);
+    }
+    let mut curves: HashMap<CurveId, CurveId> = HashMap::new();
+    let mut added: Vec<EdgeId> = Vec::new();
+    for (_, e) in src.edges() {
+        let (a, b) = (vertices[&e.v[0]], vertices[&e.v[1]]);
+        if let Some(have) = m.edge_between(a, b) {
+            added.push(have);
+            continue;
+        }
+        let mut like = e.clone();
+        like.curve = e
+            .curve
+            .map(|c| *curves.entry(c).or_insert_with(|| m.new_curve()));
+        added.push(m.insert_edge_like(a, b, &like));
+    }
+    for (_, f) in src.faces() {
+        let map = |l: &Vec<VertexId>| l.iter().map(|v| vertices[v]).collect::<Vec<_>>();
+        m.insert_face(Face {
+            outer: map(&f.outer),
+            holes: f.holes.iter().map(map).collect(),
+            ..f.clone()
+        });
+    }
+    if before.is_empty() || shared.is_some_and(|s| s.lines.is_empty()) {
+        return;
+    }
+    let new: Vec<VertexId> = vertices.values().copied().collect();
+    let mut edges = before_edges;
+    edges.extend(added);
+    edges.sort();
+    edges.dedup();
+    conform(m, &before, &new, &edges, shared);
+}
+
+/// Splits the `edges` of `m` at any vertex of `old` or `new` lying inside them (within
+/// `LENGTH_TOL`), until none does. A piece that duplicates an existing edge is not added. Only
+/// what lies in the region both vertex sets reach, and on the `shared` lines if given, is
+/// looked at.
+fn conform(
+    m: &mut Model,
+    old: &[VertexId],
+    new: &[VertexId],
+    edges: &[EdgeId],
+    shared: Option<&Shared>,
+) {
+    let t = DVec3::splat(LENGTH_TOL);
+    let bounds_of = |vs: &[VertexId]| {
+        vs.iter().fold(
+            (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)),
+            |(lo, hi), v| (lo.min(m.pos(*v)), hi.max(m.pos(*v))),
+        )
+    };
+    let ((olo, ohi), (nlo, nhi)) = (bounds_of(old), bounds_of(new));
+    let (lo, hi) = (olo.max(nlo) - t, ohi.min(nhi) + t);
+    if lo.cmpgt(hi).any() {
+        return;
+    }
+    let overlaps = |a: DVec3, b: DVec3| a.min(b).cmple(hi).all() && a.max(b).cmpge(lo).all();
+    let cand: Vec<VertexId> = old
+        .iter()
+        .chain(new)
+        .copied()
+        .filter(|v| overlaps(m.pos(*v), m.pos(*v)) && shared.is_none_or(|s| s.on_line(m.pos(*v))))
+        .collect();
+    let mut work: Vec<EdgeId> = edges
+        .iter()
+        .copied()
+        .filter(|e| {
+            m.edge(*e).is_some_and(|e| {
+                let (p, q) = (m.pos(e.v[0]), m.pos(e.v[1]));
+                overlaps(p, q) && shared.is_none_or(|s| s.on_line(p) && s.on_line(q))
+            })
+        })
+        .collect();
+    while let Some(e) = work.pop() {
+        let Some(edge) = m.edge(e) else { continue };
+        let [a, b] = edge.v;
+        let (pa, pb) = (m.pos(a), m.pos(b));
+        let len = pa.distance(pb);
+        let (elo, ehi) = (pa.min(pb), pa.max(pb));
+        let inside = cand.iter().copied().find(|v| {
+            if *v == a || *v == b {
+                return false;
+            }
+            let p = m.pos(*v);
+            if p.cmpgt(ehi + t).any() || p.cmplt(elo - t).any() {
+                return false;
+            }
+            let (t, dist) = project_on_segment(p, pa, pb);
+            dist < LENGTH_TOL && t * len > LENGTH_TOL && (1.0 - t) * len > LENGTH_TOL
+        });
+        let Some(v) = inside else { continue };
+        let old = m.remove_edge(e);
+        for (x, y) in [(a, v), (v, b)] {
+            let id = match m.edge_between(x, y) {
+                Some(id) => id,
+                None => m.insert_edge_like(x, y, &old),
+            };
+            work.push(id);
+        }
+        for id in m.faces_on_side(a, b) {
+            let mut f = m.face(id).expect("face").clone();
+            for l in std::iter::once(&mut f.outer).chain(f.holes.iter_mut()) {
+                insert_between(l, a, b, v);
+            }
+            m.replace_face(id, f);
+        }
     }
 }
 
@@ -1505,6 +1759,20 @@ mod tests {
         let [x, y, z] = split(&a, &a.clone()).unwrap();
         assert!(x.is_none() && z.is_none());
         assert!((signed_volume(&y.unwrap()) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn solids_stacked_face_to_face_stay_one_shell() {
+        // Two cubes with the same vertices on the common face, which both keep.
+        let a = cuboid([2.0, 2.0, 2.0], [0.0; 3]);
+        let b = cuboid([2.0, 2.0, 2.0], [0.0, 0.0, 2.0]);
+        let mut m = Model::new();
+        copy_merged(&a, &mut m);
+        copy_merged(&b, &mut m);
+        assert_eq!(m.faces().count(), 12);
+        assert_eq!(shells_of(&m).len(), 1);
+        // Their outer shell is as it was.
+        assert_eq!(outer_shells(&m).unwrap().faces().count(), 12);
     }
 
     #[test]
