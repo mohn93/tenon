@@ -17,10 +17,12 @@
 //!
 //! A corner of inside and outside edges is a saddle between the ball outside the material and
 //! the ball in the empty corner, which no sphere or ring of rounds bounds. Two rounds of one
-//! kind and one of the other, on three square faces, get a `Saddle`: the pair stop at the
-//! planes through the unlike round's axis, and the body swept about that axis between their end
-//! sections is a cutter (outside pair) or a filler (inside pair); its surface is the
-//! rolling-ball blend round the unlike round.
+//! kind and one of the other (chamfers allowed, but not all three), get a `Saddle`: the pair
+//! stop at the planes through the unlike round's axis, and the body swept about that axis
+//! between their end sections is a cutter (outside pair) or a filler (inside pair). On three
+//! square faces its surface is the rolling-ball blend round the unlike round; where the faces
+//! are not square to each other it is a loft between the end sections, slid along the axis to
+//! stay on the pair's face.
 
 use std::collections::HashSet;
 
@@ -527,10 +529,16 @@ fn patch_mixed(
             let (a, b) = (inner[i % inner.len()], outer[j % outer.len()]);
             let next_inner = inner[(i + 1) % inner.len()];
             let next_outer = outer[(j + 1) % outer.len()];
+            // The layers are sampled at the same parameters round the ring, so neither side
+            // may get a whole step ahead of the other: a zip led by distance alone could run
+            // all the way round one layer first, leaving four faces on an edge.
+            let (done_in, done_out) = (i * outer.len(), j * inner.len());
             let advance_inner = if i >= inner.len() {
                 false
-            } else if j >= outer.len() {
+            } else if j >= outer.len() || done_in + outer.len() < done_out {
                 true
+            } else if done_out + inner.len() < done_in {
+                false
             } else {
                 d(&cutter, next_inner, b) <= d(&cutter, a, next_outer)
             };
@@ -1274,8 +1282,8 @@ fn took(m: &Model, p: &Patch) -> bool {
                 .map(|(_, v)| v.pos.distance(*c))
                 .fold(f64::INFINITY, f64::min);
             near < strict
-                || (near < mark_tol(p.spacing)
-                    && crate::boolean::point_inside(*c, m) == Some(false))
+                || (crate::boolean::point_inside(*c, m) == Some(false)
+                    && (near < mark_tol(p.spacing) || hovers(m, *c, HAIR * p.radius)))
         });
     }
     if let Some(corners) = p.flat {
@@ -1285,6 +1293,35 @@ fn took(m: &Model, p: &Patch) -> bool {
         });
     }
     on_sphere(m, p).count() >= p.points
+}
+
+/// How far (as a share of the patch's radius) above a face a mark may stand and be left uncut.
+/// It is not the lowered apex or a point blended toward it (those are kept below the faces): it
+/// is a boundary point of the ring (neither apex nor layer) that stands 0.2 mm (0.75% of the
+/// radius) over a face in the 8-sided prism with one chamfered kind at 8 segments, where the
+/// cut round beside it has not reached that face. Nothing of the cutter reaches the material
+/// there.
+const HAIR: f64 = 0.01;
+
+/// Whether `c` stands no more than `height` above a face of `m`, over the face itself.
+fn hovers(m: &Model, c: DVec3, height: f64) -> bool {
+    m.faces().any(|(_, f)| {
+        let Some(&first) = f.outer.first() else {
+            return false;
+        };
+        if f.normal.dot(c - m.pos(first)).abs() > height {
+            return false;
+        }
+        let u = f.normal.any_orthonormal_vector();
+        let w = f.normal.cross(u);
+        let flat = |p: DVec3| glam::DVec2::new(u.dot(p), w.dot(p));
+        let ring: Vec<glam::DVec2> = f.outer.iter().map(|v| flat(m.pos(*v))).collect();
+        crate::geom::point_in_polygon(flat(c), &ring)
+            && !f.holes.iter().any(|h| {
+                let hole: Vec<glam::DVec2> = h.iter().map(|v| flat(m.pos(*v))).collect();
+                crate::geom::point_in_polygon(flat(c), &hole)
+            })
+    })
 }
 
 fn on_sphere<'a>(m: &'a Model, p: &'a Patch) -> impl Iterator<Item = VertexId> + 'a {
@@ -1387,20 +1424,16 @@ pub(super) struct Saddle {
     pub spacing: f64,
 }
 
-/// The saddle at `v`, or None when the corner is not one: three rounds (two of one kind, one
-/// of the other) at a vertex of three mutually square faces, the like pair with as many
-/// segments each. The like pair's sections, swept about the unlike round's axis from one's end
-/// plane to the other's, give the body; its surface is the rolling-ball blend about the unlike
-/// round, a torus piece when the like radii are equal and a loft between them when not.
+/// The saddle at `v`, or None when the corner is not one: three edges, two of one kind
+/// (convex or concave) and one of the other, not all chamfers, the third's faces not parallel.
+/// The like pair's sections (cut into as many parts each, as a chamfer's chord or a round with
+/// fewer segments needs), swept about the unlike round's axis from one's end plane to the
+/// other's, give the body. At a corner of square faces its surface is the rolling-ball blend
+/// about the unlike round, a torus piece when the like radii are equal and a loft between them
+/// when not.
 pub(super) fn saddle(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> Option<Saddle> {
     let faces: Vec<FaceId> = m.faces_at(v).collect();
     if faces.len() != 3 || m.edges_at(v).len() != 3 {
-        return None;
-    }
-    if cuts
-        .iter()
-        .any(|(_, c)| !matches!(c.profile, Profile::Fillet { .. }))
-    {
         return None;
     }
     let convex = cuts.iter().filter(|(_, c)| c.convex).count();
@@ -1411,12 +1444,20 @@ pub(super) fn saddle(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> O
     let third = (0..3).find(|i| cuts[*i].1.convex == (convex == 1))?;
     let like: Vec<usize> = (0..3).filter(|i| *i != third).collect();
     let (t, add) = (&cuts[third].1, !cuts[like[0]].1.convex);
+    // A chamfer as the unlike edge has no axis to turn about: swept about one as if it were a
+    // round, its flat strip would be rounded near the corner and end in a step. The crossed cuts
+    // keep it flat.
+    if matches!(t.profile, Profile::Chamfer { .. }) {
+        return None;
+    }
     let normal = |c: &EdgeCut, f: FaceId| if c.f1 == f { c.n1 } else { c.n2 };
     // The third round's faces x and y; z is the face both of the pair lie on.
     let (x, y) = (t.f1, t.f2);
     let z = *faces.iter().find(|f| **f != x && **f != y)?;
     let (nx, ny, nz) = (normal(t, x), normal(t, y), normal(&cuts[like[0]].1, z));
-    if nx.dot(ny).abs() > 1e-6 || nx.dot(nz).abs() > 1e-6 || ny.dot(nz).abs() > 1e-6 {
+    // The third round's faces may meet at any angle, but the pair's end planes must contain the
+    // axis, which runs along the third edge: the pair's edges are square to it.
+    if nx.dot(ny).abs() > 0.99 {
         return None;
     }
     // The pair: `a` beside x, `b` beside y.
@@ -1430,16 +1471,35 @@ pub(super) fn saddle(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> O
         return None;
     }
     let (ca, cb) = (&cuts[a].1, &cuts[b].1);
+    // The pair's sections must have as many points each: the finer one's count, the other's
+    // facets cut into equal parts as needed (a chamfer's chord, or the arc of a round at a
+    // wider angle, which has more segments).
+    let (sa, sb) = (
+        ca.profile.profile(ca).len() - 1,
+        cb.profile.profile(cb).len() - 1,
+    );
+    let sides = sa.max(sb);
     let away = |c: &EdgeCut| if c.va == v { c.u } else { -c.u };
     let (ua, ub, uc) = (away(ca), away(cb), away(t));
-    let s = t.setback;
+    let s = t.profile.round_size(t);
     // The axis: parallel to the third edge, `s` from both of its faces (in the empty corner of
     // an inside edge, in the material of an outside one).
     let sign = if t.convex { -1.0 } else { 1.0 };
     let vertex = m.pos(v);
-    let axis_at = vertex + sign * s * (nx + ny);
-    let depth = |u: DVec3| (axis_at - vertex).dot(u);
-    let (da, db) = (depth(ua), depth(ub));
+    let axis_at = vertex + sign * s * (nx + ny) / (1.0 + nx.dot(ny));
+    // Each pair member ends in the plane through the axis square to the member's direction
+    // across the axis (the member's own direction when it is square to the third edge, as at a
+    // corner of square faces; else slanted along it), and runs `reach` along its edge to it.
+    let across = |u: DVec3| (u - uc * u.dot(uc)).try_normalize();
+    let (wa, wb) = (across(ua)?, across(ub)?);
+    let (ka, kb) = (wa.dot(ua), wb.dot(ub));
+    if ka < 0.2 || kb < 0.2 {
+        return None;
+    }
+    let (da, db) = (
+        (axis_at - vertex).dot(wa) / ka,
+        (axis_at - vertex).dot(wb) / kb,
+    );
     if da <= 10.0 * LENGTH_TOL || db <= 10.0 * LENGTH_TOL {
         return None;
     }
@@ -1453,13 +1513,14 @@ pub(super) fn saddle(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> O
         return None;
     }
     // Each pair member's section starting on its face beside the third round, with the sides
-    // widened past the faces by `reach` (less beside the third round, which the axis is near).
-    let section = |c: &EdgeCut, own: FaceId, foot: DVec3| -> (Vec<DVec3>, usize) {
+    // widened past the faces by `reach` (less beside the third round, which the axis is near),
+    // cut by the member's end plane.
+    let section = |c: &EdgeCut, own: FaceId, u: DVec3, w: DVec3, k: f64| -> Vec<DVec3> {
         let mut points = c.profile.profile(c);
         if c.f1 != own {
             points.reverse();
         }
-        let sides = points.len() - 1;
+        points = subdivided(&points, sides);
         let (n_own, n_z) = (normal(c, own), normal(c, z));
         let widen = if c.convex { 1.0 } else { -1.0 };
         let reach = c.setback;
@@ -1470,18 +1531,23 @@ pub(super) fn saddle(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> O
             n_own * widen * r_own + n_z * widen * r_z,
             first + n_own * widen * r_own,
         ]);
-        (points.into_iter().map(|o| foot + o).collect(), sides)
+        points
+            .into_iter()
+            .map(|o| vertex + o + u * ((axis_at - vertex - o).dot(w) / k))
+            .collect()
     };
-    let (pa, sides) = section(ca, x, vertex + ua * da);
-    let (pb, sides_b) = section(cb, y, vertex + ub * db);
-    if sides != sides_b {
+    let (pa, pb) = (section(ca, x, ua, wa, ka), section(cb, y, ub, wb, kb));
+    let axis = uc;
+    // The rings are slid along the axis to stay on the pair's face; the axis cannot be nearly
+    // parallel to it.
+    if nz.dot(uc).abs() < 0.2 {
         return None;
     }
-    let start = vertex + ua * da - axis_at;
-    let finish = vertex + ub * db - axis_at;
-    let axis = uc;
+    // The angle from one end plane to the other, round the axis, the way the corner lies.
+    let start = across(vertex + ua * da - axis_at)?;
+    let finish = across(vertex + ub * db - axis_at)?;
     let angle = f64::atan2(axis.dot(start.cross(finish)), start.dot(finish));
-    if (angle.abs() - std::f64::consts::FRAC_PI_2).abs() > 1e-6 {
+    if angle.abs() < 0.1 || angle.abs() > std::f64::consts::PI - 0.1 {
         return None;
     }
     let turn = |p: DVec3, by: f64| axis_at + DQuat::from_axis_angle(axis, by) * (p - axis_at);
@@ -1490,12 +1556,19 @@ pub(super) fn saddle(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> O
     let rings: Vec<Vec<DVec3>> = (0..=steps)
         .map(|k| {
             let t = k as f64 / steps as f64;
-            (0..n)
+            let mut ring: Vec<DVec3> = (0..n)
                 .map(|i| {
                     let back = turn(pb[i], -angle);
                     turn(pa[i].lerp(back, t), angle * t)
                 })
-                .collect()
+                .collect();
+            // Turning about a slanted axis lifts the ring off the pair's face; slid back along
+            // the axis, its end on that face stays on it (no slide at a square corner).
+            let slide = -nz.dot(ring[sides] - vertex) / nz.dot(uc);
+            for p in &mut ring {
+                *p += uc * slide;
+            }
+            ring
         })
         .collect();
     let mut sweep = Model::new();
@@ -1562,16 +1635,25 @@ pub(super) fn saddle(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> O
             }
         }
     }
+    // A chamfer's strip keeps its creases with the faces, so beside one only the points between
+    // them are seams.
+    let (from, to) = if matches!(ca.profile, Profile::Chamfer { .. })
+        || matches!(cb.profile, Profile::Chamfer { .. })
+    {
+        (1.min(sides), sides.saturating_sub(1).max(1.min(sides)))
+    } else {
+        (0, sides)
+    };
     let seams: Vec<DVec3> = rings
         .iter()
-        .flat_map(|r| r[..=sides].iter().copied())
+        .flat_map(|r| r[from..=to].iter().copied())
         .collect();
-    let plane_of = |u: DVec3, d: f64| End::Plane(vertex + u * d, u);
+    let plane_of = |w: DVec3| End::Plane(axis_at, w);
     Some(Saddle {
         vertex: v,
         ends: [
-            (cuts[a].0, plane_of(ua, da)),
-            (cuts[b].0, plane_of(ub, db)),
+            (cuts[a].0, plane_of(wa)),
+            (cuts[b].0, plane_of(wb)),
             // The third round runs to the plane of the face the pair lie on.
             (cuts[third].0, End::Plane(vertex, nz)),
         ],
@@ -1581,6 +1663,30 @@ pub(super) fn saddle(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> O
         seams,
         spacing,
     })
+}
+
+/// The polyline `points` with its facets cut into equal parts, until it has `sides` facets: the
+/// next part always goes to the facet whose parts are longest.
+pub(super) fn subdivided(points: &[DVec3], sides: usize) -> Vec<DVec3> {
+    let n = points.len() - 1;
+    let mut parts = vec![1usize; n];
+    for _ in n..sides {
+        let longest = (0..n)
+            .max_by(|i, j| {
+                let len = |k: usize| points[k].distance(points[k + 1]) / parts[k] as f64;
+                len(*i).total_cmp(&len(*j))
+            })
+            .expect("a facet");
+        parts[longest] += 1;
+    }
+    let mut out = Vec::with_capacity(sides + 1);
+    for (k, count) in parts.iter().enumerate() {
+        for i in 0..*count {
+            out.push(points[k].lerp(points[k + 1], i as f64 / *count as f64));
+        }
+    }
+    out.push(points[n]);
+    out
 }
 
 /// Softens the edges of `m` between vertices of the swept surfaces `saddles` (the sweeps'

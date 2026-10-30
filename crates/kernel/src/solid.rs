@@ -53,6 +53,39 @@ pub fn open_reason(m: &Model) -> Option<String> {
     None
 }
 
+/// As [`open_reason`], but an edge may bound more than two faces (a void touching the skin along
+/// it) as long as as many faces traverse each side one way as the other: every part of the
+/// surface is closed.
+pub fn open_reason_shared(m: &Model) -> Option<String> {
+    let mut sides: BTreeMap<(VertexId, VertexId), u32> = BTreeMap::new();
+    for (_, f) in m.faces() {
+        for l in std::iter::once(&f.outer).chain(&f.holes) {
+            for i in 0..l.len() {
+                *sides.entry((l[i], l[(i + 1) % l.len()])).or_default() += 1;
+            }
+        }
+    }
+    if sides.is_empty() {
+        return Some("it has no faces".into());
+    }
+    for (id, e) in m.edges() {
+        let [a, b] = e.v;
+        if !sides.contains_key(&(a, b)) && !sides.contains_key(&(b, a)) {
+            return Some(format!("edge e{} bounds no face", id.0));
+        }
+    }
+    for (&(a, b), &n) in &sides {
+        let back = sides.get(&(b, a)).copied().unwrap_or(0);
+        if n != back {
+            return Some(format!(
+                "side v{}-v{} is traversed {n} times one way and {back} the other",
+                a.0, b.0
+            ));
+        }
+    }
+    None
+}
+
 /// The signed volume enclosed by the faces of `m`, in its own coordinates: positive when the
 /// face normals point outward. Faces with holes and several loops are triangulated. Only
 /// meaningful for a closed mesh.
