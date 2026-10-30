@@ -12,8 +12,9 @@ use std::fmt;
 
 use glam::{DAffine3, DVec3};
 
-use crate::geom::{LENGTH_TOL, Plane, point_in_polygon};
-use crate::ids::{CurveId, FaceId, InstanceId, MaterialId, VertexId};
+use crate::edit::insert_between;
+use crate::geom::{LENGTH_TOL, Plane, point_in_polygon, project_on_segment};
+use crate::ids::{CurveId, EdgeId, FaceId, InstanceId, MaterialId, VertexId};
 use crate::index::{Index, Shape};
 use crate::intersect::{FaceShape, face_segments, face_segments_cost, face_shape};
 use crate::model::{Edge, Face, Instance, Model};
@@ -378,19 +379,26 @@ fn wedges(m: &Model, a: VertexId, b: VertexId, on: &[FaceId]) -> Vec<(FaceId, Fa
         u.dot(basis2).atan2(u.dot(basis))
     };
     let back_angles: Vec<(FaceId, f64)> = back.iter().map(|g| (*g, angle(*g, -1.0))).collect();
+    let fwd_angles: Vec<(FaceId, f64)> = forward.iter().map(|f| (*f, angle(*f, 1.0))).collect();
+    // The turn from `from` down to `to`; a face at the same angle is a whole turn away.
+    let gap = |from: f64, to: f64| match (from - to).rem_euclid(std::f64::consts::TAU) {
+        g if g < 1e-9 => std::f64::consts::TAU,
+        g => g,
+    };
+    let nearest = |of: &[(FaceId, f64)], cost: &dyn Fn(f64) -> f64| {
+        of.iter()
+            .min_by(|x, y| cost(x.1).total_cmp(&cost(y.1)))
+            .map(|(g, _)| *g)
+    };
+    // A pair counts when each face is the other's neighbour round the edge; a sheet or fin
+    // with no wedge of its own joins nothing.
     let mut pairs = Vec::new();
-    for f in &forward {
-        let alpha = angle(*f, 1.0);
-        // A face at the same angle is a whole turn away, not none.
-        let gap = |t: f64| match (alpha - t).rem_euclid(std::f64::consts::TAU) {
-            g if g < 1e-9 => std::f64::consts::TAU,
-            g => g,
+    for (f, alpha) in &fwd_angles {
+        let Some(g) = nearest(&back_angles, &|t| gap(*alpha, t)) else {
+            continue;
         };
-        let closing = back_angles
-            .iter()
-            .min_by(|x, y| gap(x.1).total_cmp(&gap(y.1)))
-            .map(|(g, _)| *g);
-        if let Some(g) = closing {
+        let t = back_angles.iter().find(|x| x.0 == g).expect("back").1;
+        if nearest(&fwd_angles, &|a| gap(a, t)) == Some(*f) {
             pairs.push((*f, g));
         }
     }
@@ -556,14 +564,20 @@ pub(crate) fn copy_into(src: &Model, m: &mut Model) {
 }
 
 /// Like `copy_into`, but a vertex of `src` where `m` already has one joins it, and an edge `m`
-/// already has stays as it is: a part touching what is in `m` along an edge or at a vertex
-/// keeps sharing it.
+/// already has stays as it is (its attributes win): a part touching what is in `m` along an edge
+/// or at a vertex keeps sharing it. Where the two then overlap along a line, edges are split at
+/// the other's vertices lying inside them so they conform (no T-junctions).
 pub(crate) fn copy_merged(src: &Model, m: &mut Model) {
     let mut vertices: HashMap<VertexId, VertexId> = HashMap::new();
+    let mut contact: Vec<VertexId> = Vec::new();
     for (id, v) in src.vertices() {
-        let at = m
-            .find_vertex(v.pos)
-            .unwrap_or_else(|| m.insert_vertex(v.pos));
+        let at = match m.find_vertex(v.pos) {
+            Some(at) => {
+                contact.push(at);
+                at
+            }
+            None => m.insert_vertex(v.pos),
+        };
         vertices.insert(id, at);
     }
     let mut curves: HashMap<CurveId, CurveId> = HashMap::new();
@@ -585,6 +599,45 @@ pub(crate) fn copy_merged(src: &Model, m: &mut Model) {
             holes: f.holes.iter().map(map).collect(),
             ..f.clone()
         });
+    }
+    if !contact.is_empty() {
+        conform_at(m, &contact);
+    }
+}
+
+/// Splits the edges at `contact` vertices at any vertex of `m` lying inside them (within
+/// `LENGTH_TOL`), until none does. A piece that duplicates an existing edge is not added.
+fn conform_at(m: &mut Model, contact: &[VertexId]) {
+    let all: Vec<VertexId> = m.vertices().map(|(id, _)| id).collect();
+    let mut edges: Vec<EdgeId> = contact.iter().flat_map(|v| m.edges_at(*v)).collect();
+    while let Some(e) = edges.pop() {
+        let Some(edge) = m.edge(e) else { continue };
+        let [a, b] = edge.v;
+        let (pa, pb) = (m.pos(a), m.pos(b));
+        let len = pa.distance(pb);
+        let inside = all.iter().copied().find(|v| {
+            if *v == a || *v == b {
+                return false;
+            }
+            let (t, dist) = project_on_segment(m.pos(*v), pa, pb);
+            dist < LENGTH_TOL && t * len > LENGTH_TOL && (1.0 - t) * len > LENGTH_TOL
+        });
+        let Some(v) = inside else { continue };
+        let old = m.remove_edge(e);
+        for (x, y) in [(a, v), (v, b)] {
+            let id = match m.edge_between(x, y) {
+                Some(id) => id,
+                None => m.insert_edge_like(x, y, &old),
+            };
+            edges.push(id);
+        }
+        for id in m.faces_on_side(a, b) {
+            let mut f = m.face(id).expect("face").clone();
+            for l in std::iter::once(&mut f.outer).chain(f.holes.iter_mut()) {
+                insert_between(l, a, b, v);
+            }
+            m.replace_face(id, f);
+        }
     }
 }
 
