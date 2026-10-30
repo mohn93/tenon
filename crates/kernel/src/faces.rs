@@ -18,8 +18,8 @@ impl Model {
     pub(crate) fn create_faces(&mut self, new_edges: &[EdgeId]) {
         let mut planes = PlaneSet::default();
         for &e in new_edges {
-            for plane in self.candidate_planes(e) {
-                planes.insert(plane);
+            for (plane, through) in self.candidate_planes(e) {
+                planes.insert(self.plane_of_face_through(plane, through));
             }
         }
         // Rebuilding faces leaves the edges alone, so one edge index serves every plane. Below
@@ -58,6 +58,37 @@ impl Model {
         }
     }
 
+    /// `plane`, fitted to the three vertices `through` (edge `e`'s ends and a third), or, when a
+    /// face at an end of `e` has the third as a vertex of its loops and its own plane holds all three (to
+    /// `LENGTH_TOL`), that face's plane: a plane fitted to a short edge is tilted from the face
+    /// it cuts by the error of the points over the edge's length (3e-6 rad for a 4e-5 edge and
+    /// a 1e-7 error), and a long face then has its far vertices off the fitted plane and is not
+    /// rebuilt with it: the cut would add a face over a part of the face the cut left whole. A
+    /// third vertex that is not the face's (an outline leaving it at a shallow angle) does not
+    /// make its plane that of the outline. Of several such faces (e along a crease) the one
+    /// tilted least from `plane`.
+    fn plane_of_face_through(&self, plane: Plane, through: [VertexId; 3]) -> Plane {
+        let own = self
+            .faces_at(through[0])
+            .chain(self.faces_at(through[1]))
+            .filter_map(|id| {
+                let f = self.face(id)?;
+                let has = |v: VertexId| {
+                    std::iter::once(&f.outer)
+                        .chain(&f.holes)
+                        .any(|l| l.contains(&v))
+                };
+                if !has(through[2]) {
+                    return None;
+                }
+                let own = Plane::through(self.pos(f.outer[0]), f.normal);
+                let holds = through.iter().all(|v| own.contains(self.pos(*v)));
+                holds.then(|| (own.normal.cross(plane.normal).length(), own))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        own.map_or(plane, |(_, own)| own)
+    }
+
     /// The edges lying in `plane`, in id order.
     fn edges_in_plane(&self, plane: &Plane) -> Vec<[VertexId; 2]> {
         self.edges()
@@ -70,7 +101,7 @@ impl Model {
     /// walking through vertices whose edges continue along e's line. The collinearity test is
     /// relative to e's first vertex, so an edge on the same line can walk elsewhere: each new
     /// edge is walked on its own.
-    fn candidate_planes(&self, e: EdgeId) -> Vec<Plane> {
+    fn candidate_planes(&self, e: EdgeId) -> Vec<(Plane, [VertexId; 3])> {
         let [a, b] = self.edge(e).unwrap().v;
         let (pa, pb) = (self.pos(a), self.pos(b));
         let mut planes = Vec::new();
@@ -85,7 +116,7 @@ impl Model {
                     let fv = self.edge(f).unwrap().v;
                     let c = if fv[0] == v { fv[1] } else { fv[0] };
                     match Plane::from_points(pa, pb, self.pos(c)) {
-                        Some(p) => planes.push(p),
+                        Some(p) => planes.push((p, [a, b, c])),
                         None => {
                             if visited.insert(c) {
                                 stack.push(c);
@@ -837,5 +868,24 @@ mod tests {
         m.validate().unwrap();
         assert_eq!(m.faces().count(), 1);
         assert_eq!(m.face_area(outer), 12.0);
+    }
+    #[test]
+    fn an_outline_leaving_a_face_at_a_shallow_angle_closes_a_face_of_its_own() {
+        // The outline lies in the plane z = -theta * y through the corner of the square, and
+        // its point c1 is within `LENGTH_TOL` of the square's plane: the square's plane is not
+        // the outline's, as c1 is not the square's vertex.
+        for (n, theta) in [(1e-3, 5e-4), (1e-4, 5e-3), (1e-2, 5e-5)] {
+            let mut m = Model::new();
+            square(&mut m, 0.0, 0.0, 1.0);
+            let p = |x: f64, y: f64| DVec3::new(x, y, -theta * y);
+            let (a, b) = (p(1.0, 0.0), p(1.001, 0.0));
+            let outline = [b, p(1.001, -n), p(1.001, -1.0), p(1.0, -1.0), p(1.0, -n), a];
+            for w in outline.windows(2) {
+                m.add_edge(w[0], w[1]).unwrap();
+            }
+            m.add_edge(a, b).unwrap();
+            m.validate().unwrap();
+            assert_eq!(m.faces().count(), 2, "n {n} theta {theta}");
+        }
     }
 }

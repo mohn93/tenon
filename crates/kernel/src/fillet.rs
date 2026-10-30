@@ -3566,6 +3566,60 @@ mod tests {
         }
     }
 
+    /// A round, a chamfer `by` off the round's size and a third round, on the three edges at
+    /// a box corner: the chamfer's faces lie `by` (up to a factor) from the rounds'.
+    fn near_sizes_close(by: f64) -> Result<(), String> {
+        let size = [2.0, 3.0, 4.0];
+        let m = cuboid(size);
+        let edges = box_corner_edges(&m, size);
+        let near = [
+            (edges[0], fillet(0.3)),
+            (edges[1], chamfer(0.3 + by)),
+            (edges[2], fillet(0.3 + 1e-6)),
+        ];
+        match bevelled_mixed(&m, &near) {
+            Ok(out) => match open_reason(&out) {
+                None => Ok(()),
+                Some(why) => Err(format!("open: {why}")),
+            },
+            Err(e) => Err(format!("{e:?}")),
+        }
+    }
+
+    #[test]
+    fn faces_within_the_length_tolerance_are_judged_alike_for_any_separation() {
+        // Including the separations a few nanometres either side of `LENGTH_TOL`, where the
+        // cuts of different face pairs end at one point computed in different ways.
+        let edge = [
+            -1000, -999, -998, -997, -996, 996, 997, 998, 999, 1000, 1001, 1004,
+        ];
+        let ks = (-20..=40).map(|k| k * 100).chain(edge);
+        let bad: Vec<String> = ks
+            .filter_map(|k| {
+                let by = f64::from(k) * 1e-9;
+                near_sizes_close(by).err().map(|e| format!("{k}e-9: {e}"))
+            })
+            .collect();
+        assert!(bad.is_empty(), "{bad:?}");
+    }
+
+    #[test]
+    #[ignore = "sweep, slow: cargo test --release -p kernel sweep_of_near_sizes -- --ignored --nocapture"]
+    fn sweep_of_near_sizes() {
+        let (mut total, mut bad) = (0, Vec::new());
+        for k in -3000..=3000 {
+            let by = f64::from(k) * 1e-9;
+            total += 1;
+            if let Err(e) = near_sizes_close(by) {
+                bad.push(format!("{k}e-9: {e}"));
+            }
+        }
+        eprintln!("SWEEP near sizes {total}: failed {}", bad.len());
+        for b in &bad {
+            eprintln!("SWEEP failed {b}");
+        }
+    }
+
     #[test]
     fn rounds_and_chamfers_of_different_sizes_in_one_call_stay_closed() {
         let size = [2.0, 3.0, 4.0];
@@ -3583,12 +3637,12 @@ mod tests {
         // Two edges, not at a corner: each edge's own cut.
         let two = [(edges[0], fillet(0.2)), (edges[1], chamfer(0.35))];
         closed(&bevelled_mixed(&m, &two).unwrap());
-        // Sizes snap within a kind, not across kinds. The chamfer is 2e-6 from the round, not
-        // 1e-6: faces exactly `LENGTH_TOL` apart are judged coplanar or not by the last bit of
-        // their fitted planes (a change of 1e-15 flips whether this closes, on dev too).
+        // Sizes snap within a kind, not across kinds. The chamfer is exactly `LENGTH_TOL` from
+        // the round (see `faces_within_the_length_tolerance_are_judged_alike_for_any_separation`
+        // for the sizes round it).
         let near = [
             (edges[0], fillet(0.3)),
-            (edges[1], chamfer(0.3 + 2e-6)),
+            (edges[1], chamfer(0.3 + 1e-6)),
             (edges[2], fillet(0.3 + 1e-6)),
         ];
         closed(&bevelled_mixed(&m, &near).unwrap());
@@ -3635,6 +3689,16 @@ mod tests {
         let (out, patched) = round_three_radii(&m, 1.0, [0.1, 0.12, 0.14], 24).unwrap();
         closed(&out);
         assert!(signed_volume(&out) < signed_volume(&m));
+        assert!(patched > 0);
+    }
+
+    #[test]
+    fn a_four_sided_prism_with_three_small_radii_rounds_at_24_segments() {
+        // Once refused as "would not be a solid" at one of its corners.
+        let p = Solid::prism(1.0, 2.0, 4, 0.0).unwrap().to_model();
+        let (out, patched) = round_three_radii(&p, 0.3, [0.05, 0.06, 0.07], 24).unwrap();
+        closed(&out);
+        assert!(signed_volume(&out) < signed_volume(&p));
         assert!(patched > 0);
     }
 
