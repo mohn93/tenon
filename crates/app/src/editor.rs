@@ -2080,6 +2080,13 @@ impl Editor {
     /// `refresh_hover`, in root coordinates: each with its flat normal and the material's
     /// color (or the default material's front) at 70% opacity. Empty while flying.
     pub fn solid_preview(&self) -> Vec<PreviewVertex> {
+        self.solid_preview_from(DVec3::ZERO)
+    }
+
+    /// `solid_preview` with positions relative to `origin` (`Renderer::origin`), subtracted in
+    /// f64 before they are rounded to f32, so a model far from the world origin keeps its
+    /// precision.
+    pub fn solid_preview_from(&self, origin: DVec3) -> Vec<PreviewVertex> {
         let Some(solid) = self.solid.as_ref().filter(|_| !self.flying) else {
             return Vec::new();
         };
@@ -2093,7 +2100,7 @@ impl Editor {
             .triangles
             .iter()
             .flat_map(|tri| {
-                let [a, b, c] = tri.map(|p| t.transform_point3(p));
+                let [a, b, c] = tri.map(|p| t.transform_point3(p) - origin);
                 let normal = (b - a)
                     .cross(c - a)
                     .normalize_or_zero()

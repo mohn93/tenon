@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 
-use glam::{DAffine3, Mat4, Vec3};
+use std::borrow::Cow;
+
+use glam::{DAffine3, DVec3, Mat4, Vec3};
 use kernel::{EntityId, FogColor, InstanceId, Scene, StyleSettings};
 use session::{Camera, Lighting, SectionDisplay, world_drawing_axes};
 use wgpu::util::DeviceExt;
@@ -1012,6 +1014,10 @@ pub struct Renderer {
     flat_axes: Option<Mesh>,
     /// The drawing axes in world space, as of the last `set_model`.
     axes: DAffine3,
+    /// What the scene's positions are relative to, as of the last `set_model` (see
+    /// `SceneBase::origin`). Zero for a model near the world origin; the camera, overlay and
+    /// preview are moved by it on their way to the GPU.
+    origin: DVec3,
     faces: Option<Mesh>,
     /// The fill and the outlines of the section cuts.
     cut_fill: Option<Mesh>,
@@ -1772,6 +1778,7 @@ impl Renderer {
             vertical_axis,
             flat_axes,
             axes: DAffine3::IDENTITY,
+            origin: DVec3::ZERO,
             faces: None,
             cut_fill: None,
             cut_edges: None,
@@ -1833,6 +1840,7 @@ impl Renderer {
     /// would draw whole, when the edges are culled by chunk; None when they are drawn whole
     /// or there are no edge effects.
     pub fn visible_profile_edges(&self, camera: &Camera) -> Option<(u32, u32)> {
+        let camera = &*self.relative(camera);
         let plan = self.edge_chunks.as_ref()?;
         let edges = self.edges.as_ref()?;
         edges.extras.as_ref()?;
@@ -1853,6 +1861,7 @@ impl Renderer {
     /// How many of the model's opaque triangles a frame seen by `camera` draws, and how many
     /// it has in all, when the faces are culled by chunk; None when they are drawn whole.
     pub fn visible_triangles(&self, camera: &Camera) -> Option<(u32, u32)> {
+        let camera = &*self.relative(camera);
         let plan = self.face_chunks.as_ref()?;
         let runs = plan.visible(camera);
         Some((ChunkPlan::covered(&runs.solid) / 3, plan.kept as u32 / 3))
@@ -1941,6 +1950,7 @@ impl Renderer {
     /// How many opaque triangles a frame seen by `camera` draws, counting the simplified ones
     /// as drawn, and how many the model has in all; None when the faces are not chunked.
     pub fn drawn_triangles(&self, camera: &Camera) -> Option<(u32, u32)> {
+        let camera = &*self.relative(camera);
         let plan = self.face_chunks.as_ref()?;
         let runs = self.visible(camera, false).faces?;
         let lod: u32 = runs.lod.iter().map(|r| ChunkPlan::covered(r)).sum();
@@ -2114,7 +2124,7 @@ impl Renderer {
             &edge_colors,
             &mut self.parts,
         );
-        self.set_axes(axes);
+        self.set_axes(axes, base.origin);
         let (face_groups, edge_groups) = base.spans.instance_groups();
         let chunk = self.cull_from.clamp(1, CHUNK_PRIMITIVES);
         // Big models are reordered so that nearby placements lie together (see `ChunkPlan`);
@@ -2273,17 +2283,54 @@ impl Renderer {
     /// Draws the axes (and the grid's lines through the world origin) as the drawing axes
     /// `axes` say, a frame in world space (see `session::world_drawing_axes`); the ground grid
     /// stays on z = 0. Rebuilt only when they change.
-    fn set_axes(&mut self, axes: DAffine3) {
-        if axes == self.axes {
+    fn set_axes(&mut self, axes: DAffine3, origin: DVec3) {
+        let moved = origin != self.origin;
+        if axes == self.axes && !moved {
             return;
         }
         self.axes = axes;
+        self.origin = origin;
         (self.flat_ground, self.vertical_axis, self.flat_axes) = ground_meshes(
             &self.device,
             &self.style,
             self.day_toward(&self.style),
-            axes,
+            self.drawn_axes(),
         );
+        if moved {
+            // The preview was relative to the old origin.
+            self.preview_vertices.clear();
+            if let Some(preview) = &mut self.preview {
+                preview.count = 0;
+            }
+        }
+    }
+
+    /// The drawing axes in the scene's relative coordinates.
+    fn drawn_axes(&self) -> DAffine3 {
+        DAffine3::from_translation(-self.origin) * self.axes
+    }
+
+    /// A world position (from a caller's f32 overlay or preview) in the scene's relative
+    /// coordinates. The subtraction is exact in f64; a position that came in as f32 far out
+    /// has already lost its low bits.
+    fn relative_point(&self, p: [f32; 3]) -> [f32; 3] {
+        (DVec3::from(p.map(f64::from)) - self.origin)
+            .as_vec3()
+            .to_array()
+    }
+
+    /// `camera` as the GPU sees the scene: moved by the scene's origin (see
+    /// `SceneBase::origin`) so that eye, view and projection are worked out in f64 from small
+    /// numbers. The camera itself, and `camera.eye` far from the origin, stay f64. Borrowed
+    /// as it is near the world origin.
+    fn relative<'c>(&self, camera: &'c Camera) -> Cow<'c, Camera> {
+        if self.origin == DVec3::ZERO {
+            return Cow::Borrowed(camera);
+        }
+        let mut c = camera.clone();
+        c.eye -= self.origin;
+        c.target -= self.origin;
+        Cow::Owned(c)
     }
 
     /// Makes the bind group anew, after the textures or the shadow maps were.
@@ -2650,7 +2697,9 @@ impl Renderer {
 
     /// Draws `triangles` (three vertices each) from the next frame, blended over the scene and
     /// hidden by what is in front of them; empty draws none. Re-uploads only when it changed,
-    /// into the same buffer while they fit.
+    /// into the same buffer while they fit. Positions are relative to `origin()`, which the
+    /// caller subtracts in f64 (a model moved by `set_model` drops the preview until this is
+    /// called again).
     pub fn set_preview(&mut self, triangles: &[PreviewVertex]) {
         if triangles == self.preview_vertices.as_slice() {
             return;
@@ -2685,6 +2734,12 @@ impl Renderer {
             }
             preview.count = triangles.len() as u32;
         }
+    }
+
+    /// The point the scene's positions (and the preview's) are relative to: zero for a model
+    /// near the world origin (see `SceneBase::origin`).
+    pub fn origin(&self) -> DVec3 {
+        self.origin
     }
 
     /// True when the glass drawn last is in a held order that is not exact for the camera:
@@ -2738,8 +2793,12 @@ impl Renderer {
         if style.axes != self.style.axes
             || (self.model_style.is_none() && style.day_background() != self.style.day_background())
         {
-            (self.flat_ground, self.vertical_axis, self.flat_axes) =
-                ground_meshes(&self.device, &style, self.day_toward(&style), self.axes);
+            (self.flat_ground, self.vertical_axis, self.flat_axes) = ground_meshes(
+                &self.device,
+                &style,
+                self.day_toward(&style),
+                self.drawn_axes(),
+            );
         }
         self.style = style;
         self.refresh_guides();
@@ -2773,7 +2832,7 @@ impl Renderer {
         self.model_style = style;
         if moved {
             (self.flat_ground, self.vertical_axis, self.flat_axes) =
-                ground_meshes(&self.device, &self.style, toward, self.axes);
+                ground_meshes(&self.device, &self.style, toward, self.drawn_axes());
         }
         recolored
     }
@@ -2873,6 +2932,9 @@ impl Renderer {
         camera: &Camera,
         overlay: &[LineVertex],
     ) {
+        // Everything below works in the scene's relative coordinates (see `relative`).
+        let relative = self.relative(camera);
+        let camera = &*relative;
         if self.targets.as_ref().map(|t| t.size) != Some(size) {
             self.targets = Some(self.make_targets(size));
         }
@@ -2932,6 +2994,19 @@ impl Renderer {
             .and_then(|s| s.fit)
             .and_then(|f| self.sun_ground_mesh(f.ground).map(|m| m.count));
         let targets = self.targets.as_ref().expect("targets just created");
+        let moved: Vec<LineVertex>;
+        let overlay = if self.origin == DVec3::ZERO {
+            overlay
+        } else {
+            moved = overlay
+                .iter()
+                .map(|v| LineVertex {
+                    pos: self.relative_point(v.pos),
+                    color: v.color,
+                })
+                .collect();
+            &moved
+        };
         let overlay = mesh(&self.device, "overlay", overlay);
         // Guides and annotations: both drawn anew for the camera, in the same pipeline.
         let mut guide_vertices = guide_lines(&self.guides, camera);
@@ -3051,11 +3126,21 @@ impl Renderer {
                 if self.print || self.transparent || self.hide_ground {
                     sun_ground(&mut pass);
                 } else {
-                    draw(
-                        &mut pass,
-                        &self.flat_ground_pipeline,
-                        Some(&self.flat_ground),
-                    );
+                    // The grid is built around the world origin whatever the axes' frame, so
+                    // away from the origin only the flat axes (in the scene's frame) are drawn.
+                    if self.origin == DVec3::ZERO {
+                        draw(
+                            &mut pass,
+                            &self.flat_ground_pipeline,
+                            Some(&self.flat_ground),
+                        );
+                    } else {
+                        draw(
+                            &mut pass,
+                            &self.flat_ground_pipeline,
+                            self.flat_axes.as_ref(),
+                        );
+                    }
                     if self.style.wide_axes
                         && let Some(flat) = &self.flat_axes
                     {

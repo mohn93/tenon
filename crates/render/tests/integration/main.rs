@@ -3,6 +3,8 @@
 
 mod ao;
 mod culling;
+mod far;
+mod far_features;
 mod finish;
 mod golden;
 mod headless;
