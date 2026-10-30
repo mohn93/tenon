@@ -4771,15 +4771,12 @@ mod tests {
         let left = edge_at(&m, [0., 0., 2.], [2., 0., 2.]);
         let right = edge_at(&m, [2., 0., 2.], [4., 0., 2.]);
         let s = 0.25f64;
-        let tilt = std::f64::consts::PI - (1.0 / 5f64.sqrt()).acos();
-        let want = signed_volume(&m) - 2.0 * 0.5 * s * s - 2.0 * 0.5 * s * s * tilt.sin();
         // Refused at the bend, as before: the cutter of one piece does not run on into the
         // other, which is cut at another angle (it gave 17.849 for the 17.882 of the two cuts).
         assert!(matches!(
             bevelled(&m, &[left, right], chamfer(s)),
             Err(BevelError::Edge(..))
         ));
-        let _ = want;
     }
 
     #[test]
