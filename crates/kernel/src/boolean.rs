@@ -310,7 +310,9 @@ pub(crate) fn nested_shells(m: &Model, shells: &[Vec<FaceId>]) -> Vec<[usize; 2]
     pairs
 }
 
-/// The faces of `m` grouped into shells: faces joined across the edges of their loops.
+/// The faces of `m` grouped into shells: faces joined across the edges of their loops. An edge
+/// that more than two faces meet at (two solids sharing it) joins each face only to the one
+/// that closes its solid there, so solids touching along an edge or at a vertex stay apart.
 pub(crate) fn shells_of(m: &Model) -> Vec<Vec<FaceId>> {
     let ids: Vec<FaceId> = m.faces().map(|(id, _)| id).collect();
     let at: HashMap<FaceId, usize> = ids.iter().enumerate().map(|(i, f)| (*f, i)).collect();
@@ -322,13 +324,23 @@ pub(crate) fn shells_of(m: &Model) -> Vec<Vec<FaceId>> {
         }
         i
     }
-    for (i, id) in ids.iter().enumerate() {
+    let mut seen: HashSet<(VertexId, VertexId)> = HashSet::new();
+    for id in &ids {
         let f = m.face(*id).expect("face");
         for l in std::iter::once(&f.outer).chain(&f.holes) {
             for k in 0..l.len() {
-                for g in m.faces_on_side(l[k], l[(k + 1) % l.len()]) {
-                    let (a, b) = (root(&mut parent, i), root(&mut parent, at[&g]));
-                    parent[a] = b;
+                let (a, b) = (l[k], l[(k + 1) % l.len()]);
+                let on = m.faces_on_side(a, b);
+                let pairs: Vec<(FaceId, FaceId)> = if on.len() <= 2 {
+                    on.iter().map(|g| (*id, *g)).collect()
+                } else if seen.insert((a.min(b), a.max(b))) {
+                    wedges(m, a, b, &on)
+                } else {
+                    Vec::new()
+                };
+                for (f, g) in pairs {
+                    let (x, y) = (root(&mut parent, at[&f]), root(&mut parent, at[&g]));
+                    parent[x] = y;
                 }
             }
         }
@@ -344,6 +356,45 @@ pub(crate) fn shells_of(m: &Model) -> Vec<Vec<FaceId>> {
         groups[g].push(*id);
     }
     groups
+}
+
+/// The pairs of faces at the edge a-b that bound one wedge of material each: `forward` run a to
+/// b, `back` run b to a. Going round the edge, the material of a face running a to b lies
+/// towards decreasing angle, and the next face met there (running b to a) closes it.
+fn wedges(m: &Model, a: VertexId, b: VertexId, on: &[FaceId]) -> Vec<(FaceId, FaceId)> {
+    let runs_forward = |f: FaceId| {
+        let face = m.face(f).expect("face");
+        std::iter::once(&face.outer)
+            .chain(&face.holes)
+            .any(|l| (0..l.len()).any(|i| (l[i], l[(i + 1) % l.len()]) == (a, b)))
+    };
+    let (forward, back): (Vec<FaceId>, Vec<FaceId>) = on.iter().partition(|f| runs_forward(**f));
+    let d = (m.pos(b) - m.pos(a)).normalize_or_zero();
+    let basis = d.any_orthonormal_vector();
+    let basis2 = d.cross(basis);
+    // The angle about d of the direction a face runs from the edge into itself.
+    let angle = |f: FaceId, along: f64| -> f64 {
+        let u = m.face(f).expect("face").normal.cross(d * along);
+        u.dot(basis2).atan2(u.dot(basis))
+    };
+    let back_angles: Vec<(FaceId, f64)> = back.iter().map(|g| (*g, angle(*g, -1.0))).collect();
+    let mut pairs = Vec::new();
+    for f in &forward {
+        let alpha = angle(*f, 1.0);
+        // A face at the same angle is a whole turn away, not none.
+        let gap = |t: f64| match (alpha - t).rem_euclid(std::f64::consts::TAU) {
+            g if g < 1e-9 => std::f64::consts::TAU,
+            g => g,
+        };
+        let closing = back_angles
+            .iter()
+            .min_by(|x, y| gap(x.1).total_cmp(&gap(y.1)))
+            .map(|(g, _)| *g);
+        if let Some(g) = closing {
+            pairs.push((*f, g));
+        }
+    }
+    pairs
 }
 
 /// A copy of `m` holding only `faces` and their edges and vertices.
@@ -493,6 +544,39 @@ pub(crate) fn copy_into(src: &Model, m: &mut Model) {
             .curve
             .map(|c| *curves.entry(c).or_insert_with(|| m.new_curve()));
         m.insert_edge_like(vertices[&e.v[0]], vertices[&e.v[1]], &like);
+    }
+    for (_, f) in src.faces() {
+        let map = |l: &Vec<VertexId>| l.iter().map(|v| vertices[v]).collect::<Vec<_>>();
+        m.insert_face(Face {
+            outer: map(&f.outer),
+            holes: f.holes.iter().map(map).collect(),
+            ..f.clone()
+        });
+    }
+}
+
+/// Like `copy_into`, but a vertex of `src` where `m` already has one joins it, and an edge `m`
+/// already has stays as it is: a part touching what is in `m` along an edge or at a vertex
+/// keeps sharing it.
+pub(crate) fn copy_merged(src: &Model, m: &mut Model) {
+    let mut vertices: HashMap<VertexId, VertexId> = HashMap::new();
+    for (id, v) in src.vertices() {
+        let at = m
+            .find_vertex(v.pos)
+            .unwrap_or_else(|| m.insert_vertex(v.pos));
+        vertices.insert(id, at);
+    }
+    let mut curves: HashMap<CurveId, CurveId> = HashMap::new();
+    for (_, e) in src.edges() {
+        let (a, b) = (vertices[&e.v[0]], vertices[&e.v[1]]);
+        if m.edge_between(a, b).is_some() {
+            continue;
+        }
+        let mut like = e.clone();
+        like.curve = e
+            .curve
+            .map(|c| *curves.entry(c).or_insert_with(|| m.new_curve()));
+        m.insert_edge_like(a, b, &like);
     }
     for (_, f) in src.faces() {
         let map = |l: &Vec<VertexId>| l.iter().map(|v| vertices[v]).collect::<Vec<_>>();

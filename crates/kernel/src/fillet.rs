@@ -21,8 +21,8 @@ use std::fmt;
 use glam::{DAffine3, DVec2, DVec3};
 
 use crate::boolean::{
-    BooleanError, BooleanOp, apart, combine, copy_into, nested_shells, placed_copy, shells_of,
-    subset,
+    BooleanError, BooleanOp, apart, combine, copy_into, copy_merged, nested_shells, placed_copy,
+    shells_of, subset,
 };
 use crate::geom::{LENGTH_TOL, vector_area};
 use crate::ids::{CurveId, EdgeId, FaceId, MaterialId, VertexId};
@@ -654,7 +654,7 @@ fn bevel_with(
     let mut patched: Vec<VertexId> = done.iter().map(|i| corners[*i].vertex).collect();
     patched.extend(held.iter().map(|s| s.vertex));
     let all_held = held.len() == saddles.len();
-    copy_into(&rest, &mut acc);
+    copy_merged(&rest, &mut acc);
     acc.take_changes();
     Ok((acc, patched, all_held))
 }
@@ -1320,6 +1320,89 @@ mod tests {
         let r = bevelled(&m, &[e], round).unwrap();
         assert_eq!(open_reason(&r), None);
         assert!(has_vertex(&r, [0.0, 0.0, 3.0]) && has_vertex(&r, [0.0, 0.0, 2.0]));
+    }
+
+    /// Cuboid `a` and a neighbour of the same size touching it only along the vertical edge
+    /// x = 2, y = 2 (`by` = [2, 2, 0]) or only at the corner (2, 2, 2) (`by` = [2, 2, 2]).
+    fn touching(by: [f64; 3]) -> (Model, Model) {
+        let a = cuboid([2.0, 2.0, 2.0]);
+        let b = moved(&cuboid([2.0, 2.0, 2.0]), by);
+        let mut m = Model::new();
+        copy_merged(&a, &mut m);
+        copy_merged(&b, &mut m);
+        m.take_changes();
+        (m, b)
+    }
+
+    #[test]
+    fn a_part_sharing_only_an_edge_is_its_own_shell() {
+        let (m, _) = touching([2.0, 2.0, 0.0]);
+        assert_eq!(shells_of(&m).len(), 2);
+        let (m, _) = touching([2.0, 2.0, 2.0]);
+        assert_eq!(shells_of(&m).len(), 2);
+    }
+
+    #[test]
+    fn a_part_sharing_only_an_edge_is_not_cut() {
+        for by in [[2.0, 2.0, 0.0], [2.0, 2.0, 2.0]] {
+            let (m, _) = touching(by);
+            // An edge of the first box away from the contact, and one ending at it.
+            for (p, q) in [
+                ([0.0, 0.0, 2.0], [2.0, 0.0, 2.0]),
+                ([2.0, 0.0, 2.0], [2.0, 2.0, 2.0]),
+            ] {
+                let e = edge_at(&m, p, q);
+                for profile in [chamfer(0.5), fillet(0.5)] {
+                    let (r, _) = bevel_core(&m, &[(e, profile)]).unwrap();
+                    let shells = shells_of(&r);
+                    assert_eq!(shells.len(), 2, "{by:?}");
+                    for faces in &shells {
+                        assert_eq!(open_reason(&subset(&r, faces)), None, "{by:?}");
+                    }
+                    // The neighbour keeps its 6 faces, 8 corners and volume.
+                    let far = |p: DVec3| p.cmpge(DVec3::from(by) - 1e-9).all();
+                    let other = shells
+                        .iter()
+                        .find(|s| {
+                            s.iter()
+                                .all(|f| r.face(*f).unwrap().outer.iter().all(|v| far(r.pos(*v))))
+                        })
+                        .unwrap_or_else(|| panic!("neighbour lost {by:?}"));
+                    assert_eq!(other.len(), 6, "{by:?}");
+                    assert!((signed_volume(&subset(&r, other)) - 8.0).abs() < 1e-9);
+                    // The first box lost material and is closed.
+                    let first = shells.iter().find(|s| *s != other).unwrap();
+                    let v = signed_volume(&subset(&r, first));
+                    assert!(v < 8.0 - 1e-3 && v > 7.0, "{by:?} {v}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_part_sharing_an_edge_is_kept_when_its_neighbour_is_cut() {
+        // The second box is the one chamfered: the first stays whole.
+        let (m, _) = touching([2.0, 2.0, 0.0]);
+        let e = edge_at(&m, [4.0, 2.0, 2.0], [4.0, 4.0, 2.0]);
+        let (r, _) = bevel_core(&m, &[(e, chamfer(0.5))]).unwrap();
+        let shells = shells_of(&r);
+        assert_eq!(shells.len(), 2);
+        let mut volumes: Vec<f64> = shells
+            .iter()
+            .map(|f| {
+                let part = subset(&r, f);
+                assert_eq!(open_reason(&part), None);
+                signed_volume(&part)
+            })
+            .collect();
+        volumes.sort_by(f64::total_cmp);
+        assert!((volumes[0] - (8.0 - 0.125 * 2.0)).abs() < 1e-9);
+        assert!((volumes[1] - 8.0).abs() < 1e-9);
+        let first = r
+            .vertices()
+            .filter(|(_, v)| v.pos.max_element() < 2.0 + 1e-9)
+            .count();
+        assert_eq!(first, 8);
     }
 
     #[test]
