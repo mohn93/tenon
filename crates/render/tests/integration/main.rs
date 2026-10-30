@@ -3,6 +3,7 @@
 
 mod ao;
 mod culling;
+mod far;
 mod finish;
 mod golden;
 mod headless;

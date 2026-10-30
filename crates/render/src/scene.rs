@@ -446,6 +446,11 @@ fn sketch_of(mesh: MeshId, edge: EdgeId) -> (f32, [f32; 2]) {
 /// The scene placed for one open context with nothing selected (see `scene_geometry`).
 #[derive(Debug, Default, PartialEq)]
 pub struct SceneBase {
+    /// The point every position below is relative to (see `render_origin`): zero for a model
+    /// near the world origin. All of them (faces, edges, guides, annotations, section squares,
+    /// cut fill, outlines and planes, lights, casters and their bounds) are their world
+    /// positions less `origin`, computed in f64 before any rounding to f32.
+    pub origin: DVec3,
     pub faces: Vec<BaseFaceVertex>,
     /// Edges in EDGE_COLOR inside the open instance and FADED_EDGE_COLOR outside it, then the
     /// open instance's box.
@@ -856,10 +861,12 @@ fn base_walked(
         HashMap::new()
     };
     let (faces, edges) = drawn_count(scene, parts, MeshId::Root, &mut HashMap::new());
+    let origin = render_origin(scene);
     let mut walk = Walk {
         scene,
         context,
         layers: &layers,
+        origin,
         parts,
         glowing: scene.materials().any(|(_, m)| m.glows()),
         edge_colors: *edge_colors,
@@ -890,6 +897,7 @@ fn base_walked(
             // Most faces cast shadows.
             casters: Vec::with_capacity(faces),
             sun_casters: Vec::with_capacity(faces),
+            origin,
             ..SceneBase::default()
         },
     };
@@ -907,7 +915,7 @@ fn base_walked(
                 if k & 2 == 0 { lo.y } else { hi.y },
                 if k & 4 == 0 { lo.z } else { hi.z },
             );
-            t.transform_point3(c).as_vec3().to_array()
+            (t.transform_point3(c) - origin).as_vec3().to_array()
         };
         for (a, b) in BOX_EDGES {
             for k in [a, b] {
@@ -1166,6 +1174,41 @@ const MAX_THREADS: usize = 8;
 /// alone.
 const PARALLEL_CORNERS: usize = 30_000;
 
+/// A model whose center lies farther than this from the world origin along an axis is drawn
+/// relative to a point near it (see `render_origin`). f32 steps are 0.25 mm below 2048 m and
+/// 0.5 mm below 4096 m, so nearer models lose nothing.
+pub const ORIGIN_FROM: f64 = 4096.0;
+
+/// The origin is a multiple of this many meters (a power of two, so subtracting it is exact in
+/// f64): positions are then within half of it of the model's center, and the origin stays put
+/// while the model is edited by less than that.
+pub const ORIGIN_SNAP: f64 = 16.0;
+
+/// The point the scene's f32 positions are made relative to: the model's center, along x and y
+/// rounded to a multiple of `ORIGIN_SNAP`, or zero on an axis where the center lies within
+/// `ORIGIN_FROM` of zero. Height is never shifted: the ground (and the
+/// sun's shadows on it) lies at z = 0, and projected coordinates keep heights small. Near the world origin it is zero and
+/// positions are the world's, as before. A geo-referenced model (5e6 m out) is then drawn
+/// with f32 positions of the size of the model, not of its distance from the origin.
+pub fn render_origin(scene: &Scene) -> DVec3 {
+    match scene.bounds(MeshId::Root) {
+        Some([lo, hi]) => origin_for((lo + hi) * 0.5),
+        None => DVec3::ZERO,
+    }
+}
+
+/// `render_origin` for a model centered at `center`.
+pub fn origin_for(center: DVec3) -> DVec3 {
+    let snap = |c: f64| {
+        if c.is_finite() && c.abs() > ORIGIN_FROM {
+            (c / ORIGIN_SNAP).round() * ORIGIN_SNAP
+        } else {
+            0.0
+        }
+    };
+    DVec3::new(snap(center.x), snap(center.y), 0.0)
+}
+
 /// The parts of the meshes a scene places, kept from one build to the next (see
 /// `scene_base_cached`).
 #[derive(Default)]
@@ -1369,14 +1412,15 @@ fn drawn_count(
 
 /// Adds a placement's cut to the base: the fill in `fill`, and the cut edges in `color`.
 fn push_cut(base: &mut SceneBase, cut: &Cut, color: [f32; 4], fill: [f32; 4]) {
+    let origin = base.origin;
     base.cut_fill
         .extend(cut.fill.iter().flatten().map(|p| LineVertex {
-            pos: p.as_vec3().to_array(),
+            pos: (*p - origin).as_vec3().to_array(),
             color: fill,
         }));
     base.cut_edges
         .extend(cut.edges.iter().flatten().map(|p| LineVertex {
-            pos: p.as_vec3().to_array(),
+            pos: (*p - origin).as_vec3().to_array(),
             color,
         }));
 }
@@ -1385,6 +1429,8 @@ struct Walk<'a> {
     scene: &'a Scene,
     context: &'a [InstanceId],
     layers: &'a Layers,
+    /// What the f32 positions are relative to (`SceneBase::origin`).
+    origin: DVec3,
     /// Every placed mesh's parts.
     parts: &'a HashMap<MeshId, MeshParts>,
     /// Whether any material glows; when none does, lights are not looked for.
@@ -1451,6 +1497,9 @@ impl<'a> Walk<'a> {
         // A mirroring placement turns triangles inside out; swapping two corners restores the
         // winding, so the front side (and the headlight) stay right.
         let mirrored = t.matrix3.determinant() < 0.0;
+        // The placement followed by the move to the scene's origin, for what is kept as f64
+        // shapes (guides, annotations, section squares, lights).
+        let shifted = DAffine3::from_translation(-self.origin) * t;
         let front = side_look(self.scene, self.layers, inherited, DEFAULT_FRONT);
         let back = side_look(self.scene, self.layers, inherited, DEFAULT_BACK);
         let picture = is_picture(id, model);
@@ -1472,7 +1521,9 @@ impl<'a> Walk<'a> {
         {
             let placed = plane.transformed(t);
             if self.cut_seen.insert(plane_bits(&placed)) {
-                self.base.cut_planes.push(placed);
+                self.base
+                    .cut_planes
+                    .push(placed.transformed(DAffine3::from_translation(-self.origin)));
             }
             self.planes.push(placed);
             pushed_plane = true;
@@ -1505,6 +1556,7 @@ impl<'a> Walk<'a> {
         // With the material fill, the area of the cut triangles each front color has.
         let by_material = display.fill && display.fill_color == SectionFillColor::Material;
         let mut votes: Vec<([f32; 3], f64)> = Vec::new();
+        let origin = self.origin;
         let base = &mut self.base;
         let first_caster = base.casters.len();
         for face in &parts.faces {
@@ -1534,7 +1586,7 @@ impl<'a> Walk<'a> {
             };
             let alpha = [drawn_front.alpha.min(alpha), drawn_back.alpha.min(alpha)];
             let corner = |(p, n, uv): (DVec3, DVec3, [f32; 4])| BaseFaceVertex {
-                pos: p.as_vec3().to_array(),
+                pos: (p - origin).as_vec3().to_array(),
                 normal: (normal_map * n).normalize().as_vec3().to_array(),
                 front: drawn_front.color,
                 back: drawn_back.color,
@@ -1656,7 +1708,8 @@ impl<'a> Walk<'a> {
             }
         }
         if let Some(glows) = cut_glows.as_ref().or_else(|| self.glows.get(&glow_key)) {
-            base.lights.extend(glows.iter().filter_map(|g| g.placed(t)));
+            base.lights
+                .extend(glows.iter().filter_map(|g| g.placed(shifted)));
         }
         // The faces of edge `k` that are drawn, in id order, each with the direction from the
         // edge into it (when profiles are on).
@@ -1721,13 +1774,13 @@ impl<'a> Walk<'a> {
                         clip_segment(t.transform_point3(*a), t.transform_point3(*b), &planes)
                 {
                     base.edges.extend(kept.map(|p| LineVertex {
-                        pos: p.as_vec3().to_array(),
+                        pos: (p - origin).as_vec3().to_array(),
                         color,
                     }));
                 }
             } else {
                 base.edges.extend(ends.iter().map(|p| LineVertex {
-                    pos: t.transform_point3(*p).as_vec3().to_array(),
+                    pos: (t.transform_point3(*p) - origin).as_vec3().to_array(),
                     color,
                 }));
             }
@@ -1817,7 +1870,7 @@ impl<'a> Walk<'a> {
             } else {
                 color
             };
-            let (point, direction) = match guide.transformed(t) {
+            let (point, direction) = match guide.transformed(shifted) {
                 Guide::Line {
                     point, direction, ..
                 } => (point, Some(direction)),
@@ -1848,7 +1901,7 @@ impl<'a> Walk<'a> {
                 base.spans.dimensions.push((did, base.annotations.len()));
             }
             base.annotations.push(AnnotationLook {
-                shape: shape.transformed(t),
+                shape: shape.transformed(shifted),
                 color,
             });
         }
@@ -1864,7 +1917,7 @@ impl<'a> Walk<'a> {
                 base.spans.notes.push((nid, base.annotations.len()));
             }
             base.annotations.push(AnnotationLook {
-                shape: shape.transformed(t),
+                shape: shape.transformed(shifted),
                 color,
             });
         }
@@ -1884,7 +1937,7 @@ impl<'a> Walk<'a> {
                 }
                 let active = model.active_section() == Some(sid);
                 base.sections.push(SectionLook {
-                    shape: SectionShape::new(plane, side).transformed(t),
+                    shape: SectionShape::new(plane, side).transformed(shifted),
                     color: match (active, inside) {
                         (true, true) => ACTIVE_SECTION_COLOR,
                         (true, false) => FADED_ACTIVE_SECTION_COLOR,
@@ -2091,6 +2144,7 @@ impl<'a> Walk<'a> {
             scene: self.scene,
             context: self.context,
             layers: self.layers,
+            origin: self.origin,
             parts: self.parts,
             glowing: self.glowing,
             edge_colors: self.edge_colors,
@@ -2110,7 +2164,10 @@ impl<'a> Walk<'a> {
             sides: HashMap::new(),
             glows: HashMap::new(),
             path: self.path.clone(),
-            base: SceneBase::default(),
+            base: SceneBase {
+                origin: self.origin,
+                ..SceneBase::default()
+            },
         }
     }
 
@@ -3983,3 +4040,6 @@ mod tests {
         check(&s, "pulled");
     }
 }
+
+#[cfg(test)]
+mod far_tests;

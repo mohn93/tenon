@@ -26,9 +26,12 @@
 //! edge beside a subdivided neighbour), so the position is not shared. The ends of each chunk's
 //! open edges (those one of its triangles uses alone: where its surface goes on in another chunk)
 //! are put in grids, every edge of every chunk is looked up among them, and a point of another
-//! chunk lying on the edge is pinned with the edge's ends. The tolerance is 0.5 mm and positions
-//! are f32, so past a few km from the origin the tolerance grows with the coordinates (twice the
-//! f32 step), and a vertex is then pinned when within a few steps of an edge. A dense model is
+//! chunk lying on the edge is pinned with the edge's ends. The tolerance is 0.5 mm. Positions are
+//! f32 relative to the scene's origin (`SceneBase::origin`), which is near the model however far
+//! the model lies from the world origin, so the same millimeter cells serve a model 5e6 m out.
+//! Only a model larger than a few km, whose positions are far from its center, still has the
+//! tolerance grow with the coordinates (twice the f32 step; see `tolerance`), and a vertex is
+//! then pinned when within a few steps of an edge. A dense model is
 //! searched up to a bound of work and then left as it is (with a line on stderr).
 //!
 //! The simplified levels have their own small vertex (`LodVertex`): nothing in them is
@@ -465,7 +468,8 @@ fn par_map<T: Send>(count: usize, threads: usize, f: &(dyn Fn(usize) -> T + Sync
 pub type Seg = [[f32; 3]; 2];
 
 /// How far from an edge a vertex may be and still count as on it, in meters. Positions are
-/// f32, so the tolerance used grows with the coordinates (see `tolerance`).
+/// f32 relative to the scene's origin; where they are still large (a model of many km) the
+/// tolerance used grows with the coordinates (see `tolerance`).
 const ON_EDGE: f64 = 5e-4;
 
 /// How far from the edge from `a` to `b` a vertex may be and still count as on it. At least
@@ -1406,6 +1410,71 @@ mod tests {
             ] {
                 assert!(pins.contains(&bits(at(&p))), "{p:?} at {far}");
             }
+        }
+    }
+
+    #[test]
+    fn t_junctions_are_found_with_millimeter_cells_at_geo_referenced_distances() {
+        // The same oblique wall scene, placed at 1e5 and 5e6 m and made relative to the
+        // scene's origin as the scene does, in f64, before rounding to f32: the tolerance and
+        // the grids are those of a model at the origin.
+        let wall: [[f64; 3]; 21] = [
+            [10.0, 0.0, 0.0],
+            [20.0, 0.0, 0.0],
+            [20.0, 5.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [20.0, 5.0, 0.0],
+            [10.0, 5.0, 0.0],
+            [20.0, 0.0, 0.0],
+            [20.0, 0.0, 3.0],
+            [20.0, 5.0, 3.0],
+            [20.0, 0.0, 0.0],
+            [20.0, 5.0, 3.0],
+            [20.0, 5.0, 0.0],
+            [20.0, 0.0, 0.0],
+            [30.0, 0.0, 0.0],
+            [20.0, 1.0, 0.0],
+            [20.0, 1.0, 0.0],
+            [30.0, 0.0, 0.0],
+            [20.0, 2.5, 0.0],
+            [20.0, 2.5, 0.0],
+            [30.0, 0.0, 0.0],
+            [20.0, 5.0, 0.0],
+        ];
+        let mut near_pins = 0;
+        for far in [0.0, 1e5, 5e6] {
+            let far = if far > 0.0 { far + 0.123_456_7 } else { far };
+            let world = |p: &[f64; 3]| {
+                let (x, y) = (p[0] + 0.3 * p[1], p[1] + 0.2 * p[0]);
+                glam::DVec3::new(x + far, y + far, p[2])
+            };
+            let origin = crate::scene::origin_for(glam::DVec3::new(far + 20.0, far + 5.0, 0.0));
+            let at = |p: &[f64; 3]| (world(p) - origin).as_vec3().to_array();
+            let a: Vec<[f32; 3]> = wall[..12].iter().map(at).collect();
+            let b: Vec<[f32; 3]> = wall[12..].iter().map(at).collect();
+            // Millimeter cells: the tolerance is the fixed 0.5 mm, whatever the distance.
+            for corners in [&a, &b] {
+                for t in corners.chunks(3) {
+                    assert_eq!(tolerance(t[0], t[1]), ON_EDGE as f32, "at {far}");
+                }
+            }
+            let pins = pins_of(&[a, b]);
+            for p in [
+                [20.0, 1.0, 0.0],
+                [20.0, 2.5, 0.0],
+                [20.0, 0.0, 0.0],
+                [20.0, 5.0, 0.0],
+            ] {
+                assert!(pins.contains(&bits(at(&p))), "{p:?} at {far}");
+            }
+            if far == 0.0 {
+                near_pins = pins.len();
+            }
+            assert_eq!(
+                pins.len(),
+                near_pins,
+                "the same pins as at the origin, at {far}"
+            );
         }
     }
 
