@@ -527,10 +527,16 @@ fn patch_mixed(
             let (a, b) = (inner[i % inner.len()], outer[j % outer.len()]);
             let next_inner = inner[(i + 1) % inner.len()];
             let next_outer = outer[(j + 1) % outer.len()];
+            // The layers are sampled at the same parameters round the ring, so neither side
+            // may get a whole step ahead of the other: a zip led by distance alone could run
+            // all the way round one layer first, leaving four faces on an edge.
+            let (done_in, done_out) = (i * outer.len(), j * inner.len());
             let advance_inner = if i >= inner.len() {
                 false
-            } else if j >= outer.len() {
+            } else if j >= outer.len() || done_in + outer.len() < done_out {
                 true
+            } else if done_out + inner.len() < done_in {
+                false
             } else {
                 d(&cutter, next_inner, b) <= d(&cutter, a, next_outer)
             };
@@ -1274,8 +1280,8 @@ fn took(m: &Model, p: &Patch) -> bool {
                 .map(|(_, v)| v.pos.distance(*c))
                 .fold(f64::INFINITY, f64::min);
             near < strict
-                || (near < mark_tol(p.spacing)
-                    && crate::boolean::point_inside(*c, m) == Some(false))
+                || (crate::boolean::point_inside(*c, m) == Some(false)
+                    && (near < mark_tol(p.spacing) || hovers(m, *c, HAIR * p.radius)))
         });
     }
     if let Some(corners) = p.flat {
@@ -1285,6 +1291,35 @@ fn took(m: &Model, p: &Patch) -> bool {
         });
     }
     on_sphere(m, p).count() >= p.points
+}
+
+/// How far (as a share of the patch's radius) above a face a mark may stand and be left uncut:
+/// the apex is lowered in steps of a fiftieth, and a point of the patch lying on a chamfer's
+/// chord can end up that far over the chamfer's plane.
+const HAIR: f64 = 0.03;
+
+/// Whether `c` stands no more than `height` above a face of `m`, over the face itself.
+fn hovers(m: &Model, c: DVec3, height: f64) -> bool {
+    m.faces().any(|(_, f)| {
+        let Some(&first) = f.outer.first() else {
+            return false;
+        };
+        if f.normal.dot(c - m.pos(first)).abs() > height {
+            return false;
+        }
+        let u = f.normal.any_orthonormal_vector();
+        let w = f.normal.cross(u);
+        let flat = |p: DVec3| glam::DVec2::new(u.dot(p), w.dot(p));
+        let ring: Vec<glam::DVec2> = f.outer.iter().map(|v| flat(m.pos(*v))).collect();
+        crate::geom::point_in_polygon(flat(c), &ring)
+            && !f
+                .holes
+                .iter()
+                .any(|h| {
+                    let hole: Vec<glam::DVec2> = h.iter().map(|v| flat(m.pos(*v))).collect();
+                    crate::geom::point_in_polygon(flat(c), &hole)
+                })
+    })
 }
 
 fn on_sphere<'a>(m: &'a Model, p: &'a Patch) -> impl Iterator<Item = VertexId> + 'a {

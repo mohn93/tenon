@@ -3827,6 +3827,59 @@ mod tests {
         );
     }
 
+    /// Colour 0 and 1 edges of `m` chamfered, the rest rounded at `segments`, as the sweep does.
+    fn colour_mixed(
+        m: &Model,
+        scale: f64,
+        chamfered: &[usize],
+        segments: u32,
+    ) -> Result<(Model, Vec<VertexId>), BevelError> {
+        let ids: Vec<EdgeId> = m
+            .edges()
+            .filter(|(_, e)| !e.soft && e.curve.is_none_or(|_| e.polygon))
+            .map(|(id, _)| id)
+            .collect();
+        let colour = three_colours(m, &ids).expect("3-colourable");
+        let each: Vec<(EdgeId, Profile)> = ids
+            .iter()
+            .zip(&colour)
+            .map(|(e, c)| {
+                let size = [0.1, 0.12, 0.14][*c] * scale;
+                if chamfered.contains(c) {
+                    (*e, chamfer(size))
+                } else {
+                    (
+                        *e,
+                        Profile::Fillet {
+                            radius: size,
+                            segments,
+                        },
+                    )
+                }
+            })
+            .collect();
+        bevel_core(m, &each)
+    }
+
+    #[test]
+    fn five_sided_prism_corners_of_two_chamfered_kinds_are_patched_at_three_segments() {
+        // The patch's strips were zipped from the geometry alone, so a ring of six points
+        // against a thin first layer ran all the way round one side before the other moved:
+        // an edge on four faces, a cutter not closed, and the crossed cuts.
+        let p = Solid::prism(1.0, 2.0, 5, 0.0).unwrap().to_model();
+        let (out, patched) = colour_mixed(&p, 0.3, &[0, 1], 3).unwrap();
+        closed(&out);
+        assert_eq!(patched.len(), p.vertices().count());
+    }
+
+    #[test]
+    fn eight_sided_prism_with_one_chamfered_kind_is_patched_at_eight_segments() {
+        let p = Solid::prism(1.0, 2.0, 8, 0.0).unwrap().to_model();
+        let (out, patched) = colour_mixed(&p, 0.3, &[0], 8).unwrap();
+        closed(&out);
+        assert_eq!(patched.len(), p.vertices().count());
+    }
+
     fn shear_x(m: &Model, by: f64) -> Model {
         let matrix = glam::DMat3::from_cols(DVec3::X, DVec3::Y, DVec3::new(by, 0.0, 1.0));
         placed_copy(
