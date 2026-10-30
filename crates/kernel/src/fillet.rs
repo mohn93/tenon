@@ -1499,6 +1499,30 @@ mod tests {
     }
 
     #[test]
+    fn a_contact_edge_consumed_at_both_ends_leaves_no_t_junction() {
+        let (m, _) = touching([2.0, 2.0, 0.0]);
+        let top = edge_at(&m, [2.0, 0.0, 2.0], [2.0, 2.0, 2.0]);
+        let bottom = edge_at(&m, [2.0, 0.0, 0.0], [2.0, 2.0, 0.0]);
+        for profile in [chamfer(0.5), fillet(0.5)] {
+            let (r, _) = bevel_core(&m, &[(top, profile), (bottom, profile)]).unwrap();
+            no_t_junctions(&r);
+            let shells = shells_of(&r);
+            assert_eq!(shells.len(), 2);
+            let mut volumes: Vec<f64> = shells
+                .iter()
+                .map(|s| {
+                    let part = subset(&r, s);
+                    assert_eq!(open_reason(&part), None);
+                    signed_volume(&part)
+                })
+                .collect();
+            volumes.sort_by(f64::total_cmp);
+            assert!(volumes[0] < 8.0 - 1e-3 && volumes[0] > 6.0);
+            assert!((volumes[1] - 8.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
     fn a_sheet_on_a_solid_edge_is_left_alone() {
         // A fin: one face sharing the edge x = 2, y = 2 with the box, so three faces meet there.
         let a = cuboid([2.0, 2.0, 2.0]);

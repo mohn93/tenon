@@ -402,6 +402,19 @@ fn wedges(m: &Model, a: VertexId, b: VertexId, on: &[FaceId]) -> Vec<(FaceId, Fa
             pairs.push((*f, g));
         }
     }
+    // Faces back to back (the same plane, facing apart) are one solid, as they are where
+    // the edge has no other faces: two solids stacked face to face.
+    for (f, alpha) in &fwd_angles {
+        for (g, t) in &back_angles {
+            if (alpha - t)
+                .rem_euclid(std::f64::consts::TAU)
+                .min((t - alpha).rem_euclid(std::f64::consts::TAU))
+                < 1e-9
+            {
+                pairs.push((*f, *g));
+            }
+        }
+    }
     pairs
 }
 
@@ -568,29 +581,28 @@ pub(crate) fn copy_into(src: &Model, m: &mut Model) {
 /// or at a vertex keeps sharing it. Where the two then overlap along a line, edges are split at
 /// the other's vertices lying inside them so they conform (no T-junctions).
 pub(crate) fn copy_merged(src: &Model, m: &mut Model) {
+    let before: Vec<VertexId> = m.vertices().map(|(id, _)| id).collect();
+    let before_edges: Vec<EdgeId> = m.edges().map(|(id, _)| id).collect();
     let mut vertices: HashMap<VertexId, VertexId> = HashMap::new();
-    let mut contact: Vec<VertexId> = Vec::new();
     for (id, v) in src.vertices() {
-        let at = match m.find_vertex(v.pos) {
-            Some(at) => {
-                contact.push(at);
-                at
-            }
-            None => m.insert_vertex(v.pos),
-        };
+        let at = m
+            .find_vertex(v.pos)
+            .unwrap_or_else(|| m.insert_vertex(v.pos));
         vertices.insert(id, at);
     }
     let mut curves: HashMap<CurveId, CurveId> = HashMap::new();
+    let mut added: Vec<EdgeId> = Vec::new();
     for (_, e) in src.edges() {
         let (a, b) = (vertices[&e.v[0]], vertices[&e.v[1]]);
-        if m.edge_between(a, b).is_some() {
+        if let Some(have) = m.edge_between(a, b) {
+            added.push(have);
             continue;
         }
         let mut like = e.clone();
         like.curve = e
             .curve
             .map(|c| *curves.entry(c).or_insert_with(|| m.new_curve()));
-        m.insert_edge_like(a, b, &like);
+        added.push(m.insert_edge_like(a, b, &like));
     }
     for (_, f) in src.faces() {
         let map = |l: &Vec<VertexId>| l.iter().map(|v| vertices[v]).collect::<Vec<_>>();
@@ -600,26 +612,63 @@ pub(crate) fn copy_merged(src: &Model, m: &mut Model) {
             ..f.clone()
         });
     }
-    if !contact.is_empty() {
-        conform_at(m, &contact);
+    if before.is_empty() {
+        return;
     }
+    let new: Vec<VertexId> = vertices.values().copied().collect();
+    let mut edges = before_edges;
+    edges.extend(added);
+    edges.sort();
+    edges.dedup();
+    conform(m, &before, &new, &edges);
 }
 
-/// Splits the edges at `contact` vertices at any vertex of `m` lying inside them (within
-/// `LENGTH_TOL`), until none does. A piece that duplicates an existing edge is not added.
-fn conform_at(m: &mut Model, contact: &[VertexId]) {
-    let all: Vec<VertexId> = m.vertices().map(|(id, _)| id).collect();
-    let mut edges: Vec<EdgeId> = contact.iter().flat_map(|v| m.edges_at(*v)).collect();
-    while let Some(e) = edges.pop() {
+/// Splits the `edges` of `m` at any vertex of `old` or `new` lying inside them (within
+/// `LENGTH_TOL`), until none does. A piece that duplicates an existing edge is not added. Only
+/// what lies in the region both vertex sets reach is looked at.
+fn conform(m: &mut Model, old: &[VertexId], new: &[VertexId], edges: &[EdgeId]) {
+    let t = DVec3::splat(LENGTH_TOL);
+    let bounds_of = |vs: &[VertexId]| {
+        vs.iter().fold(
+            (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)),
+            |(lo, hi), v| (lo.min(m.pos(*v)), hi.max(m.pos(*v))),
+        )
+    };
+    let ((olo, ohi), (nlo, nhi)) = (bounds_of(old), bounds_of(new));
+    let (lo, hi) = (olo.max(nlo) - t, ohi.min(nhi) + t);
+    if lo.cmpgt(hi).any() {
+        return;
+    }
+    let overlaps = |a: DVec3, b: DVec3| a.min(b).cmple(hi).all() && a.max(b).cmpge(lo).all();
+    let cand: Vec<VertexId> = old
+        .iter()
+        .chain(new)
+        .copied()
+        .filter(|v| overlaps(m.pos(*v), m.pos(*v)))
+        .collect();
+    let mut work: Vec<EdgeId> = edges
+        .iter()
+        .copied()
+        .filter(|e| {
+            m.edge(*e)
+                .is_some_and(|e| overlaps(m.pos(e.v[0]), m.pos(e.v[1])))
+        })
+        .collect();
+    while let Some(e) = work.pop() {
         let Some(edge) = m.edge(e) else { continue };
         let [a, b] = edge.v;
         let (pa, pb) = (m.pos(a), m.pos(b));
         let len = pa.distance(pb);
-        let inside = all.iter().copied().find(|v| {
+        let (elo, ehi) = (pa.min(pb), pa.max(pb));
+        let inside = cand.iter().copied().find(|v| {
             if *v == a || *v == b {
                 return false;
             }
-            let (t, dist) = project_on_segment(m.pos(*v), pa, pb);
+            let p = m.pos(*v);
+            if p.cmpgt(ehi + t).any() || p.cmplt(elo - t).any() {
+                return false;
+            }
+            let (t, dist) = project_on_segment(p, pa, pb);
             dist < LENGTH_TOL && t * len > LENGTH_TOL && (1.0 - t) * len > LENGTH_TOL
         });
         let Some(v) = inside else { continue };
@@ -629,7 +678,7 @@ fn conform_at(m: &mut Model, contact: &[VertexId]) {
                 Some(id) => id,
                 None => m.insert_edge_like(x, y, &old),
             };
-            edges.push(id);
+            work.push(id);
         }
         for id in m.faces_on_side(a, b) {
             let mut f = m.face(id).expect("face").clone();
@@ -1642,6 +1691,20 @@ mod tests {
         let [x, y, z] = split(&a, &a.clone()).unwrap();
         assert!(x.is_none() && z.is_none());
         assert!((signed_volume(&y.unwrap()) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn solids_stacked_face_to_face_stay_one_shell() {
+        // Two cubes with the same vertices on the common face, which both keep.
+        let a = cuboid([2.0, 2.0, 2.0], [0.0; 3]);
+        let b = cuboid([2.0, 2.0, 2.0], [0.0, 0.0, 2.0]);
+        let mut m = Model::new();
+        copy_merged(&a, &mut m);
+        copy_merged(&b, &mut m);
+        assert_eq!(m.faces().count(), 12);
+        assert_eq!(shells_of(&m).len(), 1);
+        // Their outer shell is as it was.
+        assert_eq!(outer_shells(&m).unwrap().faces().count(), 12);
     }
 
     #[test]
