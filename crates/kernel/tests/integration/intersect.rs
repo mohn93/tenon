@@ -554,3 +554,77 @@ fn two_faces_sharing_a_crease_cut_a_shallow_face_to_one_point_of_it() {
     let l = on_crease(face_segments(&left, &cut));
     assert!(r.distance(l) < LENGTH_TOL, "{r} vs {l}");
 }
+
+#[test]
+fn a_line_grazing_a_corner_within_tolerance_leaves_no_sliver_face() {
+    // The corner (0, 0.5 + 5e-7) is within LENGTH_TOL of the line y = 0.5, and the edge from
+    // it runs shallowly across the line at x = 0.0099: the line is inside the face from the
+    // corner to there, but only within the tolerance of its edge.
+    let c = 0.5;
+    let pts = [
+        p(0.0, c + 5e-7, 0.0),
+        p(1.0, c - 5e-5, 0.0),
+        p(1.0, c - 1.0, 0.0),
+        p(0.0, c - 1.0, 0.0),
+    ];
+    let (mut m, id) = model_with_quad(pts);
+    let a = face_shape(&m, id, DAffine3::IDENTITY).unwrap();
+    let segs = face_segments(&a, &wall(-1.0, -1.0, 2.0, 1.0, c));
+    m.add_segments(&segs).unwrap();
+    m.validate().unwrap();
+    for (id, _) in m.faces() {
+        let s = face_shape(&m, id, DAffine3::IDENTITY).unwrap();
+        let n = s.outer.len();
+        let sides = || (0..n).map(|i| (s.outer[i], s.outer[(i + 1) % n]));
+        let perimeter: f64 = sides().map(|(u, v)| u.distance(v)).sum();
+        let area = 0.5 * sides().map(|(u, v)| u.cross(v)).sum::<DVec3>().length();
+        let width = 2.0 * area / perimeter;
+        assert!(width >= LENGTH_TOL, "sliver face {width:e} wide");
+    }
+}
+
+/// A face through `pts` with the plane fitted to all of them (Newell), as `face_shape` does.
+fn fitted_shape(pts: &[DVec3]) -> FaceShape {
+    let mut n = DVec3::ZERO;
+    for i in 0..pts.len() {
+        n += pts[i].cross(pts[(i + 1) % pts.len()]);
+    }
+    FaceShape {
+        outer: pts.to_vec(),
+        holes: Vec::new(),
+        plane: Plane::through(pts.iter().sum::<DVec3>() / pts.len() as f64, n.normalize()),
+    }
+}
+
+#[test]
+fn a_cut_along_a_shallow_edge_stays_inside_both_faces_whatever_the_fit_error() {
+    // Face a lies in z = 0 below a shallow edge (1e-3 rad to the line y = 0.5) that crosses the
+    // line at x = 0.5; its two edge vertices are `dz` off the plane. Face b contains the line
+    // at 0.08 rad to a and covers x 0.499 to 2. The overlap is x 0.499 to 0.5, and the ends
+    // must stay within a few LENGTH_TOL of it however the fit error slides the crossing.
+    let t = 0.08_f64;
+    let v = DVec3::new(0.0, t.cos(), t.sin());
+    let b = fitted_shape(&[
+        p(0.499, 0.5, 0.0) - v,
+        p(2.0, 0.5, 0.0) - v,
+        p(2.0, 0.5, 0.0) + v,
+        p(0.499, 0.5, 0.0) + v,
+    ]);
+    for dz in [0.0, 5e-7, -5e-7] {
+        let a = FaceShape {
+            outer: vec![
+                p(0.0, 0.5 + 5e-4, dz),
+                p(1.0, 0.5 - 5e-4, dz),
+                p(1.0, -1.0, 0.0),
+                p(0.0, -1.0, 0.0),
+            ],
+            holes: Vec::new(),
+            plane: Plane::through(DVec3::ZERO, DVec3::Z),
+        };
+        for segs in [face_segments(&a, &b), face_segments(&b, &a)] {
+            let (s, e) = only(&segs);
+            assert!((s.x - 0.499).abs() < 1e-5, "dz {dz}: {s}");
+            assert!((e.x - 0.5).abs() < 1e-5, "dz {dz}: {e}");
+        }
+    }
+}

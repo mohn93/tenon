@@ -5,8 +5,8 @@ use std::collections::HashSet;
 use glam::{DAffine3, DVec2, DVec3};
 
 use crate::geom::{
-    ANGLE_TOL, LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon, segment_distance_2d,
-    signed_area2, vector_area,
+    LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon, segment_distance_2d, signed_area2,
+    vector_area,
 };
 use crate::ids::FaceId;
 use crate::index::Shape;
@@ -119,7 +119,11 @@ pub fn face_segments(a: &FaceShape, b: &FaceShape) -> Vec<(DVec3, DVec3)> {
     // A stretch ends where the line leaves a face across one of its edges: the end is that
     // edge's point in the other face's plane, so the two stretches that end at an edge two
     // faces share (a crease) end at one point. The point of the line itself is off the edge by
-    // the planes' fit error, and along a shallow crease that error is magnified.
+    // the planes' fit error, and along a shallow crease that error is magnified. Only a
+    // correction of fit-error size is taken, and only where the edge crosses the other plane
+    // at a slope of at least `MIN_SLOPE`: an edge nearly along the plane (so nearly along the
+    // line) meets it anywhere within the fit error, far along the line from the crossing, and
+    // the point of the line stands.
     let place = |end: End, own: &FaceShape, other: &FaceShape| -> DVec3 {
         let on_line = origin + dir * end.t;
         let Some((k, i)) = end.edge else {
@@ -131,7 +135,10 @@ pub fn face_segments(a: &FaceShape, b: &FaceShape) -> Vec<(DVec3, DVec3)> {
             &own.holes[k - 1]
         };
         let (p, q) = (l[i], l[(i + 1) % l.len()]);
-        edge_in_plane(p, q, &other.plane).unwrap_or(on_line)
+        match edge_in_plane(p, q, &other.plane, MIN_SLOPE) {
+            Some(x) if x.distance(on_line) <= LENGTH_TOL / MIN_SLOPE => x,
+            _ => on_line,
+        }
     };
     meet(&on_a, &on_b)
         .into_iter()
@@ -144,16 +151,28 @@ pub fn face_segments(a: &FaceShape, b: &FaceShape) -> Vec<(DVec3, DVec3)> {
                     place(e, a, b)
                 }
             };
-            (end(lo), end(hi))
+            let (s, e) = (end(lo), end(hi));
+            // The ends keep their order and the stretch its length.
+            if (e - s).dot(dir) >= LENGTH_TOL {
+                (s, e)
+            } else {
+                (origin + dir * lo.0.t, origin + dir * hi.0.t)
+            }
         })
         .collect()
 }
 
-/// Where the segment `p`-`q` meets `plane`; None when it runs (nearly) along it.
-fn edge_in_plane(p: DVec3, q: DVec3, plane: &Plane) -> Option<DVec3> {
+/// The least sine of the angle between an edge and the other face's plane for the edge's point
+/// to end a stretch. The planes' fit error, `LENGTH_TOL`, is magnified by at most its inverse
+/// along the edge.
+const MIN_SLOPE: f64 = 0.01;
+
+/// Where the segment `p`-`q` meets `plane`; None when the sine of its angle to the plane is
+/// under `min_slope`.
+fn edge_in_plane(p: DVec3, q: DVec3, plane: &Plane, min_slope: f64) -> Option<DVec3> {
     let d = q - p;
     let slope = plane.normal.dot(d);
-    if slope.abs() <= ANGLE_TOL * d.length() {
+    if slope.abs() < min_slope * d.length() {
         return None;
     }
     let s = (-plane.distance(p) / slope).clamp(0.0, 1.0);
