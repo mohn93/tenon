@@ -28,8 +28,8 @@
 //! are put in grids, every edge of every chunk is looked up among them, and a point of another
 //! chunk lying on the edge is pinned with the edge's ends. The tolerance is 0.5 mm and positions
 //! are f32, so past a few km from the origin the tolerance grows with the coordinates (twice the
-//! f32 step), and a vertex is then pinned when within a few steps of an edge. A dense model is searched up to a bound
-//! of work and then left as it is (with a line on stderr).
+//! f32 step), and a vertex is then pinned when within a few steps of an edge. A dense model is
+//! searched up to a bound of work and then left as it is (with a line on stderr).
 //!
 //! The simplified levels have their own small vertex (`LodVertex`): nothing in them is
 //! textured, glowing or see-through, and a chunk with something selected or hovered is drawn
