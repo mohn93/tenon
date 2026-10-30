@@ -123,8 +123,9 @@ pub fn face_segments(a: &FaceShape, b: &FaceShape) -> Vec<(DVec3, DVec3)> {
     // correction of fit-error size is taken, and only where the edge crosses the other plane
     // at a slope of at least `MIN_SLOPE`: an edge nearly along the plane (so nearly along the
     // line) meets it anywhere within the fit error, far along the line from the crossing, and
-    // the point of the line stands.
-    let place = |end: End, own: &FaceShape, other: &FaceShape| -> DVec3 {
+    // the point of the line stands. The point must also lie within the other face's stretch
+    // (its ends `others`, to `LENGTH_TOL`): the correction may not carry the end out of it.
+    let place = |end: End, own: &FaceShape, other: &FaceShape, others: &[(End, End)]| -> DVec3 {
         let on_line = origin + dir * end.t;
         let Some((k, i)) = end.edge else {
             return on_line;
@@ -135,8 +136,18 @@ pub fn face_segments(a: &FaceShape, b: &FaceShape) -> Vec<(DVec3, DVec3)> {
             &own.holes[k - 1]
         };
         let (p, q) = (l[i], l[(i + 1) % l.len()]);
+        let within = |t: f64| {
+            others
+                .iter()
+                .any(|(lo, hi)| lo.t - LENGTH_TOL <= t && t <= hi.t + LENGTH_TOL)
+        };
         match edge_in_plane(p, q, &other.plane, MIN_SLOPE) {
-            Some(x) if x.distance(on_line) <= LENGTH_TOL / MIN_SLOPE => x,
+            Some(x)
+                if x.distance(on_line) <= LENGTH_TOL / MIN_SLOPE
+                    && within((x - origin).dot(dir)) =>
+            {
+                x
+            }
             _ => on_line,
         }
     };
@@ -146,9 +157,9 @@ pub fn face_segments(a: &FaceShape, b: &FaceShape) -> Vec<(DVec3, DVec3)> {
         .map(|(lo, hi)| {
             let end = |(e, from_b): (End, bool)| {
                 if from_b {
-                    place(e, b, a)
+                    place(e, b, a, &on_a)
                 } else {
-                    place(e, a, b)
+                    place(e, a, b, &on_b)
                 }
             };
             let (s, e) = (end(lo), end(hi));

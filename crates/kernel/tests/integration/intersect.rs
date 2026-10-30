@@ -556,6 +556,45 @@ fn two_faces_sharing_a_crease_cut_a_shallow_face_to_one_point_of_it() {
 }
 
 #[test]
+fn a_crease_end_does_not_carry_a_cut_out_of_the_other_face() {
+    // The edge of a crosses the line y = 0.5 at x = 0.5 at 0.13 rad, so at 0.08 rad between
+    // the planes its sine to b's plane is just over MIN_SLOPE; its vertices are 1e-6 off a's
+    // plane, which slides the crossing ~1e-4 along the line. b ends at x = 0.50005, within
+    // 1e-4 of the crossing: the cut must stay within b, whichever way the slide goes.
+    let t = 0.08_f64;
+    let v = DVec3::new(0.0, t.cos(), t.sin());
+    let b = fitted_shape(&[
+        p(0.499, 0.5, 0.0) - v,
+        p(0.50005, 0.5, 0.0) - v,
+        p(0.50005, 0.5, 0.0) + v,
+        p(0.499, 0.5, 0.0) + v,
+    ]);
+    for dz in [1e-6, -1e-6] {
+        let a = FaceShape {
+            outer: vec![
+                p(0.0, 0.5 + 0.065, dz),
+                p(1.0, 0.5 - 0.065, dz),
+                p(1.0, -1.0, 0.0),
+                p(0.0, -1.0, 0.0),
+            ],
+            holes: Vec::new(),
+            plane: Plane::through(DVec3::ZERO, DVec3::Z),
+        };
+        for segs in [face_segments(&a, &b), face_segments(&b, &a)] {
+            for (s, e) in &segs {
+                for q in [s, e] {
+                    assert!(
+                        (0.499 - LENGTH_TOL..=0.50005 + LENGTH_TOL).contains(&q.x),
+                        "dz {dz}: {q}"
+                    );
+                }
+            }
+            assert_eq!(segs.len(), 1, "dz {dz}: {segs:?}");
+        }
+    }
+}
+
+#[test]
 fn a_line_grazing_a_corner_within_tolerance_leaves_no_sliver_face() {
     // The corner (0, 0.5 + 5e-7) is within LENGTH_TOL of the line y = 0.5, and the edge from
     // it runs shallowly across the line at x = 0.0099: the line is inside the face from the
