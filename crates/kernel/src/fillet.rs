@@ -21,14 +21,14 @@ use std::fmt;
 use glam::{DAffine3, DVec2, DVec3};
 
 use crate::boolean::{
-    BooleanError, BooleanOp, Shared, apart, combine, copy_sharing, nested_shells, placed_copy,
-    shells_of, subset,
+    BooleanError, BooleanOp, Shared, apart, combine, combine_shared, copy_sharing, nested_shells,
+    placed_copy, shells_of, skin_pair, subset,
 };
 use crate::geom::{LENGTH_TOL, vector_area};
 use crate::ids::{CurveId, EdgeId, FaceId, MaterialId, VertexId};
 use crate::model::{Face, Model};
 use crate::scene::{MeshId, Scene, SceneChange};
-use crate::solid::{open_reason, signed_volume};
+use crate::solid::{internal_faces, open_reason, open_reason_shared, signed_volume, skin_volume};
 
 mod corner;
 
@@ -389,7 +389,15 @@ fn bevel_with(
         };
         let [a, b] = edge.v;
         let on = m.faces_on_side(a, b);
-        if on.len() > 2 {
+        let at = on.first().copied();
+        let shell = at.and_then(|f| shells.iter().position(|s| s.contains(&f)));
+        // More than two faces on an edge are fine inside one solid (a void touching the skin,
+        // an internal wall seen from both sides); solids meeting along it stay refused.
+        if on.len() > 2
+            && on
+                .iter()
+                .any(|f| shells.iter().position(|s| s.contains(f)) != shell)
+        {
             return Err(BevelError::Edge(
                 *e,
                 format!(
@@ -399,8 +407,6 @@ fn bevel_with(
                 ),
             ));
         }
-        let at = on.first().copied();
-        let shell = at.and_then(|f| shells.iter().position(|s| s.contains(&f)));
         match shell {
             Some(i) => hit[i] = true,
             None => {
@@ -461,10 +467,20 @@ fn bevel_with(
         for v in stray {
             work.remove_vertex(v);
         }
-        if let Some(why) = open_reason(&work) {
+        // A solid whose void or parts touch along an edge has edges of more than two faces.
+        let why = if has_shared_edges(&work) {
+            open_reason_shared(&work)
+        } else {
+            open_reason(&work)
+        };
+        if let Some(why) = why {
             return Err(BevelError::NotSolid(why));
         }
-        let volume = signed_volume(&work);
+        let volume = if has_shared_edges(&work) {
+            skin_volume(&work)
+        } else {
+            signed_volume(&work)
+        };
         if volume.abs() <= 1e-12 {
             return Err(BevelError::NotSolid("it encloses no volume".into()));
         }
@@ -513,6 +529,14 @@ fn bevel_with(
             rest.insert_edge_like(va, vb, &like);
         }
     }
+    let shared_edges = has_shared_edges(&work);
+    let join = |a: &Model, b: &Model, op| {
+        if shared_edges {
+            combine_shared(a, b, op)
+        } else {
+            combine(a, b, op)
+        }
+    };
     let m = &work;
     // Each edge once; a repeated one keeps its first profile.
     let mut by_edge: BTreeMap<EdgeId, Profile> = BTreeMap::new();
@@ -544,6 +568,9 @@ fn bevel_with(
     // How many chosen convex edges end at each vertex, and the faces beside them.
     let mut convex_ends: HashMap<VertexId, usize> = HashMap::new();
     let mut cut_faces: HashMap<VertexId, Vec<FaceId>> = HashMap::new();
+    // Per vertex, the directions away from it of the chosen convex edges ending there, and
+    // their setbacks: an edge continuing straight on from another runs on past the end.
+    let mut leaving: HashMap<VertexId, Vec<(DVec3, f64)>> = HashMap::new();
     for e in &edges {
         if m.edge(*e).is_none() {
             return Err(BevelError::Edge(
@@ -556,6 +583,8 @@ fn bevel_with(
             for v in [cut.va, cut.vb] {
                 *convex_ends.entry(v).or_default() += 1;
                 cut_faces.entry(v).or_default().extend([cut.f1, cut.f2]);
+                let away = if v == cut.va { cut.u } else { -cut.u };
+                leaving.entry(v).or_default().push((away, cut.setback));
             }
         }
         cuts.push((*e, cut));
@@ -583,6 +612,12 @@ fn bevel_with(
         let at = Corner {
             run_on: &|v| convex_ends.get(&v).copied().unwrap_or(0) > 1,
             cut: &|v, f| cut_faces.get(&v).is_some_and(|fs| fs.contains(&f)),
+            straight: &|v, away, setback| {
+                leaving.get(&v).is_some_and(|l| {
+                    l.iter()
+                        .any(|(d, s)| d.dot(away) > 1.0 - 1e-9 && (s - setback).abs() < LENGTH_TOL)
+                })
+            },
         };
         close_ends(m, &mut cut, e, outward, &at).map_err(|why| BevelError::Edge(e, why))?;
         // A saddle corner sets its own ends.
@@ -618,7 +653,7 @@ fn bevel_with(
         for core in &cores {
             let (clo, chi) = bounds(core);
             if clo.cmple(hi).all() && chi.cmpge(lo).all() {
-                match combine(&cutter, core, BooleanOp::Subtract)? {
+                match join(&cutter, core, BooleanOp::Subtract)? {
                     Some(rest) => cutter = rest,
                     None => break,
                 }
@@ -627,10 +662,11 @@ fn bevel_with(
         trimmed.push(cutter);
     }
 
-    let mut acc = placed_copy(m, DAffine3::IDENTITY, None);
+    let (start, twinned) = with_twins(m);
+    let mut acc = placed_copy(&start, DAffine3::IDENTITY, None);
     for (op, tools) in [(BooleanOp::Union, fillers), (BooleanOp::Subtract, trimmed)] {
         for tool in apart(tools) {
-            acc = combine(&acc, &tool, op)?.ok_or(BooleanError::NotClosed)?;
+            acc = join(&acc, &tool, op)?.ok_or(BooleanError::NotClosed)?;
         }
     }
     let corners = corner::patches(m, &closed_cuts);
@@ -643,7 +679,7 @@ fn bevel_with(
         } else {
             BooleanOp::Subtract
         };
-        acc = combine(&acc, &s.sweep, op)?.ok_or(BooleanError::NotClosed)?;
+        acc = join(&acc, &s.sweep, op)?.ok_or(BooleanError::NotClosed)?;
     }
     soften_rounds(&mut acc, &rounds);
     let held: Vec<&corner::Saddle> = saddles.iter().filter(|s| s.took(&acc)).collect();
@@ -663,9 +699,77 @@ fn bevel_with(
     let mut patched: Vec<VertexId> = done.iter().map(|i| corners[*i].vertex).collect();
     patched.extend(held.iter().map(|s| s.vertex));
     let all_held = held.len() == saddles.len();
+    if twinned {
+        drop_twins(&mut acc);
+    }
     copy_sharing(&rest, &mut acc, Some(&shared));
     acc.take_changes();
     Ok((acc, patched, all_held))
+}
+
+/// The vertices of a face's outer loop, sorted: equal for a face and its twin turned over.
+fn ring_key(f: &Face) -> Vec<VertexId> {
+    let mut key = f.outer.clone();
+    key.sort();
+    key
+}
+
+/// `m` with each wall inside the solid (an internal face, see `internal_faces`) given a twin
+/// facing the other way, so every chamber is closed and a ray crossing the wall counts twice;
+/// and whether it did. A model whose walls are already drawn from both sides is left as it is.
+fn with_twins(m: &Model) -> (Model, bool) {
+    let mut out = m.clone();
+    if !has_shared_edges(m) {
+        return (out, false);
+    }
+    let walls = internal_faces(m);
+    let keys: Vec<Vec<VertexId>> = walls
+        .iter()
+        .map(|f| ring_key(m.face(*f).expect("face")))
+        .collect();
+    let mut sorted = keys.clone();
+    sorted.sort();
+    sorted.dedup();
+    if walls.is_empty() || sorted.len() != keys.len() {
+        return (out, false);
+    }
+    for f in &walls {
+        out.insert_face(m.face(*f).expect("face").reversed());
+    }
+    out.take_changes();
+    (out, true)
+}
+
+/// Removes one of each two walls of `m` lying on each other facing apart (see `with_twins`).
+fn drop_twins(m: &mut Model) {
+    let walls = internal_faces(m);
+    let mut seen: BTreeMap<Vec<VertexId>, FaceId> = BTreeMap::new();
+    let mut drop = Vec::new();
+    for f in &walls {
+        let face = m.face(*f).expect("face");
+        match seen.entry(ring_key(face)) {
+            std::collections::btree_map::Entry::Occupied(o) => {
+                if m.face(*o.get()).expect("face").normal.dot(face.normal) < 0.0 {
+                    drop.push(*f);
+                }
+            }
+            std::collections::btree_map::Entry::Vacant(v) => {
+                v.insert(*f);
+            }
+        }
+    }
+    for f in drop {
+        m.remove_face(f);
+    }
+    m.take_changes();
+}
+
+/// Whether an edge of `m` has more than two faces.
+fn has_shared_edges(m: &Model) -> bool {
+    m.edges().any(|(_, e)| {
+        let [a, b] = e.v;
+        m.faces_on_side(a, b).len() > 2
+    })
 }
 
 /// Where a fillet's surface lies, to soften the edges along it.
@@ -779,8 +883,13 @@ fn analyze(m: &Model, id: EdgeId, outward: f64, profile: Profile) -> Result<Edge
     let (a, b) = (m.pos(va), m.pos(vb));
     let u = (b - a).normalize();
     let faces = m.faces_on_side(va, vb);
-    let [f1, f2] = faces[..] else {
-        return Err(format!("{name} does not bound exactly two faces"));
+    // More than two faces (a void touching the skin, a wall inside the solid): the two that
+    // bound the empty space beside the edge are the ones rounded.
+    let [f1, f2] = match faces[..] {
+        [f1, f2] => [f1, f2],
+        [_, _, ..] => skin_pair(m, va, vb, outward)
+            .ok_or_else(|| format!("{name} bounds {} faces and none pair up", faces.len()))?,
+        _ => return Err(format!("{name} does not bound exactly two faces")),
     };
     // The seams of a curved surface are soft and its rims are curves: neither is bevelled.
     // A flat face beside a soft edge (one next to an earlier fillet) is fine.
@@ -911,6 +1020,9 @@ fn overlap(p: &[DVec3; 4], q: &[DVec3; 4]) -> bool {
 struct Corner<'a> {
     /// Another chosen convex edge ends there.
     run_on: &'a dyn Fn(VertexId) -> bool,
+    /// A chosen convex edge of this setback ends there and leaves it along the given direction
+    /// (it continues the edge straight on).
+    straight: &'a dyn Fn(VertexId, DVec3, f64) -> bool,
     /// A chosen convex edge ending there lies beside this face, cutting it there.
     cut: &'a dyn Fn(VertexId, FaceId) -> bool,
 }
@@ -931,19 +1043,24 @@ fn close_ends(
     let name = format!("edge e{}", id.0);
     let size = cut.setback;
     let u = cut.u;
+    // Every face along the edge, not only the two cut: a wall inside the solid ends there too.
+    let along_edge = m.faces_on_side(cut.va, cut.vb);
     for (k, (v, p, along)) in [(cut.va, cut.a, -u), (cut.vb, cut.b, u)]
         .into_iter()
         .enumerate()
     {
         let others: Vec<FaceId> = m
             .faces_at(v)
-            .filter(|f| *f != cut.f1 && *f != cut.f2)
+            .filter(|f| !along_edge.contains(f) && *f != cut.f1 && *f != cut.f2)
             .collect();
         let leaves = others.iter().all(|f| {
             let n = m.face(*f).expect("face").normal * outward;
             n.dot(along) > 1e-9
         });
-        if cut.convex && (at.run_on)(v) && leaves {
+        // The faces of a void or wall touching a straight run only at its middle do not stop
+        // the cut running on.
+        let straight = cut.convex && (at.straight)(v, along, size);
+        if cut.convex && (at.run_on)(v) && (leaves || straight) {
             continue;
         }
         let Some(first) = others.first() else {
@@ -4291,6 +4408,341 @@ mod tests {
             // 0.002 would show; the crossed cuts differ by the corner's own interaction.
             let tolerance = if patched.is_empty() { 2.0 } else { 0.15 } * r * r * r;
             assert!((v - (gain - loss)).abs() < tolerance, "{v} {gain} {loss}");
+        }
+    }
+
+    /// A mesh of the polygons `faces` (each a list of points, counter-clockwise from outside),
+    /// vertices at equal points shared.
+    fn from_faces(faces: &[Vec<DVec3>]) -> Model {
+        let mut m = Model::new();
+        for f in faces {
+            let l: Vec<VertexId> = f
+                .iter()
+                .map(|p| m.find_vertex(*p).unwrap_or_else(|| m.insert_vertex(*p)))
+                .collect();
+            for i in 0..l.len() {
+                let (a, b) = (l[i], l[(i + 1) % l.len()]);
+                if m.edge_between(a, b).is_none() {
+                    m.insert_edge(a, b);
+                }
+            }
+            m.insert_face(Face::new(l, Vec::new(), vector_area(f).normalize()));
+        }
+        m.take_changes();
+        m
+    }
+
+    /// The prism of the counter-clockwise triangle `t` from z = 0 to `h`: its faces.
+    fn prism_faces(t: [(f64, f64); 3], h: f64) -> Vec<Vec<DVec3>> {
+        let at = |i: usize, z: f64| DVec3::new(t[i % 3].0, t[i % 3].1, z);
+        let mut faces = vec![
+            vec![at(0, 0.0), at(2, 0.0), at(1, 0.0)],
+            vec![at(0, h), at(1, h), at(2, h)],
+        ];
+        for i in 0..3 {
+            faces.push(vec![at(i, 0.0), at(i + 1, 0.0), at(i + 1, h), at(i, h)]);
+        }
+        faces
+    }
+
+    /// A 2 m square prism of two triangular halves with the diagonal wall from (2, 0) to (0, 2)
+    /// between them, once or (`twice`) from both sides: three (four) faces meet at the corner
+    /// edge x = 2, y = 0.
+    fn walled_square(twice: bool) -> Model {
+        let mut faces = prism_faces([(0.0, 0.0), (2.0, 0.0), (0.0, 2.0)], 2.0);
+        let mut other = prism_faces([(2.0, 0.0), (2.0, 2.0), (0.0, 2.0)], 2.0);
+        if !twice {
+            other.pop();
+        }
+        faces.extend(other);
+        from_faces(&faces)
+    }
+
+    /// Every edge has as many faces one way as the other once the internal walls are left out,
+    /// and the mesh is valid.
+    fn balanced(m: &Model) {
+        assert_eq!(open_reason_shared(m), None);
+        m.validate().unwrap();
+    }
+
+    #[test]
+    fn a_corner_edge_with_a_wall_inside_is_bevelled() {
+        for twice in [false, true] {
+            let m = walled_square(twice);
+            let e = edge_at(&m, [2.0, 0.0, 0.0], [2.0, 0.0, 2.0]);
+            let [a, b] = m.edge(e).unwrap().v;
+            assert_eq!(m.faces_on_side(a, b).len(), if twice { 4 } else { 3 });
+            assert_eq!(shells_of(&m).len(), 1);
+            for (profile, lost) in [
+                (chamfer(0.5), 0.125 * 2.0),
+                (
+                    fillet(0.5),
+                    quarter_loss(0.5, DEFAULT_SEGMENTS as usize) * 2.0,
+                ),
+            ] {
+                let r = bevelled(&m, &[e], profile).unwrap();
+                balanced(&r);
+                assert!((skin_volume(&r) - (8.0 - lost)).abs() < 1e-9);
+                // The corner is gone and the wall ends on the cut.
+                assert!(!has_vertex(&r, [2.0, 0.0, 0.0]) && !has_vertex(&r, [2.0, 0.0, 2.0]));
+                let walls = internal_faces(&r);
+                assert!(!walls.is_empty() && walls.len() <= 2);
+            }
+            let r = bevelled(&m, &[e], chamfer(0.5)).unwrap();
+            assert!(has_vertex(&r, [1.75, 0.25, 0.0]) && has_vertex(&r, [1.75, 0.25, 2.0]));
+        }
+    }
+
+    /// A 4 m cube with a triangular void (apex angle 50 degrees, 1.5 m long sides, z from 1 to
+    /// 3) whose apex edge lies on the cube's vertical edge x = 0, y = 0, which is split at the
+    /// void's ends: four faces meet along its middle piece.
+    fn cube_with_void_on_an_edge() -> Model {
+        let v = |x: f64, y: f64, z: f64| DVec3::new(x, y, z);
+        let mut faces = vec![
+            vec![
+                v(0.0, 0.0, 0.0),
+                v(0.0, 4.0, 0.0),
+                v(4.0, 4.0, 0.0),
+                v(4.0, 0.0, 0.0),
+            ],
+            vec![
+                v(0.0, 0.0, 4.0),
+                v(4.0, 0.0, 4.0),
+                v(4.0, 4.0, 4.0),
+                v(0.0, 4.0, 4.0),
+            ],
+            vec![
+                v(0.0, 0.0, 0.0),
+                v(4.0, 0.0, 0.0),
+                v(4.0, 0.0, 4.0),
+                v(0.0, 0.0, 4.0),
+                v(0.0, 0.0, 3.0),
+                v(0.0, 0.0, 1.0),
+            ],
+            vec![
+                v(0.0, 0.0, 0.0),
+                v(0.0, 0.0, 1.0),
+                v(0.0, 0.0, 3.0),
+                v(0.0, 0.0, 4.0),
+                v(0.0, 4.0, 4.0),
+                v(0.0, 4.0, 0.0),
+            ],
+            vec![
+                v(4.0, 0.0, 0.0),
+                v(4.0, 4.0, 0.0),
+                v(4.0, 4.0, 4.0),
+                v(4.0, 0.0, 4.0),
+            ],
+            vec![
+                v(0.0, 4.0, 0.0),
+                v(0.0, 4.0, 4.0),
+                v(4.0, 4.0, 4.0),
+                v(4.0, 4.0, 0.0),
+            ],
+        ];
+        let at = |deg: f64| (1.5 * deg.to_radians().cos(), 1.5 * deg.to_radians().sin());
+        let void = prism_faces([(0.0, 0.0), at(20.0), at(70.0)], 2.0);
+        faces.extend(void.into_iter().map(|f| {
+            f.into_iter()
+                .rev()
+                .map(|p| p + DVec3::new(0.0, 0.0, 1.0))
+                .collect()
+        }));
+        from_faces(&faces)
+    }
+
+    #[test]
+    fn an_edge_a_void_touches_is_bevelled_along_the_skin() {
+        let m = cube_with_void_on_an_edge();
+        let void_volume = 0.5 * 1.5 * 1.5 * 50f64.to_radians().sin() * 2.0;
+        assert!((skin_volume(&m) - (64.0 - void_volume)).abs() < 1e-9);
+        let pieces = [
+            ([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+            ([0.0, 0.0, 1.0], [0.0, 0.0, 3.0]),
+            ([0.0, 0.0, 3.0], [0.0, 0.0, 4.0]),
+        ];
+        let edges: Vec<EdgeId> = pieces.iter().map(|(p, q)| edge_at(&m, *p, *q)).collect();
+        let [a, b] = m.edge(edges[1]).unwrap().v;
+        assert_eq!(m.faces_on_side(a, b).len(), 4);
+        assert_eq!(shells_of(&m).len(), 1);
+        // The cutter's triangle (0.3 m legs) over the 4 m, less what lies in the void: the
+        // void's wedge in it, half r^2 integrated over 20 to 70 degrees, over the 2 m.
+        let triangle = 0.5 * 0.3 * 0.3;
+        let in_void = 0.5 * 0.09 * 25f64.to_radians().tan();
+        let lost = 4.0 * triangle - 2.0 * in_void;
+        let r = bevelled(&m, &edges, chamfer(0.3)).unwrap();
+        balanced(&r);
+        let want = 64.0 - void_volume - lost;
+        assert!(
+            (skin_volume(&r) - want).abs() < 1e-9,
+            "{} {want}",
+            skin_volume(&r)
+        );
+        assert_eq!(shells_of(&r).len(), 1);
+        let r = bevelled(&m, &edges, fillet(0.3)).unwrap();
+        balanced(&r);
+        assert!(skin_volume(&r) < 64.0 - void_volume && skin_volume(&r) > want);
+    }
+
+    /// A square pyramid with its apex at the middle of the cuboid's edge x = 2, y = 0 (z = 1)
+    /// and its base in the plane x = 3: it touches the cuboid at that one point only.
+    fn pyramid_on_an_edge() -> Model {
+        let apex = DVec3::new(2.0, 0.0, 1.0);
+        let base = [
+            DVec3::new(3.0, -0.5, 0.5),
+            DVec3::new(3.0, 0.5, 0.5),
+            DVec3::new(3.0, 0.5, 1.5),
+            DVec3::new(3.0, -0.5, 1.5),
+        ];
+        let mut faces = vec![base.to_vec()];
+        for i in 0..4 {
+            faces.push(vec![apex, base[i], base[(i + 3) % 4]]);
+        }
+        let m = from_faces(&faces);
+        if signed_volume(&m) > 0.0 {
+            return m;
+        }
+        let turned: Vec<Vec<DVec3>> = faces
+            .into_iter()
+            .map(|f| f.into_iter().rev().collect())
+            .collect();
+        from_faces(&turned)
+    }
+
+    /// The cuboid and the pyramid: with `split` the cuboid's edge is split at the apex, so
+    /// they share that vertex (joined); else the edge stays whole (the apex only lies on it).
+    fn cuboid_and_pyramid(split: bool) -> Model {
+        let (a, b) = (cuboid([2.0, 2.0, 2.0]), pyramid_on_an_edge());
+        if split {
+            joined(&[&a, &b])
+        } else {
+            beside(&a, &b)
+        }
+    }
+
+    fn apex_users(m: &Model) -> (usize, usize) {
+        let p = DVec3::new(2.0, 0.0, 1.0);
+        let v = m.find_vertex(p).expect("apex");
+        let faces: Vec<FaceId> = m.faces_at(v).collect();
+        let shells = shells_of(m);
+        let cuboid_faces = faces
+            .iter()
+            .filter(|f| m.face(**f).unwrap().outer.len() != 3)
+            .count();
+        (cuboid_faces, shells.len())
+    }
+
+    #[test]
+    fn a_vertex_on_a_whole_edge_is_not_connected_to_it() {
+        let m = cuboid_and_pyramid(false);
+        assert_eq!(shells_of(&m).len(), 2);
+        for edge in [
+            ([2.0, 0.0, 0.0], [2.0, 0.0, 2.0]),
+            ([0.0, 2.0, 2.0], [2.0, 2.0, 2.0]),
+            ([0.0, 0.0, 2.0], [2.0, 0.0, 2.0]),
+        ] {
+            let e = edge_at(&m, edge.0, edge.1);
+            for profile in [chamfer(0.25), fillet(0.25)] {
+                let r = bevelled(&m, &[e], profile).unwrap();
+                assert_eq!(shells_of(&r).len(), 2);
+                let pyramid = pyramid_on_an_edge();
+                assert!(shell_like(&r, &pyramid).is_some());
+                let whole = shells_of(&r)
+                    .into_iter()
+                    .find(|s| Some(s) != shell_like(&r, &pyramid).as_ref())
+                    .unwrap();
+                let part = subset(&r, &whole);
+                assert_eq!(open_reason(&part), None);
+                // No vertex of the result is shared by the two parts.
+                for (v, _) in r.vertices() {
+                    let users: Vec<bool> = r.faces_at(v).map(|f| whole.contains(&f)).collect();
+                    assert!(users.iter().all(|x| *x) || users.iter().all(|x| !*x));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_vertex_in_a_split_edge_stays_connected_when_the_edge_is_left() {
+        let m = cuboid_and_pyramid(true);
+        assert_eq!(shells_of(&m).len(), 2);
+        let before = apex_users(&m);
+        for edge in [
+            ([0.0, 2.0, 2.0], [2.0, 2.0, 2.0]),
+            ([0.0, 0.0, 2.0], [2.0, 0.0, 2.0]),
+        ] {
+            let e = edge_at(&m, edge.0, edge.1);
+            for profile in [chamfer(0.25), fillet(0.25)] {
+                let r = bevelled(&m, &[e], profile).unwrap();
+                no_t_junctions(&r);
+                assert_eq!(shells_of(&r).len(), 2);
+                assert_eq!(apex_users(&r), before);
+                let pyramid = pyramid_on_an_edge();
+                assert!(shell_like(&r, &pyramid).is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn a_split_edge_with_a_vertex_in_it_bevels_whole() {
+        let m = cuboid_and_pyramid(true);
+        let low = edge_at(&m, [2.0, 0.0, 0.0], [2.0, 0.0, 1.0]);
+        let high = edge_at(&m, [2.0, 0.0, 1.0], [2.0, 0.0, 2.0]);
+        let r = bevelled(&m, &[low, high], chamfer(0.25)).unwrap();
+        assert_eq!(shells_of(&r).len(), 2);
+        let pyramid = pyramid_on_an_edge();
+        assert!(shell_like(&r, &pyramid).is_some());
+        let whole = shells_of(&r)
+            .into_iter()
+            .find(|s| Some(s) != shell_like(&r, &pyramid).as_ref())
+            .unwrap();
+        let part = subset(&r, &whole);
+        assert_eq!(open_reason(&part), None);
+        assert!((signed_volume(&part) - (8.0 - 0.5 * 0.0625 * 2.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_new_vertex_at_a_loose_apex_is_not_welded_to_it() {
+        // The bottom edge's cut ends at (2, 0, 1), where the apex lies on the whole edge.
+        let m = cuboid_and_pyramid(false);
+        let e = edge_at(&m, [2.0, 0.0, 0.0], [2.0, 2.0, 0.0]);
+        let r = bevelled(&m, &[e], chamfer(1.0)).unwrap();
+        assert_eq!(shells_of(&r).len(), 2);
+        let at: Vec<VertexId> = r
+            .vertices()
+            .filter(|(_, v)| v.pos.distance(DVec3::new(2.0, 0.0, 1.0)) < 1e-9)
+            .map(|(id, _)| id)
+            .collect();
+        let shells = shells_of(&r);
+        let owners: Vec<usize> = at
+            .iter()
+            .map(|v| {
+                let f = r.faces_at(*v).next().unwrap();
+                shells.iter().position(|s| s.contains(&f)).unwrap()
+            })
+            .collect();
+        // One vertex of each part there, not one shared.
+        assert_eq!(at.len(), 2, "{owners:?}");
+        assert_ne!(owners[0], owners[1]);
+    }
+
+    #[test]
+    fn the_part_beside_a_split_edge_is_bevelled_and_joined_again() {
+        // The pyramid is the bevelled part this time, its base edge rounded; the cuboid's
+        // edge, split at the shared apex, comes back with the apex still shared.
+        for split in [false, true] {
+            let m = cuboid_and_pyramid(split);
+            let e = edge_at(&m, [3.0, -0.5, 0.5], [3.0, 0.5, 0.5]);
+            for profile in [chamfer(0.1), fillet(0.1)] {
+                let r = bevelled(&m, &[e], profile).unwrap();
+                assert_eq!(shells_of(&r).len(), 2);
+                let v = r.find_vertex(DVec3::new(2.0, 0.0, 1.0)).unwrap();
+                let owners: std::collections::BTreeSet<usize> = r
+                    .faces_at(v)
+                    .map(|f| shells_of(&r).iter().position(|s| s.contains(&f)).unwrap())
+                    .collect();
+                assert_eq!(owners.len(), if split { 2 } else { 1 }, "split {split}");
+            }
         }
     }
 }

@@ -19,7 +19,9 @@ use crate::index::{Index, Shape};
 use crate::intersect::{FaceShape, face_segments, face_segments_cost, face_shape};
 use crate::model::{Edge, Face, Instance, Model};
 use crate::scene::{DefinitionKind, MeshId, Scene, SceneChange};
-use crate::solid::{instance_volume, open_reason, signed_volume};
+use crate::solid::{
+    instance_volume, internal_faces, open_reason, open_reason_shared, signed_volume, skin_volume,
+};
 use crate::texture::{TexturePlacement, is_level};
 
 /// What a boolean keeps.
@@ -326,6 +328,7 @@ pub(crate) fn shells_of(m: &Model) -> Vec<Vec<FaceId>> {
         i
     }
     let mut seen: HashSet<(VertexId, VertexId)> = HashSet::new();
+    let inside = internal_faces(m);
     for id in &ids {
         let f = m.face(*id).expect("face");
         for l in std::iter::once(&f.outer).chain(&f.holes) {
@@ -335,7 +338,12 @@ pub(crate) fn shells_of(m: &Model) -> Vec<Vec<FaceId>> {
                 let pairs: Vec<(FaceId, FaceId)> = if on.len() <= 2 {
                     on.iter().map(|g| (*id, *g)).collect()
                 } else if seen.insert((a.min(b), a.max(b))) {
-                    wedges(m, a, b, &on)
+                    let mut pairs = wedges(m, a, b, &on);
+                    // A wall inside a solid belongs to every face it meets there.
+                    for h in on.iter().filter(|h| inside.contains(h)) {
+                        pairs.extend(on.iter().filter(|g| *g != h).map(|g| (*h, *g)));
+                    }
+                    pairs
                 } else {
                     Vec::new()
                 };
@@ -357,6 +365,97 @@ pub(crate) fn shells_of(m: &Model) -> Vec<Vec<FaceId>> {
         groups[g].push(*id);
     }
     groups
+}
+
+/// The two faces of the edge a-b of `m` that bound the empty space beside it, when more than
+/// two faces meet there inside one solid (an internal wall seen from both sides, a void
+/// touching the skin): each faces the other across an interval round the edge with no face in
+/// it. `outward` is 1 when the faces point out of the material, -1 when in. Where a void's
+/// faces bound such an interval too, the one a ray along its middle leaves through the fewest
+/// faces is the outside. None when there is no such pair, or no telling.
+pub(crate) fn skin_pair(m: &Model, a: VertexId, b: VertexId, outward: f64) -> Option<[FaceId; 2]> {
+    use std::f64::consts::TAU;
+    let on = m.faces_on_side(a, b);
+    let runs_forward = |f: FaceId| {
+        let face = m.face(f).expect("face");
+        std::iter::once(&face.outer)
+            .chain(&face.holes)
+            .any(|l| (0..l.len()).any(|i| (l[i], l[(i + 1) % l.len()]) == (a, b)))
+    };
+    let d = (m.pos(b) - m.pos(a)).normalize_or_zero();
+    let basis = d.any_orthonormal_vector();
+    let basis2 = d.cross(basis);
+    // Per face: the angle about d of the direction it runs from the edge into itself, and the
+    // way round (+1 or -1) the empty side lies.
+    let faces: Vec<(FaceId, f64, f64)> = on
+        .iter()
+        .map(|f| {
+            let along = if runs_forward(*f) { 1.0 } else { -1.0 };
+            let u = m.face(*f).expect("face").normal.cross(d * along);
+            (*f, u.dot(basis2).atan2(u.dot(basis)), along * outward)
+        })
+        .collect();
+    // The next face from `of`, going the way its empty side lies, and the turn to it; a face at
+    // the same angle (back to back) is skipped.
+    let next = |of: usize| -> Option<(usize, f64)> {
+        let (_, alpha, way) = faces[of];
+        (0..faces.len())
+            .filter(|i| *i != of)
+            .map(|i| (i, (way * (faces[i].1 - alpha)).rem_euclid(TAU)))
+            .filter(|(_, g)| *g > 1e-9)
+            .min_by(|x, y| x.1.total_cmp(&y.1))
+    };
+    let mut found: Vec<(usize, usize, f64)> = Vec::new();
+    for i in 0..faces.len() {
+        if let Some((j, gap)) = next(i)
+            && i < j
+            && faces[j].2 == -faces[i].2
+            && next(j).is_some_and(|(k, _)| k == i)
+        {
+            found.push((i, j, gap));
+        }
+    }
+    let pick = |i: usize, j: usize| [faces[i].0, faces[j].0];
+    match found[..] {
+        [] => None,
+        [(i, j, _)] => Some(pick(i, j)),
+        _ => {
+            // Cast a ray from the middle of each empty interval and count the faces it crosses.
+            let origin = (m.pos(a) + m.pos(b)) / 2.0;
+            let triangles: Vec<[DVec3; 3]> = m
+                .faces()
+                .flat_map(|(id, _)| m.triangulate(id).unwrap_or_default())
+                .collect();
+            let mut scored: Vec<(usize, [FaceId; 2])> = found
+                .iter()
+                .map(|(i, j, gap)| {
+                    let mid = faces[*i].1 + faces[*i].2 * gap / 2.0;
+                    let dir = basis * mid.cos() + basis2 * mid.sin();
+                    let start = origin + dir * 1e-4;
+                    let hits = triangles.iter().filter(|t| ray_hits(start, dir, t)).count();
+                    (hits, pick(*i, *j))
+                })
+                .collect();
+            scored.sort_by_key(|s| s.0);
+            (scored[0].0 < scored[1].0).then_some(scored[0].1)
+        }
+    }
+}
+
+/// Whether the ray from `o` along `d` crosses triangle `t`.
+fn ray_hits(o: DVec3, d: DVec3, t: &[DVec3; 3]) -> bool {
+    let (e1, e2) = (t[1] - t[0], t[2] - t[0]);
+    let p = d.cross(e2);
+    let det = e1.dot(p);
+    if det.abs() < 1e-12 {
+        return false;
+    }
+    let s = o - t[0];
+    let u = s.dot(p) / det;
+    let q = s.cross(e1);
+    let v = d.dot(q) / det;
+    let at = e2.dot(q) / det;
+    u >= 0.0 && v >= 0.0 && u + v <= 1.0 && at > 0.0
 }
 
 /// The pairs of faces at the edge a-b that bound one wedge of material each: `forward` run a to
@@ -812,7 +911,17 @@ impl Mode {
 /// `a` combined with `b` by `op` (`a - b` for `Subtract`); both closed, outward and in one
 /// space. None when nothing is left.
 pub(crate) fn combine(a: &Model, b: &Model, op: BooleanOp) -> Result<Option<Model>, BooleanError> {
-    Cut::new(a, b)?.make(op.into())
+    Cut::new(a, b)?.make(op.into(), false)
+}
+
+/// As [`combine`], but the result may have edges more than two faces share (see
+/// `open_reason_shared`): for a solid whose parts or void touch along an edge.
+pub(crate) fn combine_shared(
+    a: &Model,
+    b: &Model,
+    op: BooleanOp,
+) -> Result<Option<Model>, BooleanError> {
+    Cut::new(a, b)?.make(op.into(), true)
 }
 
 /// `a - b`, `a` and `b` common, and `b - a` (in that order; None where nothing is left),
@@ -820,9 +929,9 @@ pub(crate) fn combine(a: &Model, b: &Model, op: BooleanOp) -> Result<Option<Mode
 pub(crate) fn split(a: &Model, b: &Model) -> Result<[Option<Model>; 3], BooleanError> {
     let cut = Cut::new(a, b)?;
     Ok([
-        cut.make(Mode::Subtract)?,
-        cut.make(Mode::Intersect)?,
-        cut.make(Mode::Reverse)?,
+        cut.make(Mode::Subtract, false)?,
+        cut.make(Mode::Intersect, false)?,
+        cut.make(Mode::Reverse, false)?,
     ])
 }
 
@@ -862,8 +971,16 @@ impl<'a> Cut<'a> {
         })
     }
 
-    /// The solid `mode` keeps, welded and verified closed; None when nothing is left.
-    fn make(&self, mode: Mode) -> Result<Option<Model>, BooleanError> {
+    /// The solid `mode` keeps, welded and verified closed (with `shared`, edges of more than
+    /// two faces count as closed when balanced); None when nothing is left.
+    fn make(&self, mode: Mode, shared: bool) -> Result<Option<Model>, BooleanError> {
+        let open = |m: &Model| {
+            if shared {
+                open_reason_shared(m)
+            } else {
+                open_reason(m)
+            }
+        };
         let pick = |classes: &[(FaceId, Class)], keep: &dyn Fn(Class) -> bool| -> Vec<FaceId> {
             classes
                 .iter()
@@ -880,19 +997,24 @@ impl<'a> Cut<'a> {
         merge.add(&self.wa, &kept_a, mode == Mode::Reverse, 0);
         merge.add(&self.wb, &kept_b, mode == Mode::Subtract, 1);
         let welded = merge.finish();
-        if open_reason(&welded.model).is_some() {
+        if open(&welded.model).is_some() {
             return Err(BooleanError::NotClosed);
         }
         // Seams between coplanar pieces that need not be there are cleaned away; should that
         // ever open the mesh, the seams stay.
         let mut clean = welded.model.clone();
         clean_seams(&mut clean, &welded, [self.a, self.b]);
-        let result = if open_reason(&clean).is_none() {
+        let result = if open(&clean).is_none() {
             clean
         } else {
             welded.model
         };
-        if signed_volume(&result) <= 0.0 {
+        let volume = if shared {
+            skin_volume(&result)
+        } else {
+            signed_volume(&result)
+        };
+        if volume <= 0.0 {
             return Err(BooleanError::NotClosed);
         }
         Ok(Some(result))
