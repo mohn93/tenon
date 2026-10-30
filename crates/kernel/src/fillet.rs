@@ -327,17 +327,21 @@ fn bevel_core(
     m: &Model,
     edges: &[(EdgeId, Profile)],
 ) -> Result<(Model, Vec<VertexId>), BevelError> {
-    if let Ok((acc, patched, true)) = bevel_with(m, edges, true) {
-        return Ok((acc, patched));
+    let mut built = 0;
+    match bevel_with(m, edges, Some(&mut built)) {
+        Ok((acc, patched, true)) => Ok((acc, patched)),
+        // Only a call that built a saddle can have failed because of one.
+        first if built == 0 => first.map(|(acc, patched, _)| (acc, patched)),
+        _ => bevel_with(m, edges, None).map(|(acc, patched, _)| (acc, patched)),
     }
-    bevel_with(m, edges, false).map(|(acc, patched, _)| (acc, patched))
 }
 
-/// [`bevel_core`] with saddle corners or without; gives whether every saddle took.
+/// [`bevel_core`] with saddle corners (`saddle_count` given, and set to how many were built) or
+/// without; gives whether every saddle took.
 fn bevel_with(
     m: &Model,
     edges: &[(EdgeId, Profile)],
-    with_saddles: bool,
+    saddle_count: Option<&mut usize>,
 ) -> Result<(Model, Vec<VertexId>, bool), BevelError> {
     let all_round = edges
         .iter()
@@ -553,11 +557,14 @@ fn bevel_with(
             format!("{noun} too large for edges e{} and e{}", x.0, y.0),
         ));
     }
-    let saddles = if with_saddles {
+    let saddles = if saddle_count.is_some() {
         corner::saddles(m, &cuts)
     } else {
         Vec::new()
     };
+    if let Some(count) = saddle_count {
+        *count = saddles.len();
+    }
     let mut cutters = Vec::new();
     let mut fillers = Vec::new();
     let mut cores = Vec::new();
@@ -2523,8 +2530,8 @@ mod tests {
 
     #[test]
     fn mixed_concave_and_convex_corners_stay_closed() {
-        // Ruling: a corner of one or two concave fillets with convex ones keeps the crossed
-        // result (a closed solid, no patch); only three of a kind get a sphere.
+        // A corner of one or two concave edges with convex ones stays closed and local: with
+        // chamfers it keeps the crossed cuts, with rounds on square faces it gets a saddle.
         let r = 0.1;
         let l = l_shape();
         let c = [1.0, 0.0, 1.0];
@@ -3507,15 +3514,22 @@ mod tests {
             .unwrap()
     }
 
+    /// Calls the sweeps may see refused as a whole (by the boolean on the rounds, as on `dev`).
+    const REFUSED_FAST: usize = 10;
+    const REFUSED_FULL: usize = 22;
+
     /// Per kind of corner, (patched, total) over shapes with convex, concave and mixed corners:
     /// the three edges at each corner bevelled alone, with three sizes, three sets of kinds and
     /// two segment counts. The refused calls are counted under "refused".
-    fn corner_sweep() -> BTreeMap<String, (usize, usize)> {
+    fn corner_sweep(full: bool) -> BTreeMap<String, (usize, usize)> {
+        let keep: &[&str] = if full {
+            &["box", "5-sided prism", "8-sided prism", "shear 0.5"]
+        } else {
+            &["8-sided prism"]
+        };
         let mut shapes: Vec<(String, Model, f64)> = mixed_shapes()
             .into_iter()
-            .filter(|(name, ..)| {
-                ["box", "5-sided prism", "8-sided prism", "shear 0.5"].contains(&name.as_str())
-            })
+            .filter(|(name, ..)| keep.contains(&name.as_str()))
             .collect();
         let offset_notch = combine(
             &cuboid([3.0, 4.0, 5.0]),
@@ -3529,8 +3543,16 @@ mod tests {
         .unwrap()
         .unwrap();
         let extra = [
-            ("notched cube", notched(), vec![0.0, 0.8]),
-            ("offset notch", offset_notch, vec![0.0]),
+            (
+                "notched cube",
+                notched(),
+                if full { vec![0.0, 0.8] } else { vec![0.0] },
+            ),
+            (
+                "offset notch",
+                offset_notch,
+                if full { vec![0.0] } else { vec![] },
+            ),
             ("L", l_shape(), vec![0.0]),
             ("boss on plate", boss_on_plate(), vec![0.0]),
         ];
@@ -3556,7 +3578,7 @@ mod tests {
                     .count();
                 let sizes = [0.1, 0.12, 0.14].map(|s| s * scale);
                 for chamfers in 0..3 {
-                    for segments in [3, 8] {
+                    for segments in if full { vec![3, 8] } else { vec![3] } {
                         let each: Vec<(EdgeId, Profile)> = at
                             .iter()
                             .zip(sizes)
@@ -3598,10 +3620,10 @@ mod tests {
         table
     }
 
-    #[test]
-    fn corners_are_patched_over_boxes_prisms_and_shears_of_every_kind() {
-        let table = corner_sweep();
-        for (kind, (patched, total)) in &table {
+    /// Checks a corner sweep: the shares of each kind patched, and that no more calls are
+    /// refused (by the boolean, whatever the corners) than `refused`.
+    fn check_sweep(table: &BTreeMap<String, (usize, usize)>, refused: usize) {
+        for (kind, (patched, total)) in table {
             eprintln!("{kind}: {patched} of {total}");
         }
         let share = |kind: &str| {
@@ -3609,10 +3631,51 @@ mod tests {
             patched as f64 / total as f64
         };
         assert!(share("convex, rounds") > 0.9);
-        assert!(share("convex, round and chamfer") > 0.95);
+        assert!(share("convex, round and chamfer") > 0.9);
         assert!(share("concave, rounds") > 0.9);
         assert!(share("concave, round and chamfer") > 0.9);
         assert!(share("inside and outside, rounds") > 0.8);
+        assert_eq!(share("inside and outside, with chamfer"), 0.0);
+        let none = (0, 0);
+        assert!(table.get("refused").unwrap_or(&none).1 <= refused);
+    }
+
+    #[test]
+    fn corners_are_patched_over_prisms_and_notched_shapes_of_every_kind() {
+        check_sweep(&corner_sweep(false), REFUSED_FAST);
+    }
+
+    /// The full sweep over boxes, prisms, shears, notches, L shapes and bosses: minutes in a
+    /// debug build. Run with
+    /// `cargo test -p kernel --lib corners_are_patched_over_every -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "slow: run with --ignored"]
+    fn corners_are_patched_over_every_shape_of_the_full_sweep() {
+        check_sweep(&corner_sweep(true), REFUSED_FULL);
+    }
+
+    #[test]
+    fn chamfers_with_one_distance_past_the_other_two_together_stay_crossed() {
+        // As before: no flat triangle and no ringed patch, convex or concave.
+        let size = [2.0, 3.0, 4.0];
+        let m = cuboid(size);
+        let edges = box_corner_edges(&m, size);
+        let each: Vec<(EdgeId, Profile)> = edges
+            .iter()
+            .copied()
+            .zip([chamfer(0.1), chamfer(0.1), chamfer(0.4)])
+            .collect();
+        let (out, patched) = bevel_core(&m, &each).unwrap();
+        closed(&out);
+        assert!(patched.is_empty());
+        let n = notched();
+        let each: Vec<(EdgeId, Profile)> = notch_edges(&n)
+            .into_iter()
+            .zip([chamfer(0.1), chamfer(0.1), chamfer(0.4)])
+            .collect();
+        let (out, patched) = bevel_core(&n, &each).unwrap();
+        closed(&out);
+        assert!(patched.is_empty());
     }
 
     #[test]

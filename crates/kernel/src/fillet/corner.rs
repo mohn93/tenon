@@ -31,9 +31,22 @@ use super::*;
 /// The largest crease (radians) left soft across a face beside a patch of unequal rounds.
 const SLIGHT: f64 = 0.17;
 
-/// How near (a fraction of the radius) a vertex of a finished solid must be to a patch vertex
-/// to count as it: the boolean moves some a little.
-const MARK_TOL: f64 = 0.02;
+/// How near a vertex of a finished solid must be to a patch vertex to count as it, given the
+/// least distance between the patch's vertices: a fraction of it, so a neighbour never does.
+fn mark_tol(spacing: f64) -> f64 {
+    0.25 * spacing
+}
+
+/// The least distance between two of `points`.
+fn spacing_of(points: &[DVec3]) -> f64 {
+    let mut least = f64::INFINITY;
+    for (i, p) in points.iter().enumerate() {
+        for q in &points[i + 1..] {
+            least = least.min(p.distance(*q));
+        }
+    }
+    least
+}
 
 /// Caps of the cutter lie this fraction of the radius outside the faces.
 const CAP: f64 = 0.25;
@@ -62,6 +75,8 @@ pub(super) struct Patch {
     pub concave: bool,
     /// For a patch of rounds of different radii, the positions of its vertices.
     pub marks: Vec<DVec3>,
+    /// And the least distance between two of them.
+    pub spacing: f64,
     /// And the sides of its boundary that lie on the rounds' end arcs (the others lie across
     /// the faces).
     pub arc_sides: Vec<[DVec3; 2]>,
@@ -96,7 +111,7 @@ pub(super) fn patches(m: &Model, cuts: &[(EdgeId, EdgeCut)]) -> Vec<Patch> {
             match rounds {
                 3 => patch(m, v, three, concave),
                 // Chamfers meet in a point of their own (concave: a cone of empty space).
-                0 => flat(m, v, three, concave).or_else(|| patch_mixed(m, v, three, concave)),
+                0 => flat(m, v, three, concave),
                 // Rounds and chamfers: the ringed patch, a chamfer standing in as the round
                 // with its setback.
                 _ => patch_mixed(m, v, three, concave),
@@ -209,6 +224,7 @@ fn patch(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3], concave: bool) -
         flat: None,
         concave,
         marks: Vec::new(),
+        spacing: f64::INFINITY,
         arc_sides: Vec::new(),
         chord_sides: Vec::new(),
     })
@@ -625,6 +641,7 @@ fn patch_mixed(
         ],
         flat: None,
         concave,
+        spacing: spacing_of(&marks),
         marks,
         // A chamfer's strip keeps its crease, so its end is not softened.
         arc_sides: (0..count)
@@ -823,6 +840,7 @@ fn flat(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3], concave: bool) ->
         flat: Some(meet),
         concave,
         marks: Vec::new(),
+        spacing: f64::INFINITY,
         arc_sides: Vec::new(),
         chord_sides: Vec::new(),
     })
@@ -1247,9 +1265,17 @@ fn took(m: &Model, p: &Patch) -> bool {
         return false;
     }
     if !p.marks.is_empty() {
+        // A mark standing in the air needs no cut: the patch lies above the material there
+        // (a vertex near a chamfer's plane), so nothing of it shows.
+        let strict = (5.0 * LENGTH_TOL).min(1e-3 * p.radius);
         return p.marks.iter().all(|c| {
-            m.vertices()
-                .any(|(_, v)| v.pos.distance(*c) < MARK_TOL * p.radius)
+            let near = m
+                .vertices()
+                .map(|(_, v)| v.pos.distance(*c))
+                .fold(f64::INFINITY, f64::min);
+            near < strict
+                || (near < mark_tol(p.spacing)
+                    && crate::boolean::point_inside(*c, m) == Some(false))
         });
     }
     if let Some(corners) = p.flat {
@@ -1265,7 +1291,7 @@ fn on_sphere<'a>(m: &'a Model, p: &'a Patch) -> impl Iterator<Item = VertexId> +
     let tol = if p.marks.is_empty() {
         (5.0 * LENGTH_TOL).min(1e-3 * p.radius)
     } else {
-        MARK_TOL * p.radius
+        mark_tol(p.spacing)
     };
     m.vertices()
         .filter(move |(_, v)| {
@@ -1306,7 +1332,11 @@ pub(super) fn soften(m: &mut Model, patches: &[Patch], done: &[usize], step: f64
                 // A patch of unequal rounds softens along its arcs whatever the angle, and
                 // across a face only where the crease is slight.
                 let (pa, pb) = (m.pos(a), m.pos(b));
-                let tol = 1e-7 * p.radius.max(1e-3);
+                let tol = (1e-7 * p.radius.max(1e-3)).max(if p.marks.is_empty() {
+                    0.0
+                } else {
+                    mark_tol(p.spacing)
+                });
                 let on = |sides: &[[DVec3; 2]]| {
                     sides.iter().any(|[u, w]| {
                         (u.distance(pa) < tol && w.distance(pb) < tol)
@@ -1353,7 +1383,8 @@ pub(super) struct Saddle {
     pub marks: Vec<DVec3>,
     /// And those at its ends too, to soften its edges.
     pub seams: Vec<DVec3>,
-    pub radius: f64,
+    /// The least distance between neighbouring ones.
+    pub spacing: f64,
 }
 
 /// The saddle at `v`, or None when the corner is not one: three rounds (two of one kind, one
@@ -1412,11 +1443,15 @@ pub(super) fn saddle(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> O
     if da <= 10.0 * LENGTH_TOL || db <= 10.0 * LENGTH_TOL {
         return None;
     }
-    let (Profile::Fillet { radius: ra, .. }, Profile::Fillet { radius: rb, .. }) =
-        (ca.profile, cb.profile)
-    else {
+    // The pair must be long enough to hold the saddle's depth and the round at their far
+    // ends, and the third round too.
+    let length = |c: &EdgeCut| c.a.distance(c.b);
+    if length(ca) < da + 2.0 * ca.setback
+        || length(cb) < db + 2.0 * cb.setback
+        || length(t) < 3.0 * s
+    {
         return None;
-    };
+    }
     // Each pair member's section starting on its face beside the third round, with the sides
     // widened past the faces by `reach` (less beside the third round, which the axis is near).
     let section = |c: &EdgeCut, own: FaceId, foot: DVec3| -> (Vec<DVec3>, usize) {
@@ -1516,6 +1551,17 @@ pub(super) fn saddle(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> O
         .flat_map(|k| (0..=sides).map(move |i| (k, i)))
         .map(|(k, i)| rings[k][i])
         .collect();
+    let mut spacing = f64::INFINITY;
+    for k in 0..=steps {
+        for i in 0..=sides {
+            if i < sides {
+                spacing = spacing.min(rings[k][i].distance(rings[k][i + 1]));
+            }
+            if k < steps {
+                spacing = spacing.min(rings[k][i].distance(rings[k + 1][i]));
+            }
+        }
+    }
     let seams: Vec<DVec3> = rings
         .iter()
         .flat_map(|r| r[..=sides].iter().copied())
@@ -1533,7 +1579,7 @@ pub(super) fn saddle(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> O
         add,
         marks,
         seams,
-        radius: ra.min(rb).min(s),
+        spacing,
     })
 }
 
@@ -1542,7 +1588,7 @@ pub(super) fn saddle(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> O
 pub(super) fn soften_saddles(m: &mut Model, saddles: &[&Saddle]) {
     let mut soft = Vec::new();
     for s in saddles {
-        let tol = MARK_TOL * s.radius;
+        let tol = mark_tol(s.spacing);
         let on = |p: DVec3| s.seams.iter().any(|c| c.distance(p) < tol);
         for (id, e) in m.edges() {
             if !e.soft && on(m.pos(e.v[0])) && on(m.pos(e.v[1])) {
@@ -1563,7 +1609,7 @@ impl Saddle {
             && signed_volume(m) > 0.0
             && self.marks.iter().all(|c| {
                 m.vertices()
-                    .any(|(_, v)| v.pos.distance(*c) < MARK_TOL * self.radius)
+                    .any(|(_, v)| v.pos.distance(*c) < mark_tol(self.spacing))
             })
     }
 }
