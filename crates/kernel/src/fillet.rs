@@ -21,8 +21,8 @@ use std::fmt;
 use glam::{DAffine3, DVec2, DVec3};
 
 use crate::boolean::{
-    BooleanError, BooleanOp, apart, combine, copy_merged, nested_shells, placed_copy, shells_of,
-    subset,
+    BooleanError, BooleanOp, Shared, apart, combine, copy_sharing, nested_shells, placed_copy,
+    shells_of, subset,
 };
 use crate::geom::{LENGTH_TOL, vector_area};
 use crate::ids::{CurveId, EdgeId, FaceId, MaterialId, VertexId};
@@ -493,6 +493,8 @@ fn bevel_with(
     };
     // What stays as it is, with the loose edges (no face).
     let mut rest = subset(m, &faces_of(&hit, false));
+    // What the carried-over shells were joined to the bevelled ones by in `m`.
+    let shared = Shared::of(m, &faces_of(&hit, true), &faces_of(&hit, false));
     let mut curves: HashMap<CurveId, CurveId> = HashMap::new();
     for (_, e) in m.edges() {
         let [a, b] = e.v;
@@ -661,7 +663,7 @@ fn bevel_with(
     let mut patched: Vec<VertexId> = done.iter().map(|i| corners[*i].vertex).collect();
     patched.extend(held.iter().map(|s| s.vertex));
     let all_held = held.len() == saddles.len();
-    copy_merged(&rest, &mut acc);
+    copy_sharing(&rest, &mut acc, Some(&shared));
     acc.take_changes();
     Ok((acc, patched, all_held))
 }
@@ -1210,7 +1212,7 @@ fn face_key(loops: &[Vec<VertexId>]) -> Vec<Vec<VertexId>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::boolean::copy_into;
+    use crate::boolean::{copy_into, copy_merged};
     use crate::primitives::Solid;
     use crate::scene::DefinitionKind;
 
@@ -1317,8 +1319,7 @@ mod tests {
         let m = beside(&base, &block);
         let e = edge_at(&m, [0.0, 0.0, 2.0], [4.0, 0.0, 2.0]);
         let r = bevelled(&m, &[e], chamfer(0.5)).unwrap();
-        // The block shares its border with the base's face, so the whole is not manifold there.
-        r.validate().unwrap();
+        assert_eq!(open_reason(&r), None);
         assert!((signed_volume(&r) - (32.0 - 0.125 * 4.0 + 1.0)).abs() < 1e-9);
         assert!(has_vertex(&r, [0.0, 0.0, 3.0]) && has_vertex(&r, [0.0, 0.0, 2.0]));
         // A round of the same size leaves the block alone too.
@@ -1327,8 +1328,7 @@ mod tests {
             segments: 4,
         };
         let r = bevelled(&m, &[e], round).unwrap();
-        // The block shares its border with the base's face, so the whole is not manifold there.
-        r.validate().unwrap();
+        assert_eq!(open_reason(&r), None);
         assert!(has_vertex(&r, [0.0, 0.0, 3.0]) && has_vertex(&r, [0.0, 0.0, 2.0]));
     }
 

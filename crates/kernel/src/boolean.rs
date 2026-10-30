@@ -576,18 +576,76 @@ pub(crate) fn copy_into(src: &Model, m: &mut Model) {
     }
 }
 
+/// Where a part carried over was joined to the rest in the model it came from: the positions of
+/// the vertices they used in common and the segments of the edges they used in common.
+#[derive(Default)]
+pub(crate) struct Shared {
+    pub points: Vec<DVec3>,
+    pub lines: Vec<(DVec3, DVec3)>,
+}
+
+impl Shared {
+    /// What the faces `a` and `b` of `m` use in common (vertices, and edges both have a face on).
+    pub(crate) fn of(m: &Model, a: &[FaceId], b: &[FaceId]) -> Shared {
+        let used = |faces: &[FaceId]| -> HashSet<VertexId> {
+            faces
+                .iter()
+                .flat_map(|f| {
+                    let f = m.face(*f).expect("face");
+                    f.outer.iter().chain(f.holes.iter().flatten()).copied()
+                })
+                .collect()
+        };
+        let (ua, ub) = (used(a), used(b));
+        let mut shared = Shared::default();
+        let common: HashSet<VertexId> = ua.intersection(&ub).copied().collect();
+        shared.points = common.iter().map(|v| m.pos(*v)).collect();
+        let (fa, fb): (HashSet<FaceId>, HashSet<FaceId>) =
+            (a.iter().copied().collect(), b.iter().copied().collect());
+        for (_, e) in m.edges() {
+            let [x, y] = e.v;
+            if common.contains(&x) && common.contains(&y) {
+                let on = m.faces_on_side(x, y);
+                if on.iter().any(|f| fa.contains(f)) && on.iter().any(|f| fb.contains(f)) {
+                    shared.lines.push((m.pos(x), m.pos(y)));
+                }
+            }
+        }
+        shared
+    }
+
+    fn has_point(&self, p: DVec3) -> bool {
+        self.points.iter().any(|q| q.distance(p) < LENGTH_TOL)
+    }
+
+    fn on_line(&self, p: DVec3) -> bool {
+        self.lines
+            .iter()
+            .any(|(a, b)| project_on_segment(p, *a, *b).1 < LENGTH_TOL)
+    }
+}
+
 /// Like `copy_into`, but a vertex of `src` where `m` already has one joins it, and an edge `m`
 /// already has stays as it is (its attributes win): a part touching what is in `m` along an edge
 /// or at a vertex keeps sharing it. Where the two then overlap along a line, edges are split at
 /// the other's vertices lying inside them so they conform (no T-junctions).
 pub(crate) fn copy_merged(src: &Model, m: &mut Model) {
+    copy_sharing(src, m, None);
+}
+
+/// `copy_merged` for a part that was joined to `m`'s content only as `shared` says: other
+/// vertices and edges that merely coincide stay apart, as `copy_into` leaves them.
+pub(crate) fn copy_sharing(src: &Model, m: &mut Model, shared: Option<&Shared>) {
     let before: Vec<VertexId> = m.vertices().map(|(id, _)| id).collect();
     let before_edges: Vec<EdgeId> = m.edges().map(|(id, _)| id).collect();
     let mut vertices: HashMap<VertexId, VertexId> = HashMap::new();
     for (id, v) in src.vertices() {
-        let at = m
-            .find_vertex(v.pos)
-            .unwrap_or_else(|| m.insert_vertex(v.pos));
+        let found = if shared.is_none_or(|s| s.has_point(v.pos)) {
+            m.find_vertex(v.pos)
+        } else {
+            None
+        };
+        let at = found.unwrap_or_else(|| m.insert_vertex(v.pos));
         vertices.insert(id, at);
     }
     let mut curves: HashMap<CurveId, CurveId> = HashMap::new();
@@ -612,7 +670,7 @@ pub(crate) fn copy_merged(src: &Model, m: &mut Model) {
             ..f.clone()
         });
     }
-    if before.is_empty() {
+    if before.is_empty() || shared.is_some_and(|s| s.lines.is_empty()) {
         return;
     }
     let new: Vec<VertexId> = vertices.values().copied().collect();
@@ -620,13 +678,20 @@ pub(crate) fn copy_merged(src: &Model, m: &mut Model) {
     edges.extend(added);
     edges.sort();
     edges.dedup();
-    conform(m, &before, &new, &edges);
+    conform(m, &before, &new, &edges, shared);
 }
 
 /// Splits the `edges` of `m` at any vertex of `old` or `new` lying inside them (within
 /// `LENGTH_TOL`), until none does. A piece that duplicates an existing edge is not added. Only
-/// what lies in the region both vertex sets reach is looked at.
-fn conform(m: &mut Model, old: &[VertexId], new: &[VertexId], edges: &[EdgeId]) {
+/// what lies in the region both vertex sets reach, and on the `shared` lines if given, is
+/// looked at.
+fn conform(
+    m: &mut Model,
+    old: &[VertexId],
+    new: &[VertexId],
+    edges: &[EdgeId],
+    shared: Option<&Shared>,
+) {
     let t = DVec3::splat(LENGTH_TOL);
     let bounds_of = |vs: &[VertexId]| {
         vs.iter().fold(
@@ -644,14 +709,16 @@ fn conform(m: &mut Model, old: &[VertexId], new: &[VertexId], edges: &[EdgeId]) 
         .iter()
         .chain(new)
         .copied()
-        .filter(|v| overlaps(m.pos(*v), m.pos(*v)))
+        .filter(|v| overlaps(m.pos(*v), m.pos(*v)) && shared.is_none_or(|s| s.on_line(m.pos(*v))))
         .collect();
     let mut work: Vec<EdgeId> = edges
         .iter()
         .copied()
         .filter(|e| {
-            m.edge(*e)
-                .is_some_and(|e| overlaps(m.pos(e.v[0]), m.pos(e.v[1])))
+            m.edge(*e).is_some_and(|e| {
+                let (p, q) = (m.pos(e.v[0]), m.pos(e.v[1]));
+                overlaps(p, q) && shared.is_none_or(|s| s.on_line(p) && s.on_line(q))
+            })
         })
         .collect();
     while let Some(e) = work.pop() {
