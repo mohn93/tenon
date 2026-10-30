@@ -1295,10 +1295,13 @@ fn took(m: &Model, p: &Patch) -> bool {
     on_sphere(m, p).count() >= p.points
 }
 
-/// How far (as a share of the patch's radius) above a face a mark may stand and be left uncut:
-/// the apex is lowered in steps of a fiftieth, and a point of the patch lying on a chamfer's
-/// chord can end up that far over the chamfer's plane.
-const HAIR: f64 = 0.03;
+/// How far (as a share of the patch's radius) above a face a mark may stand and be left uncut.
+/// It is not the lowered apex or a point blended toward it (those are kept below the faces): it
+/// is a boundary point of the ring (neither apex nor layer) that stands 0.2 mm (0.75% of the
+/// radius) over a face in the 8-sided prism with one chamfered kind at 8 segments, where the
+/// cut round beside it has not reached that face. Nothing of the cutter reaches the material
+/// there.
+const HAIR: f64 = 0.01;
 
 /// Whether `c` stands no more than `height` above a face of `m`, over the face itself.
 fn hovers(m: &Model, c: DVec3, height: f64) -> bool {
@@ -1437,17 +1440,16 @@ pub(super) fn saddle(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> O
     if convex == 0 || convex == 3 {
         return None;
     }
-    // Chamfers alone have no axis to turn about: they keep the crossed cuts.
-    if cuts
-        .iter()
-        .all(|(_, c)| matches!(c.profile, Profile::Chamfer { .. }))
-    {
-        return None;
-    }
     // The odd one out, and the pair of the other kind.
     let third = (0..3).find(|i| cuts[*i].1.convex == (convex == 1))?;
     let like: Vec<usize> = (0..3).filter(|i| *i != third).collect();
     let (t, add) = (&cuts[third].1, !cuts[like[0]].1.convex);
+    // A chamfer as the unlike edge has no axis to turn about: swept about one as if it were a
+    // round, its flat strip would be rounded near the corner and end in a step. The crossed cuts
+    // keep it flat.
+    if matches!(t.profile, Profile::Chamfer { .. }) {
+        return None;
+    }
     let normal = |c: &EdgeCut, f: FaceId| if c.f1 == f { c.n1 } else { c.n2 };
     // The third round's faces x and y; z is the face both of the pair lie on.
     let (x, y) = (t.f1, t.f2);
@@ -1536,6 +1538,11 @@ pub(super) fn saddle(m: &Model, v: VertexId, cuts: [&(EdgeId, EdgeCut); 3]) -> O
     };
     let (pa, pb) = (section(ca, x, ua, wa, ka), section(cb, y, ub, wb, kb));
     let axis = uc;
+    // The rings are slid along the axis to stay on the pair's face; the axis cannot be nearly
+    // parallel to it.
+    if nz.dot(uc).abs() < 0.2 {
+        return None;
+    }
     // The angle from one end plane to the other, round the axis, the way the corner lies.
     let start = across(vertex + ua * da - axis_at)?;
     let finish = across(vertex + ub * db - axis_at)?;

@@ -3211,13 +3211,20 @@ mod tests {
                 let each = [(concave, a), (up, b), (along, c)];
                 let (out, patched) = bevel_core(&m, &each).unwrap();
                 closed(&out);
-                assert_eq!(patched.len(), 1, "{by} {a:?} {b:?} {c:?}");
+                assert_eq!(
+                    patched.len(),
+                    usize::from(matches!(a, Profile::Fillet { .. })),
+                    "{by} {a:?} {b:?} {c:?}"
+                );
                 let gain = signed_volume(&bevelled_mixed(&m, &[(concave, a)]).unwrap()) - before;
                 let loss =
                     before - signed_volume(&bevelled_mixed(&m, &[(up, b), (along, c)]).unwrap());
                 let v = signed_volume(&out) - before;
+                // Sheared, the cuts made edge by edge are less alike (the rounds' sections change
+                // with the angle): within r^3 (the saddles show 0.8 at most).
+                let tolerance = if patched.is_empty() { 2.0 } else { 1.0 } * r * r * r;
                 assert!(
-                    (v - (gain - loss)).abs() < 2.0 * r * r * r,
+                    (v - (gain - loss)).abs() < tolerance,
                     "{by} {v} {gain} {loss}"
                 );
             }
@@ -3267,6 +3274,85 @@ mod tests {
         // The long facet gets the extra parts: 1 + 3 facets of length 1.
         assert_eq!(cut.len(), 5);
         assert!((cut[2].x - 2.0).abs() < 1e-12);
+    }
+
+    /// Faces of `out` square to y at a height between 0.05 and 0.5, over the box `lo..hi`: the
+    /// steps a surface swept about the wrong axis leaves where a flat chamfer resumes.
+    fn steps_near(out: &Model, lo: DVec3, hi: DVec3) -> usize {
+        out.faces()
+            .filter(|(_, f)| {
+                let ps: Vec<DVec3> = f.outer.iter().map(|v| out.pos(*v)).collect();
+                f.normal.y.abs() > 0.999
+                    && ps[0].y > 0.05
+                    && ps[0].y < 0.5
+                    && ps.iter().all(|p| (p.y - ps[0].y).abs() < 1e-9)
+                    && ps.iter().all(|p| p.cmpge(lo).all() && p.cmple(hi).all())
+            })
+            .count()
+    }
+
+    #[test]
+    fn a_chamfered_inside_edge_between_rounds_stays_flat_up_to_the_corner() {
+        // The unlike edge a chamfer: no saddle (it would be swept about a round's axis, rounding
+        // the chamfer near the corner and ending in a ledge of 15 faces at y = 0.2 where the
+        // flat strip resumes). The strip lies on x + z = 2 + r: no vertex of the result lies on
+        // the corner's side of it.
+        let m = l_shape();
+        let at = [1.0, 0.0, 1.0];
+        let concave = edge_at(&m, at, [1.0, 2.0, 1.0]);
+        let up = edge_at(&m, at, [1.0, 0.0, 3.0]);
+        let along = edge_at(&m, at, [4.0, 0.0, 1.0]);
+        let r = 0.2;
+        let (lo, hi) = (DVec3::new(0.9, 0.0, 0.9), DVec3::new(1.5, 0.6, 1.5));
+        for (a, b, c) in [
+            (chamfer(r), fillet(r), fillet(r)),
+            (chamfer(r), chamfer(r), fillet(r)),
+            (chamfer(r), fillet(r), chamfer(r)),
+        ] {
+            let (out, patched) = bevel_core(&m, &[(concave, a), (up, b), (along, c)]).unwrap();
+            closed(&out);
+            assert!(patched.is_empty(), "{b:?} {c:?}");
+            let beyond = out
+                .vertices()
+                .filter(|(_, v)| {
+                    let p = v.pos;
+                    p.y > 1e-6 && p.y < 0.6 && p.cmpge(lo).all() && p.cmple(hi).all()
+                })
+                .filter(|(_, v)| {
+                    v.pos.x + v.pos.z < 2.0 + r - 1e-6
+                        && v.pos.x > 1.0 + 1e-6
+                        && v.pos.z > 1.0 + 1e-6
+                })
+                .count();
+            assert_eq!(
+                beyond, 0,
+                "{b:?} {c:?}: {beyond} vertices on the wrong side"
+            );
+        }
+    }
+
+    #[test]
+    fn a_swept_saddle_leaves_no_step_in_its_surface() {
+        // Rounds all round (and pair chamfers): the surface runs from the rounds to the third
+        // round without a wall at any height.
+        let m = l_shape();
+        let at = [1.0, 0.0, 1.0];
+        let concave = edge_at(&m, at, [1.0, 2.0, 1.0]);
+        let up = edge_at(&m, at, [1.0, 0.0, 3.0]);
+        let along = edge_at(&m, at, [4.0, 0.0, 1.0]);
+        let r = 0.2;
+        let (lo, hi) = (DVec3::new(0.9, 0.0, 0.9), DVec3::new(1.5, 0.6, 1.5));
+        for (b, c) in [
+            (fillet(r), fillet(r)),
+            (chamfer(r), fillet(r)),
+            (chamfer(r), chamfer(r)),
+        ] {
+            let (out, patched) =
+                bevel_core(&m, &[(concave, fillet(r)), (up, b), (along, c)]).unwrap();
+            closed(&out);
+            assert_eq!(patched.len(), 1);
+            assert_eq!(steps_near(&out, lo, hi), 0, "{b:?} {c:?}");
+        }
     }
 
     #[test]
@@ -4000,7 +4086,7 @@ mod tests {
 
     /// Calls the sweeps may see refused as a whole (by the boolean on the rounds, as on `dev`).
     const REFUSED_FAST: usize = 2;
-    const REFUSED_FULL: usize = 2;
+    const REFUSED_FULL: usize = 4;
 
     /// Per kind of corner, (patched, total) over shapes with convex, concave and mixed corners:
     /// the three edges at each corner bevelled alone, with three sizes, three sets of kinds and
@@ -4189,16 +4275,22 @@ mod tests {
                 .iter()
                 .filter(|p| matches!(p, Profile::Fillet { .. }))
                 .count();
-            assert_eq!(patched.len(), usize::from(rounds > 0), "{a:?} {b:?} {c:?}");
+            let _ = rounds;
+            // The inside edge is the unlike one here: a chamfer there keeps the crossed cuts.
+            assert_eq!(
+                patched.len(),
+                usize::from(matches!(a, Profile::Fillet { .. })),
+                "{a:?} {b:?} {c:?}"
+            );
             // The material the concave edge adds less what the convex ones take, as if cut
             // separately (a corner's worth, under r cubed, differs).
             let gain = signed_volume(&bevelled_mixed(&m, &[(concave, a)]).unwrap()) - before;
             let loss = before - signed_volume(&bevelled_mixed(&m, &[(up, b), (along, c)]).unwrap());
             let v = signed_volume(&out) - before;
-            assert!(
-                (v - (gain - loss)).abs() < 2.0 * r * r * r,
-                "{v} {gain} {loss}"
-            );
+            // A saddle matches the cuts made edge by edge to 0.13 r^3 (0.001 here), a sliver of
+            // 0.002 would show; the crossed cuts differ by the corner's own interaction.
+            let tolerance = if patched.is_empty() { 2.0 } else { 0.15 } * r * r * r;
+            assert!((v - (gain - loss)).abs() < tolerance, "{v} {gain} {loss}");
         }
     }
 }
